@@ -1,0 +1,17 @@
+"""Constants for the Dimplex BLE integration."""
+
+from datetime import timedelta
+
+from homeassistant.const import Platform
+
+DOMAIN = "dimplex_ble"
+MANUFACTURER = "Dimplex"
+ADVERTISEMENT_SUFFIX = "<Dimplex>"
+
+CONF_ADDRESS = "address"
+CONF_PROXY_SOURCE = "proxy_source"
+CONF_PASSKEY = "passkey"
+DEVICE_NAME = "Dimplex heater"
+
+DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
+PLATFORMS = (Platform.CLIMATE, Platform.SELECT, Platform.SENSOR)

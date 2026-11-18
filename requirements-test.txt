@@ -1,0 +1,10 @@
+coverage==7.16.2
+mutmut==3.8.1
+mypy==1.20.0
+pytest==9.0.3
+pytest-cov==7.1.0
+pytest-homeassistant-custom-component==0.13.375
+aiousbwatcher==1.1.2
+serialx==1.15.1
+ruff==0.15.2
+pre-commit==4.7.0

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Tests, strict typing, and lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install test dependencies
+        run: |
+          uv venv --python 3.14
+          uv pip install --python .venv/bin/python -r requirements-test.txt
+      - name: Run quality gates
+        run: bash scripts/run_quality_gates.sh
+
+  hassfest:
+    name: Home Assistant manifest validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@master
+

@@ -1,0 +1,137 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select a Dimplex heater",
+        "description": "Choose a nearby heater reachable through a passkey-enabled ESPHome Bluetooth proxy.",
+        "data": {
+          "address": "Heater"
+        }
+      },
+      "pair": {
+        "title": "Retry heater pairing",
+        "description": "Retry connecting to {name}. If the request starts, watch the heater for its PIN. Further pairing attempts continue while this setup stays open."
+      },
+      "passkey": {
+        "title": "Pair Dimplex heater",
+        "description": "Enter the six-digit PIN shown on {name}. The heater's PIN request expires about 30 seconds after it appears. If this setup stays open, Home Assistant automatically starts another request. The PIN is sent through the selected ESPHome proxy and is not saved.",
+        "data": {
+          "passkey": "Bluetooth PIN"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This heater is already configured.",
+      "no_heaters_found": "No Dimplex heaters were found. Enable Bluetooth on the heater and try again.",
+      "not_dimplex": "The advertisement does not identify a Dimplex heater.",
+      "proxy_passkey_support_missing": "This heater is visible, but no nearby ESPHome Bluetooth proxy has an encrypted API and the required passkey relay.",
+      "proxy_unavailable": "The selected Bluetooth proxy is unavailable."
+    },
+    "error": {
+      "device_not_found": "That heater is no longer in the discovered-device list.",
+      "invalid_passkey": "Enter exactly six digits.",
+      "proxy_passkey_support_missing": "The selected proxy cannot accept a Bluetooth PIN.",
+      "pairing_failed": "Pairing failed or timed out. The heater's PIN request expires after about 30 seconds; if this setup stays open, Home Assistant automatically starts another request. Check the heater display before entering a PIN.",
+      "pairing_in_progress": "This ESPHome proxy is pairing with another heater. Finish or cancel that setup, then try again."
+    }
+  },
+  "entity": {
+    "climate": {
+      "heater": {
+        "name": "Heater"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "name": "Display temperature unit",
+        "state": {
+          "celsius": "Celsius",
+          "fahrenheit": "Fahrenheit"
+        }
+      }
+    },
+    "sensor": {
+      "error_code": {
+        "name": "Error code"
+      },
+      "operating_mode_raw": {
+        "name": "Operating mode (raw)"
+      }
+    }
+  },
+  "services": {
+    "get_gatt_services": {
+      "name": "Get GATT services",
+      "description": "List discovered service and characteristic UUIDs and properties without reading values.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex heater to inspect."
+        }
+      }
+    },
+    "read_gatt": {
+      "name": "Read GATT characteristic",
+      "description": "Read a Dimplex characteristic and return its value as hexadecimal bytes.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex heater to read."
+        },
+        "service_group": {
+          "name": "Service group",
+          "description": "The Dimplex service group, from 0 through 3."
+        },
+        "characteristic": {
+          "name": "Characteristic ID",
+          "description": "The 16-bit characteristic ID, entered as a decimal number."
+        }
+      }
+    },
+    "write_gatt": {
+      "name": "Write GATT characteristic",
+      "description": "Write hexadecimal bytes to a Dimplex characteristic and return its readback when readable. Administrator only.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex heater to write."
+        },
+        "service_group": {
+          "name": "Service group",
+          "description": "The Dimplex service group, from 0 through 3."
+        },
+        "characteristic": {
+          "name": "Characteristic ID",
+          "description": "The 16-bit characteristic ID, entered as a decimal number."
+        },
+        "payload": {
+          "name": "Payload (hex)",
+          "description": "Non-empty hexadecimal bytes; spaces are optional."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "cannot_connect": {
+      "message": "Could not connect to the heater over Home Assistant Bluetooth. Check that a connectable Bluetooth adapter can reach it and that pairing is already established."
+    },
+    "characteristic_unavailable": {
+      "message": "The requested GATT characteristic is missing or does not support that operation."
+    },
+    "protected_characteristic": {
+      "message": "This characteristic is blocked because reading or writing it is unsafe or exposes device credentials."
+    },
+    "invalid_gatt_request": {
+      "message": "The GATT group, characteristic, or hexadecimal payload is invalid."
+    },
+    "invalid_setpoint": {
+      "message": "The requested target must be a whole-degree Celsius value within the heater-reported range."
+    },
+    "setpoint_unavailable": {
+      "message": "The heater has not reported a usable setpoint range yet."
+    },
+    "invalid_temperature_unit": {
+      "message": "Choose Celsius or Fahrenheit."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "entity": {
+    "climate": {
+      "heater": {
+        "default": "mdi:radiator"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "default": "mdi:temperature-celsius"
+      }
+    },
+    "sensor": {
+      "error_code": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "operating_mode_raw": {
+        "default": "mdi:state-machine"
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+esphome:
+  name: qrad-bluetooth-proxy
+  friendly_name: Bluetooth Proxy
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [dimplex_passkey_proxy]
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  actions:
+    - action: arm_dimplex_pairing
+      variables:
+        address: string
+      then:
+        - lambda: |-
+            id(dimplex_pairing_relay).arm_pairing(address.c_str());
+    - action: set_dimplex_pairing_passkey
+      variables:
+        address: string
+        passkey: string
+      then:
+        - lambda: |-
+            id(dimplex_pairing_relay).set_pending_passkey(address.c_str(), passkey.c_str());
+    - action: cancel_dimplex_pairing
+      then:
+        - lambda: |-
+            id(dimplex_pairing_relay).cancel_pairing();
+ota:
+  - platform: esphome
+    encryption:
+
+esp32_ble:
+  io_capability: keyboard_only
+  auth_req_mode: bond_mitm
+
+esp32_ble_tracker:
+
+bluetooth_proxy:
+  active: true
+
+dimplex_passkey_proxy:
+  id: dimplex_pairing_relay

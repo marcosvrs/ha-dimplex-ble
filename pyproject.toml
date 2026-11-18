@@ -1,0 +1,31 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = false
+source = ["custom_components/dimplex_ble"]
+
+[tool.coverage.report]
+fail_under = 100
+precision = 2
+
+[tool.mutmut]
+source_paths = ["custom_components/dimplex_ble"]
+pytest_add_cli_args_test_selection = ["tests"]
+cache_invalidation_files = ["tests/*.py"]
+use_setproctitle = false
+on_dependency_change = "rerun"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["custom_components/dimplex_ble"]

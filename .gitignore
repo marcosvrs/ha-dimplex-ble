@@ -1,0 +1,23 @@
+# Local runtime and generated test artifacts
+/.venv/
+/.coverage
+/coverage.json
+/mutants/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+
+# Heater-specific firmware and raw captures are not part of this generic integration
+/esphome/
+/captures/
+**/secrets.yaml
+
+# Unit-level protocol notes contain real heater advertisements and addresses
+/docs/ble-protocol.md
+/docs/plx050e-series-c-ble.md
+
+# Local handoff and live pairing notes are not part of the public integration
+/HANDOFF.md
+/docs/pairing-investigation.md
