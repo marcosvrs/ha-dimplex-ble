@@ -135,6 +135,9 @@ bash scripts/run_quality_gates.sh
 The ConfigR-derived lifecycle evidence is recorded in
 [`docs/configr.md`](docs/configr.md). The evidence-backed protocol and
 Home Assistant capability boundary is recorded in
-[`docs/capability-matrix.md`](docs/capability-matrix.md). The local artifact
-workspace used for analysis is `/tmp/configr-apk/` and is not part of the
-repository.
+[`docs/capability-matrix.md`](docs/capability-matrix.md). The complete ESPHome
+and BLE transport, pairing, bonding, proxy-capacity, and commissioning findings
+are recorded in
+[`docs/esphome-ble-findings.md`](docs/esphome-ble-findings.md). The local
+artifact workspace used for analysis is `/tmp/configr-apk/` and is not part of
+the repository.

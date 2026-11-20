@@ -119,20 +119,44 @@ def select_proxy_source(
         if candidate.source and proxy_supports_passkey(hass, candidate.source)
     ]
     selected = max(eligible, key=lambda item: item.rssi, default=None)
-    if selected is None:
-        sources = [candidate.source for candidate in candidates if candidate.source]
-        matching_entries = sum(
-            find_proxy_entry(hass, source) is not None for source in sources
+    if selected is not None:
+        return selected.source
+
+    # A Bluetooth discovery callback can originate from the host adapter while
+    # the ESPHome proxy's cached route is not in the current service-info
+    # snapshot.  The scanner registry still knows the source-specific route;
+    # use it as a pairing fallback rather than rejecting a valid proxy route.
+    known_sources = {
+        scanner_device.scanner.source
+        for scanner_device in bluetooth.async_scanner_devices_by_address(
+            hass, address.upper(), connectable=True
         )
-        _LOGGER.warning(
-            "No passkey-capable ESPHome route "
-            "(connectable_candidates=%d, "
-            "candidates_with_source=%d, matching_entries=%d)",
-            len(candidates),
-            len(sources),
-            matching_entries,
+        if scanner_device.scanner.source
+    }
+    fallback_sources = [
+        source for source in known_sources if proxy_supports_passkey(hass, source)
+    ]
+    if fallback_sources:
+        _LOGGER.debug(
+            "%s Using a cached passkey-capable Bluetooth route not present in "
+            "the current discovery snapshot",
+            DEBUG_LOG_PREFIX,
         )
-    return selected.source if selected is not None else None
+        return fallback_sources[0]
+
+    sources = [candidate.source for candidate in candidates if candidate.source]
+    matching_entries = sum(
+        find_proxy_entry(hass, source) is not None for source in sources
+    )
+    _LOGGER.warning(
+        "No passkey-capable ESPHome route "
+        "(connectable_candidates=%d, "
+        "candidates_with_source=%d, matching_entries=%d)",
+        len(candidates),
+        len(sources),
+        matching_entries,
+    )
+    return None
 
 
 def ble_device_from_source(

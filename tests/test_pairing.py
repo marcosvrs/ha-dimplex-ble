@@ -210,6 +210,11 @@ def test_select_proxy_source_returns_none_without_eligible_candidate(
 ) -> None:
     service_infos = [make_candidate("plain", -20)]
     monkeypatch.setattr(pairing, "proxy_supports_passkey", lambda *_: False)
+    monkeypatch.setattr(
+        pairing.bluetooth,
+        "async_scanner_devices_by_address",
+        Mock(return_value=[]),
+    )
     with caplog.at_level("WARNING", logger=pairing.__name__):
         selected = select_proxy_source(make_hass(), "heater", service_infos)
 
@@ -220,6 +225,39 @@ def test_select_proxy_source_returns_none_without_eligible_candidate(
     ]
     assert "plain" not in caplog.text
 
+
+def test_select_proxy_source_uses_cached_scanner_route(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    service_infos = [make_candidate("host-adapter", -25)]
+    cached_route = SimpleNamespace(
+        scanner=SimpleNamespace(source="proxy"),
+    )
+    scanner_devices = Mock(return_value=[cached_route])
+    monkeypatch.setattr(
+        pairing.bluetooth,
+        "async_scanner_devices_by_address",
+        scanner_devices,
+    )
+    passkey_support = Mock(
+        side_effect=lambda _hass, source: source == "proxy",
+    )
+    monkeypatch.setattr(pairing, "proxy_supports_passkey", passkey_support)
+    hass = make_hass()
+
+    with caplog.at_level("DEBUG", logger=pairing.__name__):
+        selected = select_proxy_source(hass, "heater", service_infos)
+
+    assert selected == "proxy"
+    scanner_devices.assert_called_once_with(hass, "HEATER", connectable=True)
+    assert passkey_support.call_args_list == [
+        call(hass, "host-adapter"),
+        call(hass, "proxy"),
+    ]
+    assert caplog.messages == [
+        "[DEBUG-DIMPLEX-PIN-20261117] Using a cached passkey-capable "
+        "Bluetooth route not present in the current discovery snapshot"
+    ]
 
 def test_ble_device_lookup_is_pinned_to_bond_owner(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
