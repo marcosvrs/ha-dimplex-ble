@@ -4,24 +4,34 @@ Standalone Home Assistant custom integration for local Dimplex Bluetooth heaters
 It is engineered against the current applicable Home Assistant Quality Scale
 requirements; it is not an official Home Assistant Quality Scale-rated integration.
 
-## Source of truth
+## Legal notice
 
-Connection and pairing lifecycle decisions are derived from the extracted official
-ConfigR application artifact. The artifact is a Native AOT application, so its
-readable evidence is limited to recovered managed resources and native strings.
-Those resources establish the Advanced Verification lifecycle:
+This is an unofficial, independently developed Home Assistant integration for
+local control of Dimplex products owned or lawfully controlled by the user. It
+is not affiliated with, sponsored by, endorsed by, or supported by Dimplex.
+Dimplex and product names are used only to identify compatibility.
 
-1. Try the normal product verification path.
-2. If cloud verification is unavailable, use local Bluetooth verification.
-3. Switch the product off before local verification.
-4. Refresh the Bluetooth connection; the iOS flow also tells the user to forget the
-   phone's Bluetooth bond.
-5. After local verification, power the product off and on before continuing.
+The repository does not distribute the ConfigR application, decompiled source,
+extracted binaries, proprietary assets, Dimplex firmware, credentials, or cloud
+access. Private research artifacts remain outside the repository and are not
+required at runtime. The project does not bypass authentication or security
+controls; pairing uses the PIN displayed by the user's own heater.
 
-The integration follows those lifecycle boundaries but does not depend on ConfigR,
-its cloud service, undocumented packet values, or undocumented firmware commands.
-The exact ConfigR GATT packet sequence is not recoverable from the artifact and is
-therefore not guessed.
+No warranty is made that this integration is safe for unattended or
+safety-critical heating control. Follow the heater manufacturer's safety
+instructions and local laws. The MIT license applies only to original project
+code and grants no rights to Dimplex intellectual property.
+
+## Public evidence boundary
+
+The implementation is based on independently written code, observed behavior
+of user-owned devices, and public documentation. Private research informed
+development but is not a distributed source of truth and must not be treated
+as permission to copy proprietary implementation details.
+
+The integration does not depend on ConfigR, its cloud service, undocumented
+packet values, or undocumented firmware commands. The exact ConfigR GATT packet
+sequence is not recoverable from the artifact and is therefore not guessed.
 
 ## Architecture
 
@@ -101,8 +111,8 @@ instantaneous power but no device-reported cumulative energy counter. To add
 kWh tracking to the Energy dashboard, create a Home Assistant Integration
 (Riemann sum) sensor from the calculated power-consumption entity. It does not
 expose Boost/Away/Manual/Timer presets, fan modes, swing, humidity, schedules,
-firmware updates, or other capabilities that the device has not exposed and
-that the ConfigR evidence has not verified.
+firmware updates, or other capabilities that have not been verified on the
+supported device.
 
 ## Troubleshooting
 
@@ -111,7 +121,7 @@ that the ConfigR evidence has not verified.
 - **Pairing times out:** confirm the heater is switched off before the local
   verification attempt, the proxy has the passkey relay, and the PIN is entered
   only when the heater displays it. If the heater-side verification state is
-  stale, follow the ConfigR recovery boundary: power it off, wait, and power it on.
+  stale, follow the documented recovery boundary: power it off, wait, and power it on.
 - **Entities unavailable:** check the selected bond-owning proxy and the
   integration diagnostics. The integration will not silently roam to another
   controller.
@@ -132,12 +142,8 @@ uv pip install --python .venv/bin/python -r requirements-test.txt
 bash scripts/run_quality_gates.sh
 ```
 
-The ConfigR-derived lifecycle evidence is recorded in
-[`docs/configr.md`](docs/configr.md). The evidence-backed protocol and
-Home Assistant capability boundary is recorded in
-[`docs/capability-matrix.md`](docs/capability-matrix.md). The complete ESPHome
-and BLE transport, pairing, bonding, proxy-capacity, and commissioning findings
-are recorded in
-[`docs/esphome-ble-findings.md`](docs/esphome-ble-findings.md). The local
-artifact workspace used for analysis is `/tmp/configr-apk/` and is not part of
-the repository.
+The evidence-backed protocol and Home Assistant capability boundary is recorded
+in [`docs/capability-matrix.md`](docs/capability-matrix.md). The complete
+ESPHome and BLE transport, pairing, bonding, proxy-capacity, and commissioning
+findings are recorded in [`docs/esphome-ble-findings.md`](docs/esphome-ble-findings.md).
+Private research artifacts are intentionally excluded from the repository.
