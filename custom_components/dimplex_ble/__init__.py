@@ -146,6 +146,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> N
                 {"source": proxy_source, "address_type": address_type},
             )
     client = DimplexBluetoothClient(hass, address, proxy_source, device)
+
     clients: list[DimplexBluetoothClient] = domain_data.setdefault(CLIENTS, [])
     clients.append(client)
     coordinator = DimplexCoordinator(hass, entry, client)

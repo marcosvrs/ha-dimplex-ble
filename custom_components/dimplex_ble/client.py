@@ -190,12 +190,13 @@ class DimplexBluetoothClient:
                     raise DimplexConnectionError(
                         "The selected ESPHome Bluetooth proxy is unavailable"
                     )
-                if pair:
-                    _LOGGER.debug(
-                        "%s Securing BLE connection through ESPHome proxy %s",
-                        DEBUG_LOG_PREFIX,
-                        scanner.name,
-                    )
+                _LOGGER.debug(
+                    "%s Connecting heater %s through ESPHome proxy %s (pair=%s)",
+                    DEBUG_LOG_PREFIX,
+                    self.address,
+                    scanner.name,
+                    pair,
+                )
 
                 semaphore = _proxy_connection_semaphore(self.hass, self.proxy_source)
                 await semaphore.acquire()
@@ -216,8 +217,9 @@ class DimplexBluetoothClient:
                     semaphore.release()
                     if pair:
                         _LOGGER.warning(
-                            "%s Paired BLE connection failed (%s)",
+                            "%s BLE connection failed for %s (%s)",
                             DEBUG_LOG_PREFIX,
+                            self.address,
                             type(err).__name__,
                         )
                         if "BluetoothDevicePairingResponse" in str(err):
@@ -284,7 +286,7 @@ class DimplexBluetoothClient:
             # before testing the persisted bond on a fresh connection.
             await asyncio.sleep(_PAIRING_RECONNECT_DELAY)
             self._force_service_refresh = True
-            async with self._connected(pair=True) as client:
+            async with self._connected(pair=False) as client:
                 snapshot = await self._async_read_snapshot(client)
                 if snapshot.model is None:
                     raise DimplexConnectionError(
@@ -340,9 +342,10 @@ class DimplexBluetoothClient:
             trac=trac,
         )
 
+
     async def async_read_snapshot(self) -> HeaterSnapshot:
         """Read mapped fields on an authenticated GATT connection."""
-        async with self._connected(pair=True) as client:
+        async with self._connected(pair=False) as client:
             return await self._async_read_snapshot(client)
 
     @staticmethod
@@ -398,7 +401,7 @@ class DimplexBluetoothClient:
     async def async_read_raw(self, group: int, characteristic_id: int) -> bytes:
         """Read a selected Dimplex characteristic unless it is protected."""
         validate_raw_access(group, characteristic_id, write=False)
-        async with self._connected(pair=True) as client:
+        async with self._connected(pair=False) as client:
             characteristic = self._find_characteristic(
                 client, (group, characteristic_id)
             )
@@ -416,7 +419,7 @@ class DimplexBluetoothClient:
             validate_raw_access(group, characteristic_id, write=False)
 
         values: dict[GattAddress, bytes] = {}
-        async with self._connected(pair=True) as client:
+        async with self._connected(pair=False) as client:
             for address in fields:
                 characteristic = self._find_characteristic(client, address)
                 if characteristic is None or "read" not in characteristic.properties:
@@ -434,7 +437,7 @@ class DimplexBluetoothClient:
         if len(payload) > MAX_GATT_VALUE_BYTES:
             raise DimplexProtocolError("Payload exceeds the 512-byte GATT value limit")
 
-        async with self._connected(pair=True) as client:
+        async with self._connected(pair=False) as client:
             characteristic = self._find_characteristic(
                 client, (group, characteristic_id)
             )

@@ -44,14 +44,15 @@ sequence is not recoverable from the artifact and is therefore not guessed.
   Assistant's proxy and management connections; it does not increase or replace
   ESPHome's BLE connection capacity.
 - Pairing is serialized per proxy and is an explicit commissioning operation.
-  Normal reads and writes reuse the authenticated connection. When a fresh
-  connection is required, the proxy is asked to re-establish encryption from
-  its existing bond; this is not a new PIN request when the bond is valid.
-  Bond repair is not retried in a loop.
+  Normal reads and writes reuse the authenticated connection without invoking
+  ESPHome's pairing request. When a fresh connection is required, the proxy is
+  asked to re-establish encryption from its existing bond; this is not a new
+  PIN request when the bond is valid. Bond repair is not retried in a loop.
 - A shared proxy has three integration connection slots, matching ESPHome's
   default active BLE capacity. Additional heaters queue until a slot is released.
-- The selected proxy is stored with the config entry. The integration does not
-  silently move a heater to another proxy because a bond belongs to its controller.
+- The configured proxy remains the runtime route. The integration does not
+  silently probe or move a heater to another proxy because ESPHome bonds are
+  proxy-local. RSSI-based cross-proxy roaming is intentionally not used.
 
 ## Installation
 

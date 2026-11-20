@@ -397,7 +397,7 @@ async def test_connected_reconnects_after_operation_failure(
     await ble_client.async_shutdown()
     second.disconnect.assert_awaited_once_with()
 
-async def test_snapshot_reuses_existing_bond_with_security_request(
+async def test_snapshot_reuses_existing_bond_without_pairing_request(
     ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from custom_components.dimplex_ble import client as module
@@ -408,8 +408,9 @@ async def test_snapshot_reuses_existing_bond_with_security_request(
 
     assert isinstance(await ble_client.async_read_snapshot(), SimpleNamespace)
 
-    assert module.establish_connection.await_args.kwargs["pair"] is True
+    assert module.establish_connection.await_args.kwargs["pair"] is False
     client.disconnect.assert_not_awaited()
+
 
 
 
@@ -474,7 +475,7 @@ async def test_pair_requests_security_during_connection_setup(
     assert sleep.await_args_list[0].args == (10.0,)
     assert connect.await_args_list[0].kwargs["pair"] is True
     assert connect.await_args_list[0].kwargs["use_services_cache"] is False
-    assert connect.await_args_list[1].kwargs["pair"] is True
+    assert connect.await_args_list[1].kwargs["pair"] is False
     assert connect.await_args_list[1].kwargs["use_services_cache"] is False
     first.disconnect.assert_awaited_once_with()
     second.disconnect.assert_awaited_once_with()
@@ -806,7 +807,7 @@ async def test_raw_read_protects_before_connect_and_checks_characteristic(
     char.properties = ["read"]
     assert await ble_client.async_read_raw(0, 0x1234) == b"\x07"
     client.read_gatt_char.assert_awaited_once_with(char)
-    assert module.establish_connection.call_args.kwargs["pair"] is True
+    assert module.establish_connection.call_args.kwargs["pair"] is False
     assert all(item.kwargs["write"] is False for item in validate.call_args_list)
 
 
@@ -843,7 +844,7 @@ async def test_raw_field_batch_reads_available_fields(
         call(char),
         call(second_char),
     ]
-    assert module.establish_connection.call_args.kwargs["pair"] is True
+    assert module.establish_connection.call_args.kwargs["pair"] is False
     assert all(item.kwargs["write"] is False for item in validate.call_args_list)
 
 
@@ -883,7 +884,7 @@ async def test_raw_write_supports_response_write_and_readback(
     with patch("custom_components.dimplex_ble.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
         assert await ble_client.async_write_raw(0, 0x1234, b"x") == b"\x07"
     client.write_gatt_char.assert_awaited_once_with(char, b"x", response=True)
-    assert module.establish_connection.call_args.kwargs["pair"] is True
+    assert module.establish_connection.call_args.kwargs["pair"] is False
     client.read_gatt_char.assert_awaited_once_with(char)
     sleep.assert_awaited_once_with(1)
     await ble_client.async_shutdown()
