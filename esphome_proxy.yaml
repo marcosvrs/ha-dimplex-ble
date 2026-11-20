@@ -8,6 +8,9 @@ esp32:
     type: esp-idf
 
 external_components:
+  # The stock ESPHome proxy already provides scanning, connections, bonding,
+  # and reconnection. This small relay only bridges the runtime heater PIN
+  # because the stock proxy exposes no remote passkey-response action.
   - source:
       type: local
       path: components
@@ -22,6 +25,8 @@ logger:
 api:
   encryption:
     key: !secret api_encryption_key
+  # HA and the ESPHome management client need concurrent API sessions.
+  max_connections: 16
   actions:
     - action: arm_dimplex_pairing
       variables:

@@ -11,9 +11,14 @@ from custom_components.dimplex_ble.protocol import (
     HeaterSnapshot,
     ProtectedCharacteristicError,
     characteristic_uuid,
+    decode_known_raw_value,
+    encode_preset_mode,
     encode_setpoint,
+    format_known_raw_value,
+    format_readonly_raw_value,
     gatt_uuid_candidates,
     parse_hex_payload,
+    parse_preset_mode,
     parse_snapshot,
     service_uuid,
     validate_raw_access,
@@ -22,8 +27,9 @@ from custom_components.dimplex_ble.protocol import (
 
 @pytest.mark.parametrize("group", sorted(DIMPLEX_GROUPS))
 def test_service_uuid_formats_each_supported_group(group: int) -> None:
-    assert service_uuid(group) == f"00000000-000{group}-1000-8000-00805f9b34fb"
-
+    assert service_uuid(group) == (
+        f"00000000-000{group}-1000-8000-00805f9b34fb"
+    )
 
 @pytest.mark.parametrize("group", [-1, 4, 255])
 def test_service_uuid_rejects_groups_outside_dimplex_services(group: int) -> None:
@@ -51,7 +57,7 @@ def test_characteristic_uuid_rejects_out_of_range_ids(value: int) -> None:
 def test_gatt_uuid_candidates_include_sig_and_gdhv_bases(group: int) -> None:
     assert gatt_uuid_candidates(group, 0x1023) == (
         (
-            f"00000000-000{group}-1000-8000-00805f9b34fb",
+            service_uuid(group),
             "00001023-0000-1000-8000-00805f9b34fb",
         ),
         (
@@ -114,6 +120,93 @@ def test_parse_hex_payload_rejects_empty_and_oversized_payloads() -> None:
     assert str(err.value) == "Payload exceeds the 512-byte GATT value limit"
 
 
+
+@pytest.mark.parametrize(
+    ("address", "value", "expected"),
+    [
+        (
+            (0, 0x0006),
+            bytes.fromhex("141a0b11133001"),
+            {"clock": "2026-11-17T19:48", "clock_flag": 1},
+        ),
+        (
+            (1, 0x0001),
+            bytes.fromhex("029eff96"),
+            {"backlight_selector": 2, "backlight_rgb": "#9eff96"},
+        ),
+        ((1, 0x0007), b"\x06", {"last_key_code": 6}),
+        ((0, 0x100D), b"\x01", {"advance_active": True}),
+        ((0, 0x1028), bytes.fromhex("1500"), {"runback_setpoint_c": 21}),
+        (
+            (0, 0x102A),
+            bytes.fromhex("001a0b11300607"),
+            {
+                "away_active": False,
+                "away_target_temperature_c": 7,
+                "away_until": "2026-11-17T06:48",
+            },
+        ),
+    ],
+)
+def test_decode_known_raw_value_preserves_only_established_meanings(
+    address: tuple[int, int],
+    value: bytes,
+    expected: dict[str, str | int | bool],
+) -> None:
+    assert decode_known_raw_value(address, value) == expected
+    assert decode_known_raw_value((3, 0x200B), b"\x7f\x9d") == {}
+
+
+@pytest.mark.parametrize(
+    ("address", "value", "expected"),
+    [
+        ((0, 0x0006), bytes.fromhex("141a0b140d3701"), "2026-11-20T13:55 (flag 1)"),
+        ((1, 0x0001), bytes.fromhex("029eff96"), "#9eff96 (selector 2)"),
+        ((1, 0x0007), b"\x06", "key code 6"),
+        ((0, 0x100D), b"\x00", "off"),
+        ((0, 0x1028), bytes.fromhex("1500"), "21 °C"),
+        (
+            (0, 0x102A),
+            bytes.fromhex("001a0b11300607"),
+            "off, target 7 °C, until 2026-11-17T06:48",
+        ),
+    ],
+)
+def test_format_known_raw_value(
+    address: tuple[int, int], value: bytes, expected: str
+) -> None:
+    assert format_known_raw_value(address, value) == expected
+
+
+def test_format_known_raw_value_keeps_unknown_values_raw() -> None:
+    assert format_known_raw_value((3, 0x200B), b"\x7f\x9d") is None
+
+
+@pytest.mark.parametrize(
+    ("address", "value", "expected"),
+    [
+        ((3, 0x1029), bytes.fromhex("9eff96"), "#9eff96"),
+        ((1, 0x1010), b"\x47", "EOL test code 71"),
+        ((1, 0x1020), b"\x00", "off"),
+        ((1, 0x300E), b"\x01", "on"),
+        ((2, 0x100C), b"\x01", "on"),
+        (
+            (3, 0x200C),
+            bytes.fromhex("1416050d0e00"),
+            "2022-05-13T14:00 (possible build timestamp)",
+        ),
+    ],
+)
+def test_format_readonly_raw_value_uses_conservative_guesses(
+    address: tuple[int, int], value: bytes, expected: str
+) -> None:
+    assert format_readonly_raw_value(address, value) == expected
+
+
+def test_format_readonly_raw_value_falls_back_for_unresolved_payload() -> None:
+    assert format_readonly_raw_value((3, 0x200F), bytes.fromhex("04e90f0000")) is None
+
+
 @pytest.mark.parametrize(("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")])
 def test_encode_setpoint_encodes_whole_degrees(value: float, expected: bytes) -> None:
     assert encode_setpoint(value) == expected
@@ -133,19 +226,79 @@ def test_encode_setpoint_rejects_values_outside_byte_range(value: int) -> None:
     assert str(err.value) == "Setpoint is outside the encodable range"
 
 
+@pytest.mark.parametrize(
+    ("preset", "payload"),
+    [("eco", b"\x03\x00\x00\x00\x00\x00"), ("frost", b"\x04\x00\x00\x00\x00\x00")],
+)
+def test_preset_mode_encoding_matches_verified_commands(
+    preset: str, payload: bytes
+) -> None:
+    assert encode_preset_mode(preset) == payload
+    assert parse_preset_mode(payload) == preset
+
+
+def test_preset_mode_parser_ignores_unknown_and_malformed_values() -> None:
+    assert parse_preset_mode(None) is None
+    assert parse_preset_mode(b"") is None
+    assert parse_preset_mode(b"\x02\x00\x00\x00\x00\x00") is None
+
+
+def test_preset_mode_encoding_rejects_unverified_modes() -> None:
+    with pytest.raises(DimplexProtocolError) as err:
+        encode_preset_mode("boost")
+    assert str(err.value) == "Unsupported preset mode"
+
+
 def test_parse_snapshot_decodes_all_available_fields() -> None:
     snapshot = parse_snapshot(
         {
             (3, 0x2005): b"QRAD100E\x00 ",
+            (3, 0x200A): b"EP4213\x00",
+            (3, 0x2009): b"\x05",
+            (3, 0x000A): bytes.fromhex("f401980800000000"),
             (0, 0x1023): b"\x15\x00",
             (0, 0x1006): bytes((5, 0, 30, 0)),
             (1, 0x0008): bytes((1, 21, 7)),
             (0, 0x1011): b"\x34\x12",
             (0, 0x1001): b"\x02\x03",
             (0, 0x1005): b"\x01",
-        }
+        },
+        lcd_temperature=bytes.fromhex("021d00"),
+        ui_version=bytes.fromhex("010107"),
+        trac=bytes.fromhex("010164"),
     )
-    assert snapshot == HeaterSnapshot("QRAD100E", 21, 5, 30, 21.7, 0x1234, "3412", "0203", 1)
+    assert snapshot == HeaterSnapshot(
+        "QRAD100E",
+        21,
+        5,
+        30,
+        21.7,
+        0x1234,
+        "3412",
+        "0203",
+        1,
+        rated_power_w=500,
+        power_loading_hex="f401980800000000",
+        lcd_temperature_c=29.0,
+        trac_status_hex="010164",
+        heating_active=True,
+        trac_output_power_percent=100,
+        product_code="EP4213",
+        ui_version="1.7",
+        rf_firmware_revision=5,
+    )
+
+
+def test_parse_snapshot_decodes_idle_trac_and_rejects_untrusted_values() -> None:
+    idle = parse_snapshot({}, trac=bytes.fromhex("010000"))
+    assert idle.trac_status_hex == "010000"
+    assert idle.heating_active is False
+    assert idle.trac_output_power_percent == 0
+
+    invalid = parse_snapshot({}, trac=bytes.fromhex("0301ff"))
+    assert invalid.trac_status_hex == "0301ff"
+    assert invalid.heating_active is None
+    assert invalid.trac_output_power_percent is None
 
 
 @pytest.mark.parametrize(

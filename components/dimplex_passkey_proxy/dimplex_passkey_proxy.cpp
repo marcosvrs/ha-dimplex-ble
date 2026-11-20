@@ -1,4 +1,5 @@
 #include "dimplex_passkey_proxy.h"
+
 #include "esphome/core/log.h"
 
 #include <cstddef>
@@ -9,7 +10,6 @@ namespace {
 
 constexpr char TAG[] = "dimplex_passkey";
 constexpr char DEBUG_PREFIX[] = "[DEBUG-DIMPLEX-PIN-20261117]";
-
 constexpr uint32_t PASSKEY_LIFETIME_MS = 60'000;
 
 int hex_digit_(char value) {
@@ -26,14 +26,6 @@ int hex_digit_(char value) {
 }
 
 }  // namespace
-
-void DimplexPasskeyProxy::loop() {
-  if (this->state_ != PairingState::IDLE &&
-      millis() - this->pending_since_ >= PASSKEY_LIFETIME_MS) {
-    ESP_LOGW(TAG, "%s relay state expired", DEBUG_PREFIX);
-    this->clear_pairing_();
-  }
-}
 
 void DimplexPasskeyProxy::arm_pairing(const char *address_hex) {
   this->clear_pairing_();
@@ -77,9 +69,9 @@ void DimplexPasskeyProxy::set_pending_passkey(const char *address_hex,
   if (this->state_ == PairingState::REQUEST_PENDING) {
     const int result =
         esp_ble_passkey_reply(address.data(), true, numeric_passkey);
+    this->state_ = PairingState::REPLY_SENT;
     ESP_LOGI(TAG, "%s passkey reply status=%d (PIN arrived second)",
              DEBUG_PREFIX, result);
-    this->clear_pairing_();
     return;
   }
 
@@ -93,47 +85,28 @@ void DimplexPasskeyProxy::cancel_pairing() {
   this->clear_pairing_();
 }
 
+
 void DimplexPasskeyProxy::gap_event_handler(esp_gap_ble_cb_event_t event,
                                             esp_ble_gap_cb_param_t *param) {
-  if (this->state_ == PairingState::IDLE) {
+  if (event == ESP_GAP_BLE_AUTH_CMPL_EVT) {
+    const auto &auth = param->ble_security.auth_cmpl;
+    ESP_LOGI(TAG, "%s authentication complete success=%d reason=%d bonds=%d",
+             DEBUG_PREFIX, auth.success, auth.fail_reason,
+             esp_ble_get_bond_device_num());
+    return;
+  }
+  if (event == ESP_GAP_BLE_KEY_EVT) {
+    ESP_LOGI(TAG, "%s security key event type=%d", DEBUG_PREFIX,
+             param->ble_security.ble_key.key_type);
+    return;
+  }
+  if (event != ESP_GAP_BLE_PASSKEY_REQ_EVT ||
+      this->state_ == PairingState::IDLE) {
     return;
   }
   if (millis() - this->pending_since_ >= PASSKEY_LIFETIME_MS) {
     ESP_LOGW(TAG, "%s relay state expired before GAP event", DEBUG_PREFIX);
     this->clear_pairing_();
-    return;
-  }
-
-  if (event == ESP_GAP_BLE_SEC_REQ_EVT) {
-    const bool matches =
-        this->matches_address_(param->ble_security.ble_req.bd_addr);
-    ESP_LOGI(TAG, "%s security request received: address_match=%s",
-             DEBUG_PREFIX, matches ? "yes" : "no");
-    return;
-  }
-  if (event == ESP_GAP_BLE_PASSKEY_NOTIF_EVT) {
-    const bool matches =
-        this->matches_address_(param->ble_security.key_notif.bd_addr);
-    ESP_LOGI(TAG, "%s passkey notification received: address_match=%s",
-             DEBUG_PREFIX, matches ? "yes" : "no");
-    return;
-  }
-  if (event == ESP_GAP_BLE_AUTH_CMPL_EVT) {
-    const bool matches =
-        this->matches_address_(param->ble_security.auth_cmpl.bd_addr);
-    if (matches) {
-      ESP_LOGI(TAG, "%s authentication complete: success=%s fail_reason=%d",
-               DEBUG_PREFIX,
-               param->ble_security.auth_cmpl.success ? "yes" : "no",
-               static_cast<int>(param->ble_security.auth_cmpl.fail_reason));
-      this->clear_pairing_();
-    } else {
-      ESP_LOGI(TAG, "%s authentication complete for another address",
-               DEBUG_PREFIX);
-    }
-    return;
-  }
-  if (event != ESP_GAP_BLE_PASSKEY_REQ_EVT) {
     return;
   }
 
@@ -143,11 +116,14 @@ void DimplexPasskeyProxy::gap_event_handler(esp_gap_ble_cb_event_t event,
              DEBUG_PREFIX);
     return;
   }
+  if (this->state_ == PairingState::REPLY_SENT) {
+    return;
+  }
   ESP_LOGI(TAG, "%s passkey request received for armed address", DEBUG_PREFIX);
   if (this->state_ == PairingState::PASSKEY_READY) {
-    const uint32_t passkey = this->pending_passkey_;
-    this->clear_pairing_();
-    const int result = esp_ble_passkey_reply(address, true, passkey);
+    const int result =
+        esp_ble_passkey_reply(address, true, this->pending_passkey_);
+    this->state_ = PairingState::REPLY_SENT;
     ESP_LOGI(TAG, "%s passkey reply status=%d (PIN arrived first)",
              DEBUG_PREFIX, result);
   } else {
@@ -156,8 +132,8 @@ void DimplexPasskeyProxy::gap_event_handler(esp_gap_ble_cb_event_t event,
   }
 }
 
-bool DimplexPasskeyProxy::parse_address_(const char *value,
-                                         std::array<uint8_t, 6> &address) {
+bool DimplexPasskeyProxy::parse_address_(
+    const char *value, std::array<uint8_t, 6> &address) {
   if (value == nullptr || std::strlen(value) != 12) {
     return false;
   }
@@ -172,7 +148,8 @@ bool DimplexPasskeyProxy::parse_address_(const char *value,
   return true;
 }
 
-bool DimplexPasskeyProxy::parse_passkey_(const char *value, uint32_t &passkey) {
+bool DimplexPasskeyProxy::parse_passkey_(const char *value,
+                                         uint32_t &passkey) {
   if (value == nullptr || std::strlen(value) != 6) {
     return false;
   }
@@ -188,10 +165,21 @@ bool DimplexPasskeyProxy::parse_passkey_(const char *value, uint32_t &passkey) {
   return true;
 }
 
+
 bool DimplexPasskeyProxy::matches_address_(const uint8_t *address) const {
-  return std::memcmp(this->pending_address_.data(), address,
-                     this->pending_address_.size()) == 0;
+  if (std::memcmp(this->pending_address_.data(), address,
+                  this->pending_address_.size()) == 0) {
+    return true;
+  }
+  for (std::size_t index = 0; index < this->pending_address_.size(); ++index) {
+    if (this->pending_address_[index] !=
+        address[this->pending_address_.size() - 1 - index]) {
+      return false;
+    }
+  }
+  return true;
 }
+
 
 void DimplexPasskeyProxy::clear_pairing_() {
   this->pending_address_.fill(0);

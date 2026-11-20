@@ -23,13 +23,14 @@
     {"local_name": "AM8*"},
     {"local_name": "AM9*"}
   ],
+  "categories": ["climate.thermostats_heating"],
   "codeowners": ["@marcosvrs"],
   "config_flow": true,
+  "connectivity": ["bluetooth"],
   "dependencies": ["bluetooth_adapters", "esphome"],
   "documentation": "https://github.com/marcosvrs/ha-dimplex-ble",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/marcosvrs/ha-dimplex-ble/issues",
-  "requirements": ["bleak-retry-connector>=4.7.1"],
   "version": "0.1.0"
 }

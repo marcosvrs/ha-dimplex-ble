@@ -9,9 +9,12 @@ MANUFACTURER = "Dimplex"
 ADVERTISEMENT_SUFFIX = "<Dimplex>"
 
 CONF_ADDRESS = "address"
+CONF_ADDRESS_TYPE = "address_type"
 CONF_PROXY_SOURCE = "proxy_source"
 CONF_PASSKEY = "passkey"
 DEVICE_NAME = "Dimplex heater"
+PENDING_DEVICES = "pending_devices"
+CLIENTS = "clients"
 
 DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
-PLATFORMS = (Platform.CLIMATE, Platform.SELECT, Platform.SENSOR)
+PLATFORMS = (Platform.CLIMATE, Platform.SELECT, Platform.SENSOR, Platform.TEXT)

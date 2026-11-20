@@ -1,132 +1,140 @@
 # Dimplex BLE
 
-Model-neutral Home Assistant integration for Dimplex BLE heaters. Home Assistant's Bluetooth integration aggregates local adapters and ESPHome Bluetooth proxies; each discovered physical heater gets one config entry and one device. No heater MAC addresses, room names, or per-heater credentials are configured in YAML.
+Standalone Home Assistant custom integration for local Dimplex Bluetooth heaters.
+It is engineered against the current applicable Home Assistant Quality Scale
+requirements; it is not an official Home Assistant Quality Scale-rated integration.
 
-## Scope
+## Source of truth
 
-- Native `climate` entity for the heater-reported Celsius target and, when available, room temperature.
-- Heater-reported minimum/maximum setpoint range; target writes are whole-degree Celsius and are read back from the heater. The integration does not change operating mode as a side effect.
-- Display-temperature-unit `select` for the observed Celsius/Fahrenheit setting.
-- Error-code `sensor` that retains every numeric value, including unknown codes, plus the exact raw status bytes in an attribute. No unknown code is discarded or assigned an invented meaning.
-- Raw operating-mode bytes are available as a diagnostic entity, disabled by default until their interpretation is established.
-- `get_gatt_services`, `read_gatt`, and administrator-only `write_gatt` response actions expose service metadata and raw characteristic bytes without adding model-specific entities for unverified fields.
+Connection and pairing lifecycle decisions are derived from the extracted official
+ConfigR application artifact. The artifact is a Native AOT application, so its
+readable evidence is limited to recovered managed resources and native strings.
+Those resources establish the Advanced Verification lifecycle:
 
-Raw actions accept Dimplex service groups 0–3 and a 16-bit characteristic ID in decimal (for example, `0x1023` is `4131`). Payloads and responses are hexadecimal. The integration blocks the characteristics already identified as unsafe, including device-security material and writes to the Cypress bootloader services. `get_gatt_services` returns metadata only; it does not read characteristic values.
+1. Try the normal product verification path.
+2. If cloud verification is unavailable, use local Bluetooth verification.
+3. Switch the product off before local verification.
+4. Refresh the Bluetooth connection; the iOS flow also tells the user to forget the
+   phone's Bluetooth bond.
+5. After local verification, power the product off and on before continuing.
 
-The GATT client resolves the documented Bluetooth SIG and GDHV vendor UUID bases. GDHV lookup has unit coverage but has not been verified against a live GDHV-based heater.
+The integration follows those lifecycle boundaries but does not depend on ConfigR,
+its cloud service, undocumented packet values, or undocumented firmware commands.
+The exact ConfigR GATT packet sequence is not recoverable from the artifact and is
+therefore not guessed.
 
-## Actions and examples
+## Architecture
 
-The integration provides no conditions or triggers. Use Home Assistant's native climate action for target temperature, or the response actions for raw GATT access. The `device_id` is selected from the device registry; it is not a heater MAC.
+- Home Assistant owns discovery, the selected ESPHome Bluetooth route, GATT
+  connection lifecycle, retries, availability, and teardown.
+- The only ESPHome customization is the minimal BLE passkey callback relay;
+  scanning, connections, bonding, reconnection, and capacity remain stock
+  ESPHome Bluetooth Proxy behavior.
+- `api.max_connections: 16` is only an API-session headroom setting for Home
+  Assistant's proxy and management connections; it does not increase or replace
+  ESPHome's BLE connection capacity.
+- Pairing is serialized per proxy and is an explicit commissioning operation.
+  Normal reads and writes reuse the authenticated connection. When a fresh
+  connection is required, the proxy is asked to re-establish encryption from
+  its existing bond; this is not a new PIN request when the bond is valid.
+  Bond repair is not retried in a loop.
+- A shared proxy has three integration connection slots, matching ESPHome's
+  default active BLE capacity. Additional heaters queue until a slot is released.
+- The selected proxy is stored with the config entry. The integration does not
+  silently move a heater to another proxy because a bond belongs to its controller.
 
-Read an unmapped error/status value (`0x1011`, decimal `4113`):
-
-```yaml
-action: dimplex_ble.read_gatt
-data:
-  device_id: YOUR_DEVICE_ID
-  service_group: 0
-  characteristic: 4113
-response_variable: raw_status
-```
-
-`raw_status.value` contains the bytes as hexadecimal. To set a climate target, call `climate.set_temperature` for that heater's climate entity; the integration writes the target characteristic and then reads heater state back.
-
-The administrator-only write action uses the same device, group, and characteristic fields, plus a hexadecimal `payload`. For example, group `0`, characteristic `4101` (`0x1005`), payload `"01"` requests Fahrenheit display. The returned response includes the written bytes and a readback when that characteristic is readable. Do not write undocumented values unless you can safely verify their effect on the heater.
-
-## Supported devices
-
-Models observed during protocol research include QRAD100E Series D and PLX050E Series C. The integration discovers devices from their advertisements, not from a per-heater allowlist. Unverified characteristics remain raw and are not given invented meanings.
 ## Installation
 
-1. Install `custom_components/dimplex_ble` under Home Assistant's `custom_components` directory.
-2. Restart Home Assistant.
-3. Open **Settings → Devices & services → Add integration → Dimplex BLE**, or accept Home Assistant's Bluetooth discovery.
-Accepting Home Assistant's Bluetooth discovery **Add** immediately arms the selected ESPHome proxy and starts pairing through that scanner's source-specific connector, before the PIN form appears. The encrypted ESPHome API actions relay the PIN. The upstream ESPHome Bluetooth Proxy still handles scanning and GATT; the external component only adds the missing passkey callback.
+1. Install the `custom_components/dimplex_ble` directory.
+2. Install the minimal `components/dimplex_passkey_proxy` component in the ESPHome
+   Bluetooth Proxy that will own the heater connection.
+3. Keep the proxy's standard `esp32_ble_tracker` and `bluetooth_proxy` components.
+4. Configure the proxy's encrypted API actions for
+   `arm_dimplex_pairing`, `set_dimplex_pairing_passkey`, and
+   `cancel_dimplex_pairing`, plus the stock `esp32_ble` settings
+   `io_capability: keyboard_only` and `auth_req_mode: bond_mitm`.
+5. Restart Home Assistant and add **Dimplex BLE**.
 
-The manual flow lists each distinct proxy-reachable heater with its advertised name and signal strength; the PIN form repeats the selected advertised name so the user can identify the heater while pairing. Multiple proxy advertisements for one heater remain one choice. The integration stores the selected proxy source and uses Home Assistant's scanner-by-source connector directly, so the bond and subsequent GATT traffic stay on that controller. A heater's bond is local to the controller that paired. Proxy roaming remains unverified and must not be assumed.
+The config flow selects a reachable heater and its proxy, arms pairing, then asks
+for the six-digit PIN shown by the heater. The PIN is forwarded to the selected
+proxy and is not stored.
 
-## Removal
+## Entities and controls
 
-In **Settings → Devices & services**, open the Dimplex BLE config entry and choose **Delete**. Remove each heater entry separately. This removes the integration entry and its entities; it does not modify ESPHome proxy firmware or heater settings.
+Each configured heater creates:
 
-## Bluetooth proxy and pairing
+- one heat-only `climate` entity with native Celsius temperature, heater-reported
+  current temperature, target temperature, target limits, the verified Eco preset,
+  and directly reported `HEATING`/`IDLE` HVAC action when available;
+- one configuration `select` for the heater-reported display unit;
+- one diagnostic error-code `sensor`;
+- one disabled-by-default diagnostic raw operating-mode `sensor`;
+- one disabled-by-default diagnostic rated-power `sensor`; its raw
+  `PowerLoading` payload is retained as an attribute, while the second
+  undocumented word is not interpreted as measured power;
+- one disabled-by-default diagnostic LCD/controller-temperature `sensor`;
+  its complete Trac response is retained as an attribute;
+- one disabled-by-default diagnostic output-power `sensor` in percent; its
+  complete Trac response is retained as an attribute;
+- one enabled calculated power-consumption `sensor` in watts, computed as
+  `rated_power × output_power_percent ÷ 100`. It has the standard `POWER` device
+  class and `MEASUREMENT` state class, so it is available as a power input in
+  Home Assistant's Energy dashboard.
 
-The standard ESPHome Bluetooth Proxy handles advertisements and GATT connections, but its pairing request has no passkey field and the stock BLE client does not handle the passkey-request event. Vanilla firmware therefore cannot complete first-time PIN pairing by itself.
+Raw GATT actions exist for inspection and controlled administrator-only writes.
+Known security-material and bootloader characteristics are blocked. Unknown
+characteristics are not promoted to Home Assistant entities.
 
-This repository includes a minimal ESPHome external component, `components/dimplex_passkey_proxy`, for that missing security callback. When Home Assistant starts setup, it arms the relay for one address and starts the proxy's BLE pairing request before asking for the PIN. In a live test the proxy reached the passkey-request state, but the heater did not display a PIN and authentication timed out; this display trigger remains unverified. Do not submit a guessed PIN. The relay accepts the PIN later through the encrypted ESPHome native API and handles either arrival order; it replies only to the matching heater and keeps the address/PIN state in RAM for at most 60 seconds. It clears state after the reply, authentication completion, explicit cancellation, or expiry. Home Assistant refuses proxies without all three pairing actions and an encrypted API. Pairing attempts are serialized per proxy and time out after 60 seconds. After pairing, normal discovery and GATT traffic still use the standard ESPHome Bluetooth Proxy. Each heater stays bound to the proxy that owns its bond; bonds are not shared between proxies.
+## Runtime behavior
 
-Merge this fragment into the existing ESPHome proxy configuration. Do not duplicate existing `api`, `esp32_ble_tracker`, or `bluetooth_proxy` blocks; `path` must resolve inside the ESPHome container:
+The coordinator polls every ten seconds and shares one client per config entry.
+A failed connection or GATT operation closes the connection; coordinator entities
+become unavailable until a fresh snapshot succeeds. Repeated failures are handled
+by Home Assistant's coordinator without publishing stale live values. Commissioning
+automatic retries are bounded to three attempts.
 
-```yaml
-external_components:
-  - source:
-      type: local
-      path: /path/to/ha-dimplex-ble/components
-    components: [dimplex_passkey_proxy]
-
-api:
-  encryption:
-    key: !secret api_encryption_key
-  actions:
-    - action: arm_dimplex_pairing
-      variables:
-        address: string
-      then:
-        - lambda: |-
-            id(dimplex_pairing_relay).arm_pairing(address.c_str());
-    - action: set_dimplex_pairing_passkey
-      variables:
-        address: string
-        passkey: string
-      then:
-        - lambda: |-
-            id(dimplex_pairing_relay).set_pending_passkey(address.c_str(), passkey.c_str());
-    - action: cancel_dimplex_pairing
-      then:
-        - lambda: |-
-            id(dimplex_pairing_relay).cancel_pairing();
-
-esp32_ble:
-  io_capability: keyboard_only
-
-dimplex_passkey_proxy:
-  id: dimplex_pairing_relay
-```
-
-Keep the existing `esp32_ble_tracker` and `bluetooth_proxy: active: true` configuration. `keyboard_only` allows the ESP32 central to answer the heater's passkey challenge. ESP32 proxies default to three active GATT slots; pairing is single-flight per proxy, while later heater reads and writes use short-lived connections. See [ESPHome API actions](https://esphome.io/components/api/#user-defined-actions), [external components](https://esphome.io/components/external_components/), and [Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy/).
-
-## Update and control behavior
-
-Each heater has an independent coordinator with a 10-second polling interval. It reads only the mapped, known-safe fields and selects the room-temperature value through the heater's selector protocol. It does not read the known timeout/security characteristics. If a heater is offline, its entities remain registered and become unavailable; setup does not fail solely because a radiator is out of range.
-
-The climate entity is heat-only and does not publish `hvac_action`: the available BLE value is not yet a reliable representation of actual heating activity. Setpoint writes do not silently change Manual/Timer/Eco mode; use the raw write action for other settings and confirm their behavior on the heater.
+The integration exposes only the verified Eco preset. Frost has a known bounded
+protocol payload but remains phase 2 until the physical display state is
+confirmed. HVAC action comes only from the heater's Trac response; it is not
+inferred from temperature or selected mode. The integration exposes calculated
+instantaneous power but no device-reported cumulative energy counter. To add
+kWh tracking to the Energy dashboard, create a Home Assistant Integration
+(Riemann sum) sensor from the calculated power-consumption entity. It does not
+expose Boost/Away/Manual/Timer presets, fan modes, swing, humidity, schedules,
+firmware updates, or other capabilities that the device has not exposed and
+that the ConfigR evidence has not verified.
 
 ## Troubleshooting
 
-- **No heater appears:** Confirm Home Assistant Bluetooth is working and the ESPHome Bluetooth Proxy is added to Home Assistant through the ESPHome integration. Keep the proxy within BLE range and make sure it supports active GATT connections.
-- **A heater is discovered but unavailable:** The integration uses the selected proxy to preserve the controller-local bond. Check that proxy is online and within BLE range; the integration does not silently switch to another controller.
-- **The bond-owning proxy was replaced or reset:** Bonds are not transferable between ESP32s. The replacement must pair separately. Whether the heater retains multiple controller bonds or replaces the old one is unverified; do not assume automatic failover.
-- **First pairing fails:** Confirm the selected ESPHome proxy has this external component, its encrypted native API actions, and `io_capability: keyboard_only`. A stock/vanilla proxy alone cannot accept the PIN through HA.
-- **Pairing diagnostics:** In Developer Tools > Actions, run `logger.set_level` with `custom_components.dimplex_ble: debug`. The level resets when HA restarts. The native PIN form cannot show a live countdown; it explains the observed ~30-second heater PIN window. Each proxy pairing request times out after 60 seconds, then retries after a 1-second delay while the setup flow remains open. Closing the flow cancels the active pairing and retry task. Passkeys are not logged.
-- **Raw reads fail:** The heater may be unbonded, out of range, or lacking that characteristic. The integration blocks known unsafe characteristics and does not read Cypress bootloader services.
-- **Several heaters share proxies:** ESP32 proxies default to three active GATT connection slots. Setup chooses the strongest passkey-capable route, and each heater stays on its bond-owning proxy. HA's route scoring still applies to other Bluetooth clients. Moving a Dimplex heater between proxies requires verified support for multiple controller bonds.
+- **No heater found:** verify Home Assistant Bluetooth and the selected ESPHome
+  proxy are online, connectable, and within range.
+- **Pairing times out:** confirm the heater is switched off before the local
+  verification attempt, the proxy has the passkey relay, and the PIN is entered
+  only when the heater displays it. If the heater-side verification state is
+  stale, follow the ConfigR recovery boundary: power it off, wait, and power it on.
+- **Entities unavailable:** check the selected bond-owning proxy and the
+  integration diagnostics. The integration will not silently roam to another
+  controller.
+- **Several heaters use one proxy:** the integration queues connections beyond
+  the three available slots. Other Bluetooth integrations also consume proxy
+  capacity.
 
-The error-code sensor reports the numeric value and raw bytes. No human-readable mapping is guessed; record an unknown value and the heater display when investigating a fault.
+## Removal
+
+Delete the config entry from **Settings → Devices & services**. This removes the
+Home Assistant entities and entry; it does not erase heater state or change proxy
+firmware.
 
 ## Development
 
 ```sh
-uv venv --python 3.14
 uv pip install --python .venv/bin/python -r requirements-test.txt
-.venv/bin/pre-commit install --hook-type pre-commit --hook-type pre-push
 bash scripts/run_quality_gates.sh
 ```
 
-The pre-commit hook runs Ruff and strict mypy on relevant changes. The pre-push hook runs all hooks, tests, 100% statement/function coverage checks, and the 99% mutation-score gate. GitHub CI runs the same quality script and Home Assistant `hassfest` on every push and pull request.
-
-The test gate requires 100% executed statements and 100% of defined integration functions to be exercised; branch and line thresholds are not configured. The mutation score gate is 99%. The suite uses Home Assistant's custom-component harness and mocked GATT clients; when a host C++ compiler is available, pytest also builds and runs the relay lifecycle harness against the production C++ source. Automated tests never write to a physical heater.
-
-## Quality-scale status
-
-CI enforces strict mypy, Ruff's async checks, the test and mutation gates, and Home Assistant `hassfest`. This BLE-only integration makes no HTTP requests, so the Platinum `inject-websession` rule does not apply. Async-dependency use still needs code review; automated checks cannot prove every I/O path is non-blocking. This repository does not claim an officially accepted Platinum tier, which requires Home Assistant's quality-scale review.
+The ConfigR-derived lifecycle evidence is recorded in
+[`docs/configr.md`](docs/configr.md). The evidence-backed protocol and
+Home Assistant capability boundary is recorded in
+[`docs/capability-matrix.md`](docs/capability-matrix.md). The local artifact
+workspace used for analysis is `/tmp/configr-apk/` and is not part of the
+repository.

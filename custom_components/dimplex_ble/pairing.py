@@ -25,7 +25,7 @@ CONF_NOISE_PSK = "noise_psk"
 PAIRING_ARM_ACTION = "arm_dimplex_pairing"
 PAIRING_ACTION = "set_dimplex_pairing_passkey"
 PAIRING_CANCEL_ACTION = "cancel_dimplex_pairing"
-PAIRING_TIMEOUT = 60
+PAIRING_TIMEOUT = 180
 
 _LOGGER = logging.getLogger(__name__)
 DEBUG_LOG_PREFIX = "[DEBUG-DIMPLEX-PIN-20261117]"
@@ -59,9 +59,7 @@ class DimplexPairingInProgressError(DimplexPairingError):
     """The selected proxy is already pairing with another heater."""
 
 
-def find_proxy_entry(
-    hass: HomeAssistant, source: str
-) -> ConfigEntry[Any] | None:
+def find_proxy_entry(hass: HomeAssistant, source: str) -> ConfigEntry[Any] | None:
     """Find the loaded ESPHome entry that owns one Bluetooth scanner."""
     normalized_source = _normalize_address(source)
     for entry in hass.config_entries.async_loaded_entries(ESPHOME_DOMAIN):
@@ -102,7 +100,6 @@ def proxy_supports_passkey(hass: HomeAssistant, source: str) -> bool:
     return all(hass.services.has_service(ESPHOME_DOMAIN, action) for action in actions)
 
 
-
 def select_proxy_source(
     hass: HomeAssistant,
     address: str,
@@ -119,8 +116,7 @@ def select_proxy_source(
     eligible = [
         candidate
         for candidate in candidates
-        if candidate.source
-        and proxy_supports_passkey(hass, candidate.source)
+        if candidate.source and proxy_supports_passkey(hass, candidate.source)
     ]
     selected = max(eligible, key=lambda item: item.rssi, default=None)
     if selected is None:
@@ -143,17 +139,22 @@ def ble_device_from_source(
     hass: HomeAssistant, address: str, source: str
 ) -> BLEDevice | None:
     """Return the device from the scanner that owns this heater's bond."""
-    normalized_address = _normalize_address(address)
+    normalized_address = address.upper()
     normalized_source = source.casefold()
-    for service_info in bluetooth.async_discovered_service_info(
-        hass, connectable=True
-    ):
-        if (
-            service_info.source
-            and _normalize_address(service_info.device.address) == normalized_address
-            and service_info.source.casefold() == normalized_source
-        ):
-            return service_info.device
+    scanner_devices = bluetooth.async_scanner_devices_by_address(
+        hass, normalized_address, connectable=True
+    )
+    for scanner_device in scanner_devices:
+        if scanner_device.scanner.source.casefold() == normalized_source:
+            _LOGGER.debug(
+                "%s Found a source-specific Bluetooth route",
+                DEBUG_LOG_PREFIX,
+            )
+            return scanner_device.ble_device
+    _LOGGER.debug(
+        "%s No source-specific Bluetooth route is currently available",
+        DEBUG_LOG_PREFIX,
+    )
     return None
 
 
@@ -175,9 +176,7 @@ async def _async_call_proxy_action(
             "The ESPHome proxy needs the Dimplex passkey component installed"
         )
     try:
-        await hass.services.async_call(
-            ESPHOME_DOMAIN, service, data, blocking=True
-        )
+        await hass.services.async_call(ESPHOME_DOMAIN, service, data, blocking=True)
     except HomeAssistantError as err:
         _LOGGER.warning(
             "%s ESPHome pairing action %s failed (%s)",
@@ -188,9 +187,7 @@ async def _async_call_proxy_action(
         raise
 
 
-async def async_arm_pairing(
-    hass: HomeAssistant, source: str, address: str
-) -> None:
+async def async_arm_pairing(hass: HomeAssistant, source: str, address: str) -> None:
     """Arm one address-scoped, short-lived pairing attempt on its proxy."""
     await _async_call_proxy_action(
         hass,
@@ -275,9 +272,7 @@ async def async_start_pairing(
     await lock.acquire()
     try:
         await async_arm_pairing(hass, source, address)
-        return hass.async_create_task(
-            _async_run_pairing(hass, source, pair, lock)
-        )
+        return hass.async_create_task(_async_run_pairing(hass, source, pair, lock))
     except BaseException:
         lock.release()
         raise

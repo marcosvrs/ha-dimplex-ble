@@ -63,9 +63,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         try:
             return cast(
                 ServiceResponse,
-                {
-                    "services": await entry.runtime_data.client.async_get_gatt_services()
-                },
+                {"services": await entry.runtime_data.client.async_get_gatt_services()},
             )
         except DimplexError as err:
             raise to_homeassistant_error(err) from err

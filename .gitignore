@@ -14,10 +14,3 @@ __pycache__/
 /captures/
 **/secrets.yaml
 
-# Unit-level protocol notes contain real heater advertisements and addresses
-/docs/ble-protocol.md
-/docs/plx050e-series-c-ble.md
-
-# Local handoff and live pairing notes are not part of the public integration
-/HANDOFF.md
-/docs/pairing-investigation.md

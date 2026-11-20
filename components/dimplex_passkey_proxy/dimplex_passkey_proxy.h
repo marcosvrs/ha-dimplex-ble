@@ -4,23 +4,22 @@
 #include <cstdint>
 
 #include "esphome/core/component.h"
+
 #include "esp_gap_ble_api.h"
 
 namespace esphome::dimplex_passkey_proxy {
 
 class DimplexPasskeyProxy final : public Component {
  public:
-  void loop() override;
-
-  /// Arm pairing for one address before the proxy requests a BLE connection.
+  /// Arm a short-lived passkey relay for one heater before pairing starts.
   void arm_pairing(const char *address_hex);
   /// Supply the PIN after the heater displays it.
   void set_pending_passkey(const char *address_hex, const char *passkey);
-  /// Clear all pairing state for this proxy.
+  /// Clear all pending passkey state for this proxy.
   void cancel_pairing();
-
-  /// Called from ESPHome's main-loop GAP event dispatcher.
-  void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+  /// Called from ESPHome's shared GAP event dispatcher.
+  void gap_event_handler(esp_gap_ble_cb_event_t event,
+                         esp_ble_gap_cb_param_t *param);
 
  protected:
   enum class PairingState : uint8_t {
@@ -28,6 +27,7 @@ class DimplexPasskeyProxy final : public Component {
     WAITING_FOR_REQUEST,
     PASSKEY_READY,
     REQUEST_PENDING,
+    REPLY_SENT,
   };
 
   static bool parse_address_(const char *value, std::array<uint8_t, 6> &address);

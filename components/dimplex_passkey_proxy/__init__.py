@@ -21,7 +21,7 @@ CONFIG_SCHEMA = cv.Schema(
 
 
 async def to_code(config):
-    """Register a security-event callback on ESPHome's shared BLE stack."""
+    """Register security callbacks on ESPHome's shared BLE stack."""
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     ble = await cg.get_variable(config[esp32_ble.CONF_BLE_ID])

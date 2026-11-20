@@ -11,11 +11,18 @@
       },
       "pair": {
         "title": "Retry heater pairing",
-        "description": "Retry connecting to {name}. If the request starts, watch the heater for its PIN. Further pairing attempts continue while this setup stays open."
+        "description": "Retry connecting to {name}. If the request starts, watch the heater for its PIN. Home Assistant automatically tries a limited number of requests while this setup stays open."
       },
       "passkey": {
         "title": "Pair Dimplex heater",
-        "description": "Enter the six-digit PIN shown on {name}. The heater's PIN request expires about 30 seconds after it appears. If this setup stays open, Home Assistant automatically starts another request. The PIN is sent through the selected ESPHome proxy and is not saved.",
+        "description": "Enter the six-digit PIN shown on {name}. The heater's PIN request expires about 30 seconds after it appears. Home Assistant automatically tries a limited number of requests while this setup stays open. The PIN is sent through the selected ESPHome proxy and is not saved.",
+        "data": {
+          "passkey": "Bluetooth PIN"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Repair Dimplex heater authentication",
+        "description": "Enter the six-digit PIN shown on {name} to restore the Bluetooth bond.",
         "data": {
           "passkey": "Bluetooth PIN"
         }
@@ -32,14 +39,17 @@
       "device_not_found": "That heater is no longer in the discovered-device list.",
       "invalid_passkey": "Enter exactly six digits.",
       "proxy_passkey_support_missing": "The selected proxy cannot accept a Bluetooth PIN.",
-      "pairing_failed": "Pairing failed or timed out. The heater's PIN request expires after about 30 seconds; if this setup stays open, Home Assistant automatically starts another request. Check the heater display before entering a PIN.",
+      "pairing_failed": "Pairing failed or timed out. The heater's PIN request expires after about 30 seconds. Home Assistant automatically retries a limited number of times; submit the PIN again to start another bounded attempt. Check the heater display before entering a PIN.",
       "pairing_in_progress": "This ESPHome proxy is pairing with another heater. Finish or cancel that setup, then try again."
     }
   },
   "entity": {
     "climate": {
       "heater": {
-        "name": "Heater"
+        "name": "Heater",
+        "state": {
+          "eco": "Eco"
+        }
       }
     },
     "select": {
@@ -57,6 +67,113 @@
       },
       "operating_mode_raw": {
         "name": "Operating mode (raw)"
+      },
+      "rated_power": {
+        "name": "Rated power"
+      },
+      "lcd_temperature": {
+        "name": "LCD temperature"
+      },
+      "output_power": {
+        "name": "Output power"
+      },
+      "calculated_power_consumption": {
+        "name": "Calculated power consumption"
+      },
+      "raw_readonly_1_0007": {
+        "name": "Experimental last key press (raw)"
+      },
+      "raw_readonly_3_000b": {
+        "name": "Experimental calibration value 0x000B (raw)"
+      },
+      "raw_readonly_3_000c": {
+        "name": "Experimental calibration value 0x000C (raw)"
+      },
+      "raw_readonly_3_1022": {
+        "name": "Experimental device value 0x1022 (raw)"
+      },
+      "raw_readonly_3_1029": {
+        "name": "Experimental device value 0x1029 (raw)"
+      },
+      "raw_readonly_1_1010": {
+        "name": "Experimental test status 0x1010 (raw)"
+      },
+      "raw_readonly_1_1020": {
+        "name": "Experimental test status 0x1020 (raw)"
+      },
+      "raw_readonly_1_300e": {
+        "name": "Experimental OTA status 0x300E (raw)"
+      },
+      "raw_readonly_2_100c": {
+        "name": "Experimental RF communications status (raw)"
+      },
+      "raw_readonly_2_700f": {
+        "name": "Experimental disconnect status (raw)"
+      },
+      "raw_readonly_3_2003": {
+        "name": "Experimental device value 0x2003 (raw)"
+      },
+      "raw_readonly_3_200b": {
+        "name": "Experimental device value 0x200B (raw)"
+      },
+      "raw_readonly_3_200c": {
+        "name": "Experimental device value 0x200C (raw)"
+      },
+      "raw_readonly_3_200f": {
+        "name": "Experimental device value 0x200F (raw)"
+      }
+    },
+    "text": {
+      "raw_0_0006": {
+        "name": "Experimental radiator clock"
+      },
+      "raw_0_1002": {
+        "name": "Experimental schedule buffer"
+      },
+      "raw_1_0001": {
+        "name": "Experimental display backlight color"
+      },
+      "raw_0_1007": {
+        "name": "Experimental open-window detection"
+      },
+      "raw_0_1008": {
+        "name": "Experimental pre-emptive heating"
+      },
+      "raw_0_100d": {
+        "name": "Experimental advance heating"
+      },
+      "raw_0_1016": {
+        "name": "Experimental setback"
+      },
+      "raw_0_1017": {
+        "name": "Experimental runback"
+      },
+      "raw_0_1027": {
+        "name": "Experimental runback countdown"
+      },
+      "raw_0_1028": {
+        "name": "Experimental runback setpoint"
+      },
+      "raw_0_102a": {
+        "name": "Experimental away mode"
+      },
+      "raw_2_0005": {
+        "name": "Experimental sound / mute"
+      },
+      "raw_2_100a": {
+        "name": "Experimental setting 0x100A"
+      },
+      "raw_2_100b": {
+        "name": "Experimental setting 0x100B"
+      },
+      "raw_2_100f": {
+        "name": "Experimental setting 0x100F"
+      },
+      "raw_2_1018": {
+        "name": "Experimental setting 0x1018"
+      },
+      "raw_2_1019": {
+        "name": "Experimental SP configuration"
       }
     }
   },
@@ -116,6 +233,9 @@
     "cannot_connect": {
       "message": "Could not connect to the heater over Home Assistant Bluetooth. Check that a connectable Bluetooth adapter can reach it and that pairing is already established."
     },
+    "authentication_failed": {
+      "message": "The heater's Bluetooth authentication has expired or was lost. Re-enter the PIN to repair the connection."
+    },
     "characteristic_unavailable": {
       "message": "The requested GATT characteristic is missing or does not support that operation."
     },
@@ -125,8 +245,17 @@
     "invalid_gatt_request": {
       "message": "The GATT group, characteristic, or hexadecimal payload is invalid."
     },
+    "invalid_experimental_payload": {
+      "message": "Enter hexadecimal bytes for this experimental field."
+    },
+    "invalid_experimental_payload_length": {
+      "message": "Enter exactly the required number of hexadecimal bytes for this experimental field."
+    },
     "invalid_setpoint": {
       "message": "The requested target must be a whole-degree Celsius value within the heater-reported range."
+    },
+    "invalid_preset": {
+      "message": "The requested preset is not supported by this heater."
     },
     "setpoint_unavailable": {
       "message": "The heater has not reported a usable setpoint range yet."

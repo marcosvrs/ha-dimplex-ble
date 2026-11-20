@@ -17,9 +17,13 @@ EQUIVALENT_MUTANTS = frozenset(
         "custom_components.dimplex_ble.pairing.x_proxy_supports_passkey__mutmut_19",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_bluetooth__mutmut_4",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_user__mutmut_26",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_user__mutmut_18",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_user__mutmut_33",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_user__mutmut_41",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_30",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_71",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_80",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_83",
     }
 )
 _SURVIVED_MUTANT_PATTERN = re.compile(r"^[ \t]*(\S+): survived$", re.MULTILINE)

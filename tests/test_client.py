@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +9,7 @@ from bleak.exc import BleakError
 
 from custom_components.dimplex_ble.client import (
     READ_SNAPSHOT_FIELDS,
+    DimplexAuthenticationError,
     DimplexBluetoothClient,
     DimplexCharacteristicError,
     DimplexConnectionError,
@@ -31,6 +33,7 @@ def make_client(*, props: tuple[str, ...] = ("read", "write")) -> tuple[MagicMoc
     client = MagicMock()
     client.services = services
     client.disconnect = AsyncMock()
+    client.unpair = AsyncMock()
     client.read_gatt_char = AsyncMock(return_value=b"\x07")
     client.write_gatt_char = AsyncMock()
     client.pair = AsyncMock(return_value=None)
@@ -39,7 +42,9 @@ def make_client(*, props: tuple[str, ...] = ("read", "write")) -> tuple[MagicMoc
 
 @pytest.fixture
 def hass() -> MagicMock:
-    return MagicMock()
+    mock_hass = MagicMock()
+    mock_hass.data = {"custom_components": object()}
+    return mock_hass
 
 
 @pytest.fixture
@@ -98,8 +103,123 @@ async def test_connected_uses_bond_owner_and_disconnects(ble_client: DimplexBlue
         "max_attempts": module.CONNECT_ATTEMPTS,
         "timeout": module.CONNECT_TIMEOUT,
         "pair": False,
+        "use_services_cache": False,
     }
+    await ble_client.async_shutdown()
     client.disconnect.assert_awaited_once_with()
+
+async def test_connected_reuses_connection_until_shutdown(
+    ble_client: DimplexBluetoothClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    connected_client, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, connected_client)
+
+    async with ble_client._connected():
+        pass
+    async with ble_client._connected():
+        pass
+
+    module.establish_connection.assert_awaited_once()
+    connected_client.disconnect.assert_not_awaited()
+
+    await ble_client.async_shutdown()
+
+    connected_client.disconnect.assert_awaited_once_with()
+
+
+async def test_connected_discards_a_stale_connection(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale, _ = make_client()
+    stale.is_connected = False
+    ble_client._connection = stale
+    ble_client._connection_semaphore = asyncio.Semaphore(0)
+    replacement, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, replacement)
+
+    async with ble_client._connected() as connected:
+        assert connected is replacement
+
+    stale.disconnect.assert_awaited_once_with()
+    await ble_client.async_shutdown()
+
+
+async def test_connected_disconnects_when_cancelled(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, client)
+
+    with pytest.raises(asyncio.CancelledError):
+        async with ble_client._connected():
+            raise asyncio.CancelledError
+
+    client.disconnect.assert_awaited_once_with()
+
+
+async def test_connected_fails_fast_when_proxy_route_expires(
+    hass: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    client = DimplexBluetoothClient(
+        hass, "heater-address", "proxy-source", object()
+    )
+    mock_scanner(monkeypatch, hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: None)
+    connect = AsyncMock()
+    monkeypatch.setattr(module, "establish_connection", connect)
+
+    with pytest.raises(DimplexConnectionError, match="configured ESPHome proxy"):
+        async with client._connected(pair=False):
+            pytest.fail("unreachable")
+
+    connect.assert_not_awaited()
+
+async def test_pairing_timeout_requests_reauthentication(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    mock_scanner(monkeypatch, ble_client.hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: object())
+    monkeypatch.setattr(
+        module,
+        "establish_connection",
+        AsyncMock(
+            side_effect=BleakError(
+                "Timeout waiting for BluetoothDevicePairingResponse"
+            )
+        ),
+    )
+
+    with pytest.raises(DimplexAuthenticationError, match="pairing is required"):
+        async with ble_client._connected(pair=True):
+            pytest.fail("pairing should fail before yielding a client")
+
+async def test_pairing_uses_captured_device_when_route_cache_expires(
+    hass: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    captured_device = object()
+    client = DimplexBluetoothClient(
+        hass, "heater-address", "proxy-source", captured_device
+    )
+    mock_scanner(monkeypatch, hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: None)
+    connected_client, _ = make_client()
+    connect = AsyncMock(return_value=connected_client)
+    monkeypatch.setattr(module, "establish_connection", connect)
+
+    async with client._connected(pair=True):
+        pass
+
+    assert connect.call_args.args[1] is captured_device
+    await client.async_shutdown()
 
 @pytest.mark.parametrize("pair", [False, True])
 async def test_connected_adapts_pair_aware_proxy_backend(
@@ -109,7 +229,7 @@ async def test_connected_adapts_pair_aware_proxy_backend(
 ) -> None:
     from custom_components.dimplex_ble import client as module
 
-    device = object()
+    device = SimpleNamespace(address="heater-address")
     connect_calls: list[tuple[bool, float, bool]] = []
 
     async def connect_backend(
@@ -145,6 +265,7 @@ async def test_connected_adapts_pair_aware_proxy_backend(
         device, disconnected_callback=None, pair=pair, timeout=module.CONNECT_TIMEOUT
     )
     assert connect_calls == [(pair, helper_globals["BLEAK_TIMEOUT"], False)]
+    await ble_client.async_shutdown()
     backend_client.disconnect.assert_awaited_once_with()
 
 
@@ -207,6 +328,73 @@ async def test_connected_translates_operation_failures_and_disconnects(ble_clien
             raise cause
     client.disconnect.assert_awaited_once_with()
 
+async def test_connected_translates_missing_authentication(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, client)
+
+    with pytest.raises(DimplexAuthenticationError, match="authentication"):
+        async with ble_client._connected():
+            raise BleakError("Bluetooth GATT Error: Insufficient authentication")
+
+    assert ble_client._force_service_refresh is True
+    client.disconnect.assert_awaited_once_with()
+
+
+async def test_connected_translates_missing_encryption(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, client)
+
+    with pytest.raises(DimplexAuthenticationError, match="authentication"):
+        async with ble_client._connected():
+            raise BleakError("Bluetooth GATT Error: Insufficient encryption")
+
+    assert ble_client._force_service_refresh is True
+    client.disconnect.assert_awaited_once_with()
+
+
+async def test_connected_reconnects_after_operation_failure(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    first, _ = make_client()
+    second, _ = make_client()
+    mock_scanner(monkeypatch, ble_client.hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: object())
+    connect = AsyncMock(side_effect=[first, second])
+    monkeypatch.setattr(module, "establish_connection", connect)
+
+    with pytest.raises(DimplexConnectionError, match="BLE operation failed"):
+        async with ble_client._connected():
+            raise BleakError("connection dropped")
+
+    assert ble_client._force_service_refresh is True
+    async with ble_client._connected() as connected:
+        assert connected is second
+
+    assert connect.await_count == 2
+    first.disconnect.assert_awaited_once_with()
+    await ble_client.async_shutdown()
+    second.disconnect.assert_awaited_once_with()
+
+async def test_snapshot_reuses_existing_bond_with_security_request(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+
+    client, _ = make_client()
+    await establish(monkeypatch, ble_client.hass, client)
+    ble_client._async_read_snapshot = AsyncMock(return_value=SimpleNamespace())
+
+    assert isinstance(await ble_client.async_read_snapshot(), SimpleNamespace)
+
+    assert module.establish_connection.await_args.kwargs["pair"] is True
+    client.disconnect.assert_not_awaited()
+
 
 async def test_connected_suppresses_disconnect_ble_errors(ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = make_client()
@@ -214,6 +402,7 @@ async def test_connected_suppresses_disconnect_ble_errors(ble_client: DimplexBlu
     await establish(monkeypatch, ble_client.hass, client)
     async with ble_client._connected():
         pass
+    await ble_client.async_shutdown()
     client.disconnect.assert_awaited_once_with()
 
 
@@ -221,15 +410,76 @@ async def test_pair_requests_security_during_connection_setup(
     ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from custom_components.dimplex_ble import client as module
-
-    client, _ = make_client()
-    await establish(monkeypatch, ble_client.hass, client)
+    sleep = AsyncMock()
+    monkeypatch.setattr(module.asyncio, "sleep", sleep)
+    first, _ = make_client()
+    second, _ = make_client()
+    mock_scanner(monkeypatch, ble_client.hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: object())
+    connect = AsyncMock(side_effect=[first, second])
+    monkeypatch.setattr(module, "establish_connection", connect)
+    ble_client._async_read_snapshot = AsyncMock(
+        return_value=SimpleNamespace(model="QRAD100E")
+    )
 
     await ble_client.async_pair()
 
-    module.establish_connection.assert_awaited_once()
-    assert module.establish_connection.await_args.kwargs["pair"] is True
-    client.pair.assert_not_awaited()
+    assert connect.await_count == 2
+    assert sleep.await_count == 1
+    assert sleep.await_args_list[0].args == (10.0,)
+    assert connect.await_args_list[0].kwargs["pair"] is True
+    assert connect.await_args_list[0].kwargs["use_services_cache"] is False
+    assert connect.await_args_list[1].kwargs["pair"] is True
+    assert connect.await_args_list[1].kwargs["use_services_cache"] is False
+    first.disconnect.assert_awaited_once_with()
+    second.disconnect.assert_awaited_once_with()
+
+
+async def test_pair_rejects_bond_that_cannot_be_reused(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+    monkeypatch.setattr(module, "_PAIRING_RECONNECT_DELAY", 0)
+
+    first, _ = make_client()
+    second, _ = make_client()
+    mock_scanner(monkeypatch, ble_client.hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: object())
+    monkeypatch.setattr(
+        module, "establish_connection", AsyncMock(side_effect=[first, second])
+    )
+    ble_client._async_read_snapshot = AsyncMock(
+        side_effect=[
+            SimpleNamespace(model="QRAD100E"),
+            BleakError("Bluetooth GATT Error: Insufficient encryption"),
+        ]
+    )
+
+    with pytest.raises(DimplexAuthenticationError, match="authentication"):
+        await ble_client.async_pair()
+
+    first.disconnect.assert_awaited_once_with()
+    second.disconnect.assert_awaited_once_with()
+
+
+async def test_pair_rejects_unverified_identity(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from custom_components.dimplex_ble import client as module
+    monkeypatch.setattr(module, "_PAIRING_RECONNECT_DELAY", 0)
+    client, _ = make_client()
+    mock_scanner(monkeypatch, ble_client.hass)
+    monkeypatch.setattr(module, "ble_device_from_source", lambda *_: object())
+    monkeypatch.setattr(
+        module, "establish_connection", AsyncMock(side_effect=[client])
+    )
+    ble_client._async_read_snapshot = AsyncMock(
+        return_value=SimpleNamespace(model=None)
+    )
+
+    with pytest.raises(DimplexConnectionError, match="heater identity"):
+        await ble_client.async_pair()
+
     client.disconnect.assert_awaited_once_with()
 
 
@@ -267,6 +517,26 @@ def test_find_characteristic_supports_gdhv_uuid_base(
     )
 
     assert ble_client._find_characteristic(client, (0, 0x1234)) is characteristic
+def test_find_characteristic_falls_back_for_esphome_group_zero_uuid(
+    ble_client: DimplexBluetoothClient,
+) -> None:
+    characteristic = SimpleNamespace(
+        uuid=characteristic_uuid(0x1006), properties=["read"]
+    )
+    service = MagicMock()
+    service.get_characteristic.side_effect = (
+        lambda candidate: characteristic
+        if candidate == characteristic.uuid
+        else None
+    )
+    services = MagicMock()
+    services.get_service.return_value = None
+    services.__iter__.return_value = iter([service])
+    client = MagicMock(services=services)
+
+    assert ble_client._find_characteristic(client, (0, 0x1006)) is characteristic
+
+
 
 
 async def test_optional_read_omits_absent_or_nonreadable_characteristic(ble_client: DimplexBluetoothClient) -> None:
@@ -288,17 +558,47 @@ async def test_optional_read_converts_result_to_bytes(ble_client: DimplexBluetoo
     assert await ble_client._async_read_optional(client, (0, 1)) == b"\x01\x02"
 
 
-async def test_snapshot_reads_all_fields_and_selects_room_temperature(ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_snapshot_reads_all_fields_and_selects_diagnostic_values(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     client, char = make_client(props=("read", "write"))
     client.services.get_service.side_effect = None
     client.services.get_service.return_value.get_characteristic.return_value = char
-    client.read_gatt_char = AsyncMock(side_effect=[b"QRAD", b"\x14\x00", b"\x05\x00\x1e\x00", b"\x00", b"\x02", b"\x00", b"\x01\x15\x05"])
+    client.read_gatt_char = AsyncMock(
+        side_effect=[
+            b"QRAD",
+            b"EP4213",
+            b"\x05",
+            b"\xf4\x01\x98\x08\x00\x00\x00\x00",
+            b"\x15\x00",
+            b"\x05\x00\x1e\x00",
+            b"\x00",
+            b"\x02",
+            b"\x00",
+            b"\x01\x15\x05",
+            b"\x02\x1d\x00",
+            b"\x01\x01\x64",
+            b"\x01\x01\x07",
+        ]
+    )
     await establish(monkeypatch, ble_client.hass, client)
     snapshot = await ble_client.async_read_snapshot()
-    assert [call.args[0] for call in client.read_gatt_char.await_args_list[:len(READ_SNAPSHOT_FIELDS)]] == [char] * len(READ_SNAPSHOT_FIELDS)
-    client.write_gatt_char.assert_awaited_once_with(char, bytes((1, 0, 0)), response=True)
-    assert snapshot.model == "QRAD"
+    assert [
+        call.args[0]
+        for call in client.read_gatt_char.await_args_list[: len(READ_SNAPSHOT_FIELDS)]
+    ] == [char] * len(READ_SNAPSHOT_FIELDS)
+    assert [call.args for call in client.write_gatt_char.await_args_list] == [
+        (char, bytes((1, 0, 0))),
+        (char, bytes((2, 0, 0))),
+        (char, bytes((1, 0, 0))),
+        (char, bytes((1, 0, 0))),
+    ]
+    assert snapshot.product_code == "EP4213"
+    assert snapshot.rf_firmware_revision == 5
+    assert snapshot.ui_version == "1.7"
     assert snapshot.current_temperature_c == 21.5
+    assert snapshot.lcd_temperature_c == 29.0
+    assert snapshot.trac_status_hex == "010164"
 
 
 async def test_snapshot_skips_room_selector_without_write_capability(ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -316,7 +616,18 @@ async def test_snapshot_room_selector_uses_write_without_response(ble_client: Di
     client.services.get_service.return_value.get_characteristic.return_value = char
     await establish(monkeypatch, ble_client.hass, client)
     await ble_client.async_read_snapshot()
-    client.write_gatt_char.assert_awaited_once_with(char, bytes((1, 0, 0)), response=False)
+    assert [call.args for call in client.write_gatt_char.await_args_list] == [
+        (char, bytes((1, 0, 0))),
+        (char, bytes((2, 0, 0))),
+        (char, bytes((1, 0, 0))),
+        (char, bytes((1, 0, 0))),
+    ]
+    assert [call.kwargs for call in client.write_gatt_char.await_args_list] == [
+        {"response": False},
+        {"response": False},
+        {"response": False},
+        {"response": False},
+    ]
 
 
 async def test_service_metadata_never_reads_values(ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -348,6 +659,18 @@ async def test_raw_read_protects_before_connect_and_checks_characteristic(ble_cl
     assert str(err.value) == "Characteristic is not readable"
     char.properties = ["read"]
     assert await ble_client.async_read_raw(0, 0x1234) == b"\x07"
+    client.read_gatt_char.assert_awaited_once_with(char)
+
+
+async def test_raw_field_batch_reads_available_fields(
+    ble_client: DimplexBluetoothClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, char = make_client()
+    await establish(monkeypatch, ble_client.hass, client)
+
+    assert await ble_client.async_read_raw_fields(((0, 0x1234),)) == {
+        (0, 0x1234): b"\x07"
+    }
     client.read_gatt_char.assert_awaited_once_with(char)
 
 
@@ -384,6 +707,7 @@ async def test_raw_write_supports_response_write_and_readback(ble_client: Dimple
     client.write_gatt_char.assert_awaited_once_with(char, b"x", response=True)
     client.read_gatt_char.assert_awaited_once_with(char)
     sleep.assert_awaited_once_with(1)
+    await ble_client.async_shutdown()
     no_response, char = make_client(props=("write-without-response",))
     await establish(monkeypatch, ble_client.hass, no_response)
     assert await ble_client.async_write_raw(0, 0x1234, b"x") is None

@@ -139,6 +139,15 @@ def test_proxy_support_requires_encryption_entry_and_all_relay_actions() -> None
     ]
 
 
+
+def test_proxy_support_rejects_missing_passkey_action() -> None:
+    hass = make_hass([make_entry("proxy")])
+    hass.services.has_service.side_effect = lambda _domain, action: not action.endswith(
+        "_set_dimplex_pairing_passkey"
+    )
+
+    assert proxy_supports_passkey(hass, "proxy") is False
+
 def test_proxy_support_accepts_entry_identity_scanner_fallback() -> None:
     entry = make_entry("other", unique_id="AA-BB-CC-DD-EE-FF")
     hass = make_hass([entry])
@@ -216,37 +225,71 @@ def test_ble_device_lookup_is_pinned_to_bond_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     expected = SimpleNamespace(address="heater")
-    service_infos = [
-        make_candidate("other", -10),
-        make_candidate("PROXY", -80, expected),
+    scanner_devices = [
+        SimpleNamespace(
+            scanner=SimpleNamespace(source="other"),
+            ble_device=SimpleNamespace(address="heater"),
+        ),
+        SimpleNamespace(
+            scanner=SimpleNamespace(source="PROXY"),
+            ble_device=expected,
+        ),
     ]
-    discovered = Mock(return_value=service_infos)
+    devices = Mock(return_value=scanner_devices)
     monkeypatch.setattr(
-        pairing.bluetooth, "async_discovered_service_info", discovered
+        pairing.bluetooth, "async_scanner_devices_by_address", devices
     )
     hass = make_hass()
     assert ble_device_from_source(hass, "heater", "proxy") is expected
     assert ble_device_from_source(hass, "heater", "missing") is None
-    discovered.assert_has_calls(
+    devices.assert_has_calls(
         [
-            call(hass, connectable=True),
-            call(hass, connectable=True),
+            call(hass, "HEATER", connectable=True),
+            call(hass, "HEATER", connectable=True),
         ]
+    )
+
+
+def test_ble_device_lookup_normalizes_mac_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = SimpleNamespace(address="AA:BB:CC:DD:EE:FF")
+    devices = Mock(
+        return_value=[
+            SimpleNamespace(
+                scanner=SimpleNamespace(source="PROXY"),
+                ble_device=expected,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        pairing.bluetooth, "async_scanner_devices_by_address", devices
+    )
+    hass = make_hass()
+
+    assert ble_device_from_source(hass, "aa:bb:cc:dd:ee:ff", "proxy") is expected
+    devices.assert_called_once_with(
+        hass, "AA:BB:CC:DD:EE:FF", connectable=True
     )
 
 
 def test_ble_device_lookup_ignores_missing_scanner_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service_infos = [make_candidate(None, -10)]
-    discovered = Mock(return_value=service_infos)
+    devices = Mock(
+        return_value=[
+            SimpleNamespace(
+                scanner=SimpleNamespace(source="other"),
+                ble_device=SimpleNamespace(address="heater"),
+            )
+        ]
+    )
     monkeypatch.setattr(
-        pairing.bluetooth, "async_discovered_service_info", discovered
+        pairing.bluetooth, "async_scanner_devices_by_address", devices
     )
     hass = make_hass()
     assert ble_device_from_source(hass, "heater", "proxy") is None
-    discovered.assert_called_once_with(hass, connectable=True)
-
+    devices.assert_called_once_with(hass, "HEATER", connectable=True)
 
 
 

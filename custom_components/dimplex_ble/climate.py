@@ -6,7 +6,14 @@ from math import isfinite
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
+from homeassistant.components.climate.const import (
+    DEFAULT_MAX_TEMP,
+    DEFAULT_MIN_TEMP,
+    PRESET_ECO,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
+)
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
@@ -17,7 +24,12 @@ from .const import DOMAIN
 from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
 from .exceptions import to_homeassistant_error
-from .protocol import DimplexProtocolError, encode_setpoint
+from .protocol import (
+    DimplexProtocolError,
+    encode_preset_mode,
+    encode_setpoint,
+    parse_preset_mode,
+)
 
 PARALLEL_UPDATES = 1
 
@@ -37,9 +49,12 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     _attr_translation_key = "heater"
     _attr_hvac_mode = HVACMode.HEAT
     _attr_hvac_modes = [HVACMode.HEAT]
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1
-    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
+    _attr_supported_features = (
+        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+    )
+    _attr_preset_modes = [PRESET_ECO]
 
     @property
     def available(self) -> bool:
@@ -62,19 +77,57 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     def native_target_temperature(self) -> float | None:
         """Return the target read back from the heater."""
         data = self.coordinator.data
-        return float(data.setpoint_c) if data is not None and data.setpoint_c is not None else None
+        return (
+            float(data.setpoint_c)
+            if data is not None and data.setpoint_c is not None
+            else None
+        )
+
+    @property
+    def preset_mode(self) -> str | None:
+        """Return the verified preset represented by the operating-mode payload."""
+        data = self.coordinator.data
+        if data is None or data.operating_mode_hex is None:
+            return None
+        try:
+            preset = parse_preset_mode(bytes.fromhex(data.operating_mode_hex))
+            presets = self.preset_modes
+            return preset if presets is not None and preset in presets else None
+        except ValueError:
+            return None
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """Return the heater's directly reported physical heating state."""
+        data = self.coordinator.data
+        if data is None or data.heating_active is None:
+            return None
+        return HVACAction.HEATING if data.heating_active else HVACAction.IDLE
+
+    @property
+    def native_temperature_unit(self) -> str:
+        """Return the heater protocol's Celsius unit."""
+        return UnitOfTemperature.CELSIUS
 
     @property
     def min_temp(self) -> float:
         """Return the minimum reported setpoint or Home Assistant's default."""
         data = self.coordinator.data
-        return float(data.minimum_temperature_c) if data and data.minimum_temperature_c is not None else super().min_temp
+        return (
+            float(data.minimum_temperature_c)
+            if data and data.minimum_temperature_c is not None
+            else float(DEFAULT_MIN_TEMP)
+        )
 
     @property
     def max_temp(self) -> float:
         """Return the maximum reported setpoint or Home Assistant's default."""
         data = self.coordinator.data
-        return float(data.maximum_temperature_c) if data and data.maximum_temperature_c is not None else super().max_temp
+        return (
+            float(data.maximum_temperature_c)
+            if data and data.maximum_temperature_c is not None
+            else float(DEFAULT_MAX_TEMP)
+        )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Write a whole-degree Celsius target and wait for heater readback."""
@@ -110,6 +163,22 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         try:
             payload = encode_setpoint(temperature_c)
             await self._client.async_write_raw(0, 0x1023, payload)
+            await self.coordinator.async_request_refresh()
+        except (DimplexError, DimplexProtocolError) as err:
+            raise to_homeassistant_error(err) from err
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Write a verified operating preset and wait for heater readback."""
+        if self.preset_modes is None or preset_mode not in self.preset_modes:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_preset",
+            )
+
+        try:
+            await self._client.async_write_raw(
+                0, 0x1001, encode_preset_mode(preset_mode)
+            )
             await self.coordinator.async_request_refresh()
         except (DimplexError, DimplexProtocolError) as err:
             raise to_homeassistant_error(err) from err

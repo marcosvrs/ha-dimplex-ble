@@ -21,6 +21,9 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return runtime and bond-owner diagnostics without disclosing addresses."""
     snapshot = entry.runtime_data.data
+    snapshot_data = asdict(snapshot) if snapshot is not None else None
+    if snapshot_data is not None:
+        snapshot_data["model"] = "REDACTED"
     proxy_source = entry.data.get(CONF_PROXY_SOURCE)
     address = entry.data.get(CONF_ADDRESS)
     if isinstance(proxy_source, str) and proxy_source:
@@ -50,6 +53,6 @@ async def async_get_config_entry_diagnostics(
         },
         "coordinator": {
             "last_update_success": entry.runtime_data.last_update_success,
-            "data": asdict(snapshot) if snapshot is not None else None,
+            "data": snapshot_data,
         },
     }

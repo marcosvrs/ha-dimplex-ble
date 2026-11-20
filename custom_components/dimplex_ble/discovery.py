@@ -17,6 +17,18 @@ def is_dimplex_advertisement(name: str | None) -> bool:
     )
 
 
+def is_manifest_discovery_name(name: str | None) -> bool:
+    """Return whether the manifest Bluetooth matcher handles this local name."""
+    if not name:
+        return False
+    normalized = name.casefold()
+    return (
+        len(normalized) >= 3
+        and normalized[:2] in {"al", "am"}
+        and normalized[2].isdigit()
+    )
+
+
 def advertisement_label(name: str | None) -> str | None:
     """Return the advertised local name without the Dimplex marker."""
     if not name:
@@ -26,5 +38,3 @@ def advertisement_label(name: str | None) -> str | None:
     if label.casefold().endswith(suffix.casefold()):
         label = label[: -len(suffix)].strip()
     return label or None
-
-

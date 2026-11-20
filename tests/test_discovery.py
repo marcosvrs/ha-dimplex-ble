@@ -5,6 +5,7 @@ import pytest
 from custom_components.dimplex_ble.discovery import (
     advertisement_label,
     is_dimplex_advertisement,
+    is_manifest_discovery_name,
 )
 
 
@@ -60,3 +61,20 @@ def test_advertisement_label_removes_only_the_dimplex_marker(
     name: str | None, expected: str | None
 ) -> None:
     assert advertisement_label(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("AL0", True),
+        ("AL0abcd", True),
+        ("am9-anything", True),
+        ("heater<Dimplex>", False),
+        ("AL", False),
+        (None, False),
+    ],
+)
+def test_manifest_matcher_names_are_not_manually_queued(
+    name: str | None, expected: bool
+) -> None:
+    assert is_manifest_discovery_name(name) is expected
