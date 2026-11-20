@@ -48,12 +48,14 @@ def make_candidate(
     *,
     address: str = "heater",
     connectable: bool = True,
+    scanner: object | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         source=source,
         rssi=rssi,
         device=device if device is not None else SimpleNamespace(address=address),
         connectable=connectable,
+        scanner=scanner or SimpleNamespace(get_allocations=lambda: None),
     )
 
 
@@ -196,6 +198,50 @@ def test_select_proxy_source_chooses_strongest_eligible_connectable_proxy(
             call(hass, "no-source"),
         ]
     )
+
+def test_select_proxy_source_prefers_capacity_before_rssi(
+    hass, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not fill a proxy's last slot when another eligible proxy is freer."""
+    service_infos = [
+        make_candidate(
+            "full",
+            -10,
+            address="AA:BB",
+            scanner=SimpleNamespace(
+                get_allocations=lambda: SimpleNamespace(free=0, slots=3)
+            ),
+        ),
+        make_candidate(
+            "strong",
+            -30,
+            address="AA:BB",
+            scanner=SimpleNamespace(
+                get_allocations=lambda: SimpleNamespace(free=1, slots=3)
+            ),
+        ),
+        make_candidate(
+            "balanced",
+            -80,
+            address="AA:BB",
+            scanner=SimpleNamespace(
+                get_allocations=lambda: SimpleNamespace(free=2, slots=3)
+            ),
+        ),
+    ]
+    scanners = {
+        candidate.source: candidate.scanner
+        for candidate in service_infos
+        if candidate.source
+    }
+    monkeypatch.setattr(
+        pairing.bluetooth,
+        "async_scanner_by_source",
+        lambda _hass, source: scanners[source],
+    )
+    monkeypatch.setattr(pairing, "proxy_supports_passkey", lambda *_: True)
+
+    assert select_proxy_source(hass, "aa:bb", service_infos) == "balanced"
 
 
 def test_proxy_support_rejects_entry_without_registered_device_name() -> None:

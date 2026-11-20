@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN
+from .const import CONF_PROXY_SOURCE, DOMAIN
 
 # ESPHome config-entry keys; avoid importing its eager package initializer.
 ESPHOME_DOMAIN = "esphome"
@@ -100,26 +100,70 @@ def proxy_supports_passkey(hass: HomeAssistant, source: str) -> bool:
     return all(hass.services.has_service(ESPHOME_DOMAIN, action) for action in actions)
 
 
+def _assigned_proxy_count(hass: HomeAssistant, source: str) -> int:
+    """Count configured heaters already assigned to an ESPHome proxy."""
+    normalized_source = source.casefold()
+    return sum(
+        entry.data.get(CONF_PROXY_SOURCE, "").casefold() == normalized_source
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if isinstance(entry.data.get(CONF_PROXY_SOURCE), str)
+    )
+
+
+def _route_rank(
+    hass: HomeAssistant,
+    candidate: BluetoothServiceInfoBleak,
+) -> tuple[int, int, int, int]:
+    """Rank a passkey-capable route for safe assignment-time balancing."""
+    source = candidate.source
+    scanner = (
+        bluetooth.async_scanner_by_source(hass, source)
+        if source and isinstance(hass, HomeAssistant)
+        else None
+    )
+    allocations = scanner.get_allocations() if scanner is not None else None
+    if allocations is not None and allocations.free <= 0:
+        return (-1, 0, 0, candidate.rssi)
+
+    # Prefer routes with a known free slot. The fallback keeps host/local
+    # adapters eligible when their allocation is not exposed.
+    allocation_known = int(allocations is not None)
+    free_slots = allocations.free if allocations is not None else 0
+    assigned_heaters = _assigned_proxy_count(hass, source) if source else 0
+    return (allocation_known, free_slots, -assigned_heaters, candidate.rssi)
+
+
 def select_proxy_source(
     hass: HomeAssistant,
     address: str,
     service_infos: Sequence[BluetoothServiceInfoBleak],
 ) -> str | None:
-    """Choose the strongest eligible proxy from the heater's observed routes."""
+    """Choose a route for new pairing using capacity, load, then RSSI."""
     normalized_address = _normalize_address(address)
     candidates = [
         info
         for info in service_infos
         if info.connectable
+        and info.source
         and _normalize_address(info.device.address) == normalized_address
     ]
     eligible = [
         candidate
         for candidate in candidates
-        if candidate.source and proxy_supports_passkey(hass, candidate.source)
+        if proxy_supports_passkey(hass, candidate.source)
     ]
-    selected = max(eligible, key=lambda item: item.rssi, default=None)
+    selected = max(
+        (candidate for candidate in eligible if _route_rank(hass, candidate)[0] >= 0),
+        key=lambda candidate: _route_rank(hass, candidate),
+        default=None,
+    )
     if selected is not None:
+        _LOGGER.debug(
+            "%s Selected pairing route %s (rank=%s)",
+            DEBUG_LOG_PREFIX,
+            selected.source,
+            _route_rank(hass, selected),
+        )
         return selected.source
 
     # A Bluetooth discovery callback can originate from the host adapter while
@@ -142,9 +186,15 @@ def select_proxy_source(
             "the current discovery snapshot",
             DEBUG_LOG_PREFIX,
         )
-        return fallback_sources[0]
+        return min(
+            fallback_sources,
+            key=lambda source: (
+                _assigned_proxy_count(hass, source),
+                source.casefold(),
+            ),
+        )
 
-    sources = [candidate.source for candidate in candidates if candidate.source]
+    sources = [candidate.source for candidate in candidates]
     matching_entries = sum(
         find_proxy_entry(hass, source) is not None for source in sources
     )

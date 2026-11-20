@@ -161,23 +161,26 @@ alternate proxy during normal runtime.
 
 ### Safe load balancing: assignment only
 
-For a new heater before pairing, rank eligible proxies by:
+For a new heater before pairing, the integration ranks eligible proxies by:
 
 1. passkey-relay support;
-2. reachability of the heater;
-3. free ESPHome connection slots;
-4. current Dimplex assignment count; and
-5. RSSI as a tie-breaker.
+2. an available ESPHome connection slot;
+3. remaining proxy capacity;
+4. the number of existing Dimplex entries assigned to that proxy; and
+5. RSSI as the final tie-breaker.
 
-Persist the selected proxy after pairing. Do not change it during normal
-runtime.
+The allocation value is read from Home Assistant's registered scanner, so the
+selection uses the proxy's actual reported slot state rather than only the
+integration's local semaphore. The selected route is persisted after pairing.
+This balances new assignments without moving an existing bond.
 
 ### Explicit migration: possible, but user-driven
 
 A migration flow could let the user choose another proxy, perform a fresh
-pairing, verify a protected read, and then save the new `proxy_source`. It must
-not assume that a proxy-side `UNPAIR` operation erases the heater's own bond or
-that a new proxy can recover the old bond without a PIN.
+pairing, verify a protected read, and only then save the new `proxy_source`. It
+must not assume that a proxy-side `UNPAIR` operation erases the heater's own
+bond or that a new proxy can recover the old bond without a PIN.
+
 
 ### Not recommended: automatic runtime roaming
 
