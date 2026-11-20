@@ -1559,6 +1559,30 @@ async def test_reauth_repairs_existing_entry(hass, monkeypatch):
     assert result["reason"] == "reauth_successful"
 
 
+
+async def test_reauth_start_error_is_shown_on_initial_reauth_form(
+    hass, monkeypatch
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM6532",
+        unique_id="AA:BB:CC:DD:EE:20",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:20", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    monkeypatch.setattr(config_flow, "ble_device_from_source", Mock(return_value=object()))
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+    monkeypatch.setattr(
+        flow, "_async_start_pairing", AsyncMock(return_value="pairing_failed")
+    )
+
+    result = await flow.async_step_reauth(entry.data)
+
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "pairing_failed"}
+
 async def test_reauth_rejects_invalid_pin(hass, monkeypatch):
     entry = MockConfigEntry(
         domain=DOMAIN,

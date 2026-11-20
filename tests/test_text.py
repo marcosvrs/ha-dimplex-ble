@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE, DOMAIN
@@ -103,6 +103,22 @@ async def test_experimental_text_writes_readback_and_refreshes(
     coordinator.async_request_refresh.assert_awaited_once()
     assert entity.native_value == "00" * 9
     write_state.assert_called_once_with()
+
+
+async def test_experimental_text_maps_write_failure(hass) -> None:
+    from custom_components.dimplex_ble.client import DimplexConnectionError
+
+    client = SimpleNamespace(
+        address=ADDRESS,
+        async_write_raw=AsyncMock(side_effect=DimplexConnectionError("proxy failed")),
+    )
+    coordinator = make_coordinator(hass, client)
+    entity = DimplexExperimentalRawText(
+        coordinator, EXPERIMENTAL_FIELDS[0], b"\x01" * 7
+    )
+
+    with pytest.raises(HomeAssistantError):
+        await entity.async_set_value("00" * 7)
 
 
 @pytest.mark.parametrize("value", ["", "00", "zz" * 9, "00" * 8])

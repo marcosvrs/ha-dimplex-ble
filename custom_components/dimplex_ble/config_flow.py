@@ -67,7 +67,6 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         self._pairing_retry_task: asyncio.Task[None] | None = None
         self._pairing_lock = asyncio.Lock()
 
-
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:

@@ -157,6 +157,16 @@ def test_decode_known_raw_value_preserves_only_established_meanings(
     assert decode_known_raw_value((3, 0x200B), b"\x7f\x9d") == {}
 
 
+def test_decode_known_raw_value_keeps_invalid_dates_raw() -> None:
+    assert decode_known_raw_value((0, 0x0006), bytes.fromhex("141a0d140d3701")) == {
+        "clock_flag": 1
+    }
+    assert decode_known_raw_value((0, 0x102A), bytes.fromhex("001a0d11300607")) == {
+        "away_active": False,
+        "away_target_temperature_c": 7,
+    }
+
+
 @pytest.mark.parametrize(
     ("address", "value", "expected"),
     [
@@ -182,6 +192,17 @@ def test_format_known_raw_value_keeps_unknown_values_raw() -> None:
     assert format_known_raw_value((3, 0x200B), b"\x7f\x9d") is None
 
 
+def test_format_known_raw_value_defensively_handles_unexpected_decoder_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.dimplex_ble import protocol
+
+    monkeypatch.setattr(
+        protocol, "decode_known_raw_value", lambda *_: {"unexpected": 1}
+    )
+    assert protocol.format_known_raw_value((3, 0x200F), b"\x00") is None
+
+
 @pytest.mark.parametrize(
     ("address", "value", "expected"),
     [
@@ -205,6 +226,7 @@ def test_format_readonly_raw_value_uses_conservative_guesses(
 
 def test_format_readonly_raw_value_falls_back_for_unresolved_payload() -> None:
     assert format_readonly_raw_value((3, 0x200F), bytes.fromhex("04e90f0000")) is None
+    assert format_readonly_raw_value((3, 0x200C), bytes.fromhex("14160d0d0e00")) is None
 
 
 @pytest.mark.parametrize(("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")])

@@ -331,6 +331,27 @@ async def test_rule_platform_setup_exposes_expected_entities(hass):
     )
 
 
+async def test_experimental_sensor_keeps_entities_when_initial_read_fails(hass):
+    from custom_components.dimplex_ble.client import DimplexConnectionError
+
+    _, coordinator = make_coordinator(
+        hass,
+        client=SimpleNamespace(
+            address=ADDRESS,
+            async_read_raw_fields=AsyncMock(
+                side_effect=DimplexConnectionError("proxy unavailable")
+            ),
+        ),
+    )
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.runtime_data = coordinator
+    added = []
+
+    await sensor_platform.async_setup_entry(hass, entry, added.extend)
+
+    assert len(added) == 6 + len(EXPERIMENTAL_READ_ONLY_FIELDS)
+
+
 async def test_experimental_read_only_sensor_preserves_raw_value(hass):
     raw_read = AsyncMock(
         return_value={(1, 0x0007): b"\x06", (3, 0x000B): b"\x01\x02"}
@@ -369,6 +390,11 @@ async def test_experimental_read_only_sensor_preserves_raw_value(hass):
     assert key_entity.native_value == "key code 6"
     assert key_entity.extra_state_attributes["last_key_code"] == 6
     assert key_entity.extra_state_attributes["decoded_value"] == "key code 6"
+
+    empty_entity = DimplexExperimentalRawSensor(
+        coordinator, EXPERIMENTAL_READ_ONLY_FIELDS[0], None
+    )
+    assert empty_entity.native_value is None
     raw_read.assert_awaited_once_with(
         tuple(field.address for field in EXPERIMENTAL_READ_ONLY_FIELDS)
     )
@@ -595,6 +621,29 @@ async def test_rule_coordinator_authentication_failure_requests_reauth(hass):
     assert err.value.translation_domain == DOMAIN
     assert err.value.translation_key == "authentication_failed"
     client.async_retry_authenticated_connection.assert_awaited_once()
+
+
+async def test_rule_coordinator_auth_retry_connection_failure_is_retryable(hass):
+    from custom_components.dimplex_ble.client import (
+        DimplexAuthenticationError,
+        DimplexConnectionError,
+    )
+
+    client = SimpleNamespace(
+        async_read_snapshot=AsyncMock(
+            side_effect=DimplexAuthenticationError("authentication required")
+        ),
+        async_retry_authenticated_connection=AsyncMock(
+            side_effect=DimplexConnectionError("proxy unavailable")
+        ),
+    )
+    _, coordinator = make_coordinator(hass, client=client)
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.translation_domain == DOMAIN
+    assert err.value.translation_key == "cannot_connect"
 
 
 async def test_rule_coordinator_retries_clean_authenticated_connection(hass):

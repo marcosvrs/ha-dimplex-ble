@@ -23,17 +23,26 @@ enum esp_gap_ble_cb_event_t {
   ESP_GAP_BLE_SEC_REQ_EVT,
   ESP_GAP_BLE_PASSKEY_NOTIF_EVT,
   ESP_GAP_BLE_PASSKEY_REQ_EVT,
+  ESP_GAP_BLE_KEY_EVT,
   ESP_GAP_BLE_OTHER_EVT,
 };
 
 struct esp_ble_gap_cb_param_t {
   struct {
     struct {
+      uint8_t success;
+      uint8_t fail_reason;
+    } auth_cmpl;
+    struct {
+      uint8_t key_type;
+    } ble_key;
+    struct {
       uint8_t bd_addr[6];
     } ble_req;
   } ble_security;
 };
 int esp_ble_passkey_reply(uint8_t *address, bool accept, uint32_t passkey);
+int esp_ble_get_bond_device_num();
 esp_err_t esp_ble_gap_set_security_param(int param, void *value,
                                          uint8_t length);
 esp_err_t esp_ble_set_encryption(uint8_t *address, int mode);

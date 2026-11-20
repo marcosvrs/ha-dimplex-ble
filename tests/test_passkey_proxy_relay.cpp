@@ -37,6 +37,8 @@ int esp_ble_passkey_reply(uint8_t *address, bool accept, uint32_t passkey) {
   return 0;
 }
 
+int esp_ble_get_bond_device_num() { return 0; }
+
 
 
 
