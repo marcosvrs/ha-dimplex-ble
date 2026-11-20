@@ -53,7 +53,9 @@ async def test_setup_reads_and_exposes_experimental_fields(hass) -> None:
         (0, 0x1002),
         (1, 0x0001),
     }
-    client.async_read_raw_fields.assert_awaited_once()
+    client.async_read_raw_fields.assert_awaited_once_with(
+        tuple(field.address for field in EXPERIMENTAL_FIELDS)
+    )
 
 
 async def test_setup_keeps_controls_when_initial_read_fails(hass) -> None:
@@ -83,6 +85,17 @@ async def test_experimental_text_adds_established_decoded_attributes(hass) -> No
     assert entity.extra_state_attributes["raw_value"] == "01"
     assert entity.extra_state_attributes["decoded_value"] == "on"
 
+
+
+def test_experimental_text_exposes_fixed_payload_metadata(hass) -> None:
+    coordinator = make_coordinator(hass, SimpleNamespace(address=ADDRESS))
+    field = next(field for field in EXPERIMENTAL_FIELDS if field.address == (0, 0x1007))
+    entity = DimplexExperimentalRawText(coordinator, field, None)
+
+    assert entity._attr_translation_key == field.translation_key
+    assert entity._attr_native_min == field.payload_length * 2
+    assert entity._attr_native_max == field.payload_length * 2
+    assert entity._attr_pattern == rf"[0-9a-fA-F]{{{field.payload_length * 2}}}"
 async def test_experimental_text_writes_readback_and_refreshes(
     hass, monkeypatch
 ) -> None:
@@ -121,6 +134,24 @@ async def test_experimental_text_maps_write_failure(hass) -> None:
         await entity.async_set_value("00" * 7)
 
 
+
+async def test_experimental_text_maps_protocol_write_failure(hass) -> None:
+    from custom_components.dimplex_ble.protocol import DimplexProtocolError
+
+    client = SimpleNamespace(
+        address=ADDRESS,
+        async_write_raw=AsyncMock(side_effect=DimplexProtocolError("invalid")),
+    )
+    coordinator = make_coordinator(hass, client)
+    entity = DimplexExperimentalRawText(
+        coordinator, EXPERIMENTAL_FIELDS[0], b"\x01" * 7
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await entity.async_set_value("00" * 7)
+
+    assert err.value.translation_key == "invalid_gatt_request"
+
 @pytest.mark.parametrize("value", ["", "00", "zz" * 9, "00" * 8])
 async def test_experimental_text_rejects_invalid_payload(hass, value: str) -> None:
     client = SimpleNamespace(address=ADDRESS, async_write_raw=AsyncMock())
@@ -131,3 +162,57 @@ async def test_experimental_text_rejects_invalid_payload(hass, value: str) -> No
         await entity.async_set_value(value)
 
     client.async_write_raw.assert_not_awaited()
+
+
+async def test_experimental_text_validation_errors_are_translated(
+    hass,
+) -> None:
+    client = SimpleNamespace(address=ADDRESS, async_write_raw=AsyncMock())
+    coordinator = make_coordinator(hass, client)
+    entity = DimplexExperimentalRawText(coordinator, EXPERIMENTAL_FIELDS[0], None)
+
+    with pytest.raises(ServiceValidationError) as invalid:
+        await entity.async_set_value("zz")
+    assert invalid.value.translation_domain == DOMAIN
+    assert invalid.value.translation_key == "invalid_experimental_payload"
+
+    with pytest.raises(ServiceValidationError) as wrong_length:
+        await entity.async_set_value("00")
+    assert wrong_length.value.translation_domain == DOMAIN
+    assert wrong_length.value.translation_key == "invalid_experimental_payload_length"
+
+
+async def test_experimental_text_prefers_device_readback(hass, monkeypatch) -> None:
+    client = SimpleNamespace(
+        address=ADDRESS,
+        async_write_raw=AsyncMock(return_value=b"\x22" * 7),
+    )
+    coordinator = make_coordinator(hass, client)
+    coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexExperimentalRawText(
+        coordinator, EXPERIMENTAL_FIELDS[0], b"\x11" * 7
+    )
+    monkeypatch.setattr(entity, "async_write_ha_state", Mock())
+
+    await entity.async_set_value("11" * 7)
+
+    assert entity.native_value == "22" * 7
+
+
+async def test_experimental_text_uses_payload_when_readback_is_none(
+    hass, monkeypatch
+) -> None:
+    client = SimpleNamespace(
+        address=ADDRESS,
+        async_write_raw=AsyncMock(return_value=None),
+    )
+    coordinator = make_coordinator(hass, client)
+    coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexExperimentalRawText(
+        coordinator, EXPERIMENTAL_FIELDS[0], b"\x11" * 7
+    )
+    monkeypatch.setattr(entity, "async_write_ha_state", Mock())
+
+    await entity.async_set_value("11" * 7)
+
+    assert entity.native_value == "11" * 7

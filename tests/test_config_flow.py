@@ -82,6 +82,12 @@ def service_info(
         connectable=connectable,
     )
 
+
+def test_rule_flow_initializes_without_ble_device() -> None:
+    flow = config_flow.DimplexBleConfigFlow()
+
+    assert flow._ble_device is None
+
 async def start_bluetooth_flow(hass, info):
     """Open discovery and retry if the initial pairing request could not start."""
     result = await hass.config_entries.flow.async_init(
@@ -180,6 +186,7 @@ async def test_rule_auto_discovery_uses_advertised_name_for_flow_and_entry_title
     assert flow._pairing_retry_task is None
     discovered.assert_called_once_with(hass, connectable=True)
     address = format_mac("aa:bb:cc:dd:ee:03")
+    proxy_selection.assert_called_once_with(hass, address, [info])
     assert start_pairing.await_count == 1
     client_factory.assert_called_once_with(
         hass, address, "proxy-1", info.device
@@ -191,6 +198,108 @@ async def test_rule_auto_discovery_uses_advertised_name_for_flow_and_entry_title
         CONF_PROXY_SOURCE: "proxy-1",
     }
     assert "passkey" not in configured["data"]
+
+
+async def test_rule_bluetooth_discovery_uses_strongest_matching_proxy_route(
+    hass, monkeypatch
+):
+    weak = service_info(
+        "AA:BB:CC:DD:EE:38",
+        "heater<Dimplex>",
+        -70,
+        source="proxy",
+    )
+    strong = service_info(
+        "AA:BB:CC:DD:EE:38",
+        "heater<Dimplex>",
+        -20,
+        source="proxy",
+    )
+    wrong_source = service_info(
+        "AA:BB:CC:DD:EE:38", "heater<Dimplex>", 0, source="other"
+    )
+    wrong_address = service_info(
+        "AA:BB:CC:DD:EE:39", "heater<Dimplex>", 0, source="proxy"
+    )
+    discovered = Mock(return_value=[weak, strong, wrong_source, wrong_address])
+    monkeypatch.setattr(
+        config_flow.bluetooth, "async_discovered_service_info", discovered
+    )
+    monkeypatch.setattr(
+        config_flow, "select_proxy_source", Mock(return_value="proxy")
+    )
+    client = SimpleNamespace(async_pair=AsyncMock())
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(config_flow, "DimplexBluetoothClient", client_factory)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_BLUETOOTH},
+        data=weak,
+    )
+
+    assert result["step_id"] == "passkey"
+    client_factory.assert_called_once_with(
+        hass, format_mac(weak.device.address), "proxy", strong.device
+    )
+
+
+async def test_rule_bluetooth_discovery_falls_back_to_device_name(
+    hass, monkeypatch
+):
+    info = service_info(
+        "AA:BB:CC:DD:EE:40",
+        None,
+        device_name="device-heater<Dimplex>",
+    )
+    monkeypatch.setattr(config_flow, "select_proxy_source", Mock(return_value="proxy"))
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_BLUETOOTH},
+        data=info,
+    )
+
+    assert result["step_id"] == "passkey"
+    assert result["description_placeholders"] == {"name": "device-heater"}
+
+
+async def test_rule_bluetooth_discovery_filters_route_by_source_and_address(
+    hass, monkeypatch
+):
+    weak = service_info(
+        "AA:BB:CC:DD:EE:42", "heater<Dimplex>", -70, source="proxy"
+    )
+    correct = service_info(
+        "AA:BB:CC:DD:EE:42", "heater<Dimplex>", -20, source="proxy"
+    )
+    wrong_source = service_info(
+        "AA:BB:CC:DD:EE:42", "heater<Dimplex>", 0, source="other"
+    )
+    wrong_address = service_info(
+        "AA:BB:CC:DD:EE:43", "heater<Dimplex>", 0, source="proxy"
+    )
+    monkeypatch.setattr(
+        config_flow.bluetooth,
+        "async_discovered_service_info",
+        Mock(return_value=[weak, correct, wrong_source, wrong_address]),
+    )
+    monkeypatch.setattr(
+        config_flow, "select_proxy_source", Mock(return_value="proxy")
+    )
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.context = {}
+    flow.hass = hass
+    flow.async_set_unique_id = AsyncMock()
+    flow._abort_if_unique_id_configured = Mock()
+    monkeypatch.setattr(
+        flow, "async_step_passkey", AsyncMock(return_value={"step_id": "passkey"})
+    )
+
+    result = await flow.async_step_bluetooth(weak)
+
+    assert result == {"step_id": "passkey"}
+    assert flow._ble_device is correct.device
 
 async def test_rule_discovery_starts_pairing_when_add_is_selected(
     hass, monkeypatch
@@ -694,6 +803,8 @@ async def test_rule_successful_direct_passkey_step_clears_value(hass, monkeypatc
         data=info,
     )
     flow = hass.config_entries.flow._progress[started["flow_id"]]
+    retry_task = flow._pairing_retry_task
+    assert retry_task is not None
     user_input = {CONF_PASSKEY: "999999"}
     created = await flow.async_step_passkey(user_input)
     assert user_input == {}
@@ -704,6 +815,28 @@ async def test_rule_successful_direct_passkey_step_clears_value(hass, monkeypatc
         CONF_ADDRESS_TYPE: 1,
     }
     client_factory.assert_called_once_with(hass, address, "proxy-1", info.device)
+    assert hass.data[DOMAIN][config_flow.PENDING_DEVICES][address] is info.device
+    assert flow._pairing_retry_task is None
+    await asyncio.sleep(0)
+    assert retry_task.cancelled()
+
+
+async def test_passkey_does_not_cancel_finished_retry_task(hass):
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._address = "AA:BB:CC:DD:EE:19"
+    flow._proxy_source = "proxy-1"
+    pairing_task = asyncio.get_running_loop().create_future()
+    pairing_task.set_result(None)
+    flow._pairing_task = pairing_task
+    retry_task = Mock()
+    retry_task.done.return_value = True
+    flow._pairing_retry_task = retry_task
+
+    result = await flow.async_step_passkey({CONF_PASSKEY: "999999"})
+
+    assert result["type"] == "create_entry"
+    retry_task.cancel.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1149,6 +1282,38 @@ async def test_pairing_retries_are_bounded_after_start_errors(hass, monkeypatch,
     hass.config_entries.flow.async_abort(discovered["flow_id"])
 
 
+async def test_pairing_retry_waits_for_task_created_by_retry_start(
+    hass, monkeypatch
+):
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._address = "AA:BB:CC:DD:EE:74"
+    flow._proxy_source = "proxy"
+    awaited = False
+
+    class PairingAwaitable:
+        def __await__(self):
+            nonlocal awaited
+            awaited = True
+
+            async def finish():
+                return None
+
+            return finish().__await__()
+
+    async def wait_for_retry(_delay):
+        flow._pairing_task = PairingAwaitable()
+
+    monkeypatch.setattr(config_flow, "PAIRING_RETRY_DELAY", 0)
+    monkeypatch.setattr(config_flow.asyncio, "sleep", wait_for_retry)
+    monkeypatch.setattr(
+        flow, "_async_start_pairing", AsyncMock(side_effect=AssertionError)
+    )
+
+    await flow._async_retry_pairing_while_flow_active()
+
+    assert awaited
+
 async def test_rule_pin_after_expired_attempt_is_sent_to_fresh_attempt(
     hass, monkeypatch, caplog
 ):
@@ -1253,6 +1418,24 @@ async def test_pair_step_reprompts_and_aborts_when_proxy_route_disappears(
     await flow._async_retry_pairing_while_flow_active()
     start.assert_not_awaited()
     hass.config_entries.flow.async_abort(discovered["flow_id"])
+
+
+async def test_pairing_retry_counts_attempts_without_initial_pairing_task(
+    hass, monkeypatch
+):
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._address = "AA:BB:CC:DD:EE:73"
+    flow._proxy_source = "proxy"
+    flow._pairing_task = None
+    monkeypatch.setattr(config_flow, "PAIRING_RETRY_DELAY", 0)
+    monkeypatch.setattr(config_flow.asyncio, "sleep", AsyncMock())
+    start = AsyncMock(return_value="pairing_failed")
+    monkeypatch.setattr(flow, "_async_start_pairing", start)
+
+    await flow._async_retry_pairing_while_flow_active()
+
+    assert start.await_count == config_flow.PAIRING_MAX_AUTOMATIC_RETRIES
 
 
 async def test_cancelled_pairing_task_is_restarted_for_pin(hass, monkeypatch):
@@ -1574,14 +1757,19 @@ async def test_reauth_start_error_is_shown_on_initial_reauth_form(
     flow = config_flow.DimplexBleConfigFlow()
     flow.hass = hass
     flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
-    monkeypatch.setattr(
-        flow, "_async_start_pairing", AsyncMock(return_value="pairing_failed")
-    )
+    start = AsyncMock(return_value="proxy_unavailable")
+    monkeypatch.setattr(flow, "_async_start_pairing", start)
 
+    ensure_retry = Mock()
+    monkeypatch.setattr(flow, "_async_ensure_pairing_retry", ensure_retry)
     result = await flow.async_step_reauth(entry.data)
 
     assert result["step_id"] == "reauth_confirm"
-    assert result["errors"] == {"base": "pairing_failed"}
+    assert result["errors"] == {"base": "proxy_unavailable"}
+    start.assert_awaited_once_with(
+        entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
+    )
+    ensure_retry.assert_not_called()
 
 async def test_reauth_rejects_invalid_pin(hass, monkeypatch):
     entry = MockConfigEntry(
@@ -1620,6 +1808,24 @@ async def test_reauth_aborts_without_pairing_target(hass):
     flow = config_flow.DimplexBleConfigFlow()
     flow.hass = hass
     result = await flow.async_step_reauth_confirm({CONF_PASSKEY: "764343"})
+    assert result["type"] == "abort"
+    assert result["reason"] == "proxy_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("address", "proxy_source"),
+    [(None, "proxy"), ("AA:BB:CC:DD:EE:20", None)],
+)
+async def test_reauth_confirm_aborts_with_one_missing_pairing_target(
+    hass, address, proxy_source
+) -> None:
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._address = address
+    flow._proxy_source = proxy_source
+
+    result = await flow.async_step_reauth_confirm({CONF_PASSKEY: "764343"})
+
     assert result["type"] == "abort"
     assert result["reason"] == "proxy_unavailable"
 
@@ -1673,3 +1879,148 @@ async def test_reauth_reports_passkey_relay_error(hass, monkeypatch):
 
     assert result["step_id"] == "reauth_confirm"
     assert result["errors"] == {"base": "pairing_failed"}
+
+
+def test_reauth_form_preserves_pin_selector_and_placeholder(hass) -> None:
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._advertised_name = "AM6532"
+
+    result = flow._show_reauth_form("pairing_failed")
+
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "pairing_failed"}
+    assert result["description_placeholders"] == {"name": "AM6532"}
+    selector = result["data_schema"].schema[config_flow.CONF_PASSKEY]
+    assert selector.config == {
+        "type": "password",
+        "autocomplete": "off",
+        "multiline": False,
+        "multiple": False,
+    }
+
+
+def test_reauth_form_uses_generic_name_without_advertisement(hass) -> None:
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+
+    result = flow._show_reauth_form()
+
+    assert result["description_placeholders"] == {"name": "the selected heater"}
+    assert result["errors"] == {}
+
+
+@pytest.mark.parametrize(
+    "entry_data",
+    [
+        {CONF_ADDRESS: "AA:BB:CC:DD:EE:20"},
+        {CONF_PROXY_SOURCE: "proxy"},
+    ],
+)
+async def test_reauth_requires_both_address_and_proxy(hass, entry_data) -> None:
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_reauth(entry_data)
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "proxy_unavailable"
+
+
+async def test_reauth_uses_existing_route_and_entry_name(hass, monkeypatch) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM6532",
+        unique_id="AA:BB:CC:DD:EE:20",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:20", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    device = object()
+    find_device = Mock(return_value=device)
+    monkeypatch.setattr(config_flow, "ble_device_from_source", find_device)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+    flow._async_start_pairing = AsyncMock(return_value="pairing_failed")
+
+    result = await flow.async_step_reauth(entry.data)
+
+    assert result["step_id"] == "reauth_confirm"
+    assert flow._address == entry.data[CONF_ADDRESS]
+    assert flow._proxy_source == entry.data[CONF_PROXY_SOURCE]
+    assert flow._ble_device is device
+    assert flow._advertised_name == "AM6532"
+    find_device.assert_called_once_with(
+        hass, entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
+    )
+
+
+async def test_reauth_confirm_sends_pin_waits_for_pairing_and_cancels_retry(
+    hass, monkeypatch
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM6532",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:20", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+    flow._address = entry.data[CONF_ADDRESS]
+    flow._proxy_source = entry.data[CONF_PROXY_SOURCE]
+    pairing_task = asyncio.get_running_loop().create_future()
+    flow._pairing_task = pairing_task
+    retry_task = asyncio.create_task(asyncio.sleep(60))
+    flow._pairing_retry_task = retry_task
+    start = AsyncMock(return_value=None)
+    send = AsyncMock()
+    monkeypatch.setattr(flow, "_async_start_pairing", start)
+    monkeypatch.setattr(config_flow, "async_send_passkey", send)
+    result = {"type": "abort", "reason": "reauth_successful"}
+    monkeypatch.setattr(flow, "async_update_reload_and_abort", Mock(return_value=result))
+
+    submission = asyncio.create_task(
+        flow.async_step_reauth_confirm({CONF_PASSKEY: "764343"})
+    )
+    await asyncio.sleep(0)
+    send.assert_awaited_once_with(
+        hass, entry.data[CONF_PROXY_SOURCE], entry.data[CONF_ADDRESS], "764343"
+    )
+    pairing_task.set_result(None)
+    assert await submission == result
+    start.assert_awaited_once_with(
+        entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
+    )
+    assert retry_task.cancelled()
+    assert flow._pairing_retry_task is None
+
+
+async def test_reauth_confirm_does_not_cancel_finished_retry_task(hass, monkeypatch):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:20", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+    flow._address = entry.data[CONF_ADDRESS]
+    flow._proxy_source = entry.data[CONF_PROXY_SOURCE]
+    pairing_task = asyncio.get_running_loop().create_future()
+    pairing_task.set_result(None)
+    flow._pairing_task = pairing_task
+    retry_task = Mock()
+    retry_task.done.return_value = True
+    flow._pairing_retry_task = retry_task
+    monkeypatch.setattr(flow, "_async_start_pairing", AsyncMock(return_value=None))
+    monkeypatch.setattr(config_flow, "async_send_passkey", AsyncMock())
+    result = {"type": "abort", "reason": "reauth_successful"}
+    monkeypatch.setattr(flow, "async_update_reload_and_abort", Mock(return_value=result))
+
+    assert (
+        await flow.async_step_reauth_confirm({CONF_PASSKEY: "764343"})
+        == result
+    )
+
+    retry_task.cancel.assert_not_called()

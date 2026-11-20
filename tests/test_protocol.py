@@ -10,6 +10,7 @@ from custom_components.dimplex_ble.protocol import (
     DimplexProtocolError,
     HeaterSnapshot,
     ProtectedCharacteristicError,
+    _parse_selected_version,
     characteristic_uuid,
     decode_known_raw_value,
     encode_preset_mode,
@@ -23,6 +24,12 @@ from custom_components.dimplex_ble.protocol import (
     service_uuid,
     validate_raw_access,
 )
+
+
+def test_parse_selected_version_requires_selector_and_complete_payload() -> None:
+    assert _parse_selected_version(b"\x01\x07\x00", 1) == "7.0"
+    assert _parse_selected_version(b"\x00\x07\x00", 1) is None
+    assert _parse_selected_version(b"\x01\x07", 1) is None
 
 
 @pytest.mark.parametrize("group", sorted(DIMPLEX_GROUPS))
@@ -168,6 +175,20 @@ def test_decode_known_raw_value_keeps_invalid_dates_raw() -> None:
 
 
 @pytest.mark.parametrize(
+    ("address", "value"),
+    [
+        ((3, 0x9999), b"\x00\x00\x00\x00"),
+        ((3, 0x9998), b"\x00"),
+        ((3, 0x9997), b"\x00\x00\x00\x00\x00\x00\x00"),
+    ],
+)
+def test_decode_known_raw_value_requires_matching_address(
+    address: tuple[int, int], value: bytes
+) -> None:
+    assert decode_known_raw_value(address, value) == {}
+
+
+@pytest.mark.parametrize(
     ("address", "value", "expected"),
     [
         ((0, 0x0006), bytes.fromhex("141a0b140d3701"), "2026-11-20T13:55 (flag 1)"),
@@ -203,6 +224,14 @@ def test_format_known_raw_value_defensively_handles_unexpected_decoder_output(
     assert protocol.format_known_raw_value((3, 0x200F), b"\x00") is None
 
 
+def test_format_known_raw_value_covers_away_on_and_missing_date() -> None:
+    value = bytes.fromhex("011a0d11300607")
+    assert decode_known_raw_value((0, 0x102A), value)["away_active"] is True
+    assert format_known_raw_value((0, 0x102A), value) == "on, target 7 °C"
+    invalid_date = bytes.fromhex("141aff140d3701")
+    assert format_known_raw_value((0, 0x0006), invalid_date) == "flag 1"
+
+
 @pytest.mark.parametrize(
     ("address", "value", "expected"),
     [
@@ -227,6 +256,46 @@ def test_format_readonly_raw_value_uses_conservative_guesses(
 def test_format_readonly_raw_value_falls_back_for_unresolved_payload() -> None:
     assert format_readonly_raw_value((3, 0x200F), bytes.fromhex("04e90f0000")) is None
     assert format_readonly_raw_value((3, 0x200C), bytes.fromhex("14160d0d0e00")) is None
+
+
+def test_format_readonly_raw_value_requires_matching_address_and_length() -> None:
+    assert format_readonly_raw_value((3, 0x9999), b"\x00\x01\x02") is None
+    assert format_readonly_raw_value((3, 0x9998), b"\x00") is None
+    assert (
+        format_readonly_raw_value((3, 0x9997), bytes.fromhex("1401050d0e2a"))
+        is None
+    )
+
+
+def test_format_readonly_raw_value_preserves_timestamp_minute() -> None:
+    assert (
+        format_readonly_raw_value((3, 0x200C), bytes.fromhex("1416050d0e2a"))
+        == "2022-05-13T14:42 (possible build timestamp)"
+    )
+
+
+def test_parse_snapshot_preserves_product_text_and_exact_power_length() -> None:
+    assert parse_snapshot({(3, 0x200A): b"\xff"}).product_code == "\ufffd"
+    assert (
+        parse_snapshot({(3, 0x200A): b"  EP4213  "}).product_code
+        == "EP4213"
+    )
+    assert parse_snapshot({(3, 0x200A): b"XEP4213X"}).product_code == "XEP4213X"
+    assert parse_snapshot({(3, 0x200A): b"\xc3\xa9"}).product_code == "\ufffd\ufffd"
+    assert (
+        parse_snapshot({(3, 0x000A): bytes.fromhex("f401")}).rated_power_w
+        == 500
+    )
+
+
+def test_parse_snapshot_distinguishes_trac_active_flag_and_rejects_overrange_power(
+) -> None:
+    idle = parse_snapshot({}, trac=bytes.fromhex("010064"))
+    assert idle.heating_active is False
+    assert idle.trac_output_power_percent == 100
+
+    overrange = parse_snapshot({}, trac=bytes.fromhex("010165"))
+    assert overrange.trac_output_power_percent is None
 
 
 @pytest.mark.parametrize(("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")])

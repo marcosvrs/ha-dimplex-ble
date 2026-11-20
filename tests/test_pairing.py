@@ -222,7 +222,7 @@ def test_select_proxy_source_returns_none_without_eligible_candidate(
 
 
 def test_ble_device_lookup_is_pinned_to_bond_owner(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     expected = SimpleNamespace(address="heater")
     scanner_devices = [
@@ -240,6 +240,7 @@ def test_ble_device_lookup_is_pinned_to_bond_owner(
         pairing.bluetooth, "async_scanner_devices_by_address", devices
     )
     hass = make_hass()
+    caplog.set_level("DEBUG", logger=pairing.__name__)
     assert ble_device_from_source(hass, "heater", "proxy") is expected
     assert ble_device_from_source(hass, "heater", "missing") is None
     devices.assert_has_calls(
@@ -248,6 +249,10 @@ def test_ble_device_lookup_is_pinned_to_bond_owner(
             call(hass, "HEATER", connectable=True),
         ]
     )
+    assert caplog.messages == [
+        f"{DEBUG_LOG_PREFIX} Found a source-specific Bluetooth route",
+        f"{DEBUG_LOG_PREFIX} No source-specific Bluetooth route is currently available",
+    ]
 
 
 def test_ble_device_lookup_normalizes_mac_address(

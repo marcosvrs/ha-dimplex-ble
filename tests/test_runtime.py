@@ -42,6 +42,7 @@ from custom_components.dimplex_ble.const import (
     CONF_ADDRESS_TYPE,
     CONF_PROXY_SOURCE,
     DOMAIN,
+    PENDING_DEVICES,
     PLATFORMS,
 )
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
@@ -395,6 +396,10 @@ async def test_experimental_read_only_sensor_preserves_raw_value(hass):
         coordinator, EXPERIMENTAL_READ_ONLY_FIELDS[0], None
     )
     assert empty_entity.native_value is None
+    assert (
+        empty_entity._attr_translation_key
+        == EXPERIMENTAL_READ_ONLY_FIELDS[0].translation_key
+    )
     raw_read.assert_awaited_once_with(
         tuple(field.address for field in EXPERIMENTAL_READ_ONLY_FIELDS)
     )
@@ -433,7 +438,34 @@ async def test_rule_setup_entry_retries_if_heater_is_offline(hass, monkeypatch):
     forwarded.assert_not_awaited()
 
 
-async def test_rule_setup_entry_uses_stored_address_type_when_route_is_missing(
+
+async def test_rule_setup_failure_tolerates_client_without_shutdown(
+    hass, monkeypatch
+):
+    client = SimpleNamespace(address=ADDRESS)
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.DimplexBluetoothClient",
+        Mock(return_value=client),
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.ble_device_from_source",
+        Mock(return_value=object()),
+    )
+    monkeypatch.setattr(
+        DimplexCoordinator,
+        "async_config_entry_first_refresh",
+        AsyncMock(side_effect=ConfigEntryNotReady),
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater 1",
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+
+    with pytest.raises(ConfigEntryNotReady):
+        await async_setup_entry(hass, entry)
+
+async def test_rule_setup_entry_uses_default_address_type_when_route_is_missing(
     hass, monkeypatch
 ):
     client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
@@ -441,7 +473,12 @@ async def test_rule_setup_entry_uses_stored_address_type_when_route_is_missing(
     monkeypatch.setattr(
         "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
     )
-    find_device = Mock(side_effect=[None, None])
+    def find_device(actual_hass, actual_address, actual_proxy):
+        assert actual_hass is hass
+        assert actual_address == ADDRESS
+        assert actual_proxy == PROXY
+        return None
+
     monkeypatch.setattr(
         "custom_components.dimplex_ble.ble_device_from_source", find_device
     )
@@ -462,7 +499,6 @@ async def test_rule_setup_entry_uses_stored_address_type_when_route_is_missing(
         data={
             CONF_ADDRESS: ADDRESS,
             CONF_PROXY_SOURCE: PROXY,
-            CONF_ADDRESS_TYPE: 1,
         },
     )
 
@@ -470,9 +506,46 @@ async def test_rule_setup_entry_uses_stored_address_type_when_route_is_missing(
 
     active_scan.assert_awaited_once_with(hass, duration=5.0)
     assert client_factory.call_args.args[:3] == (hass, ADDRESS, PROXY)
-    assert client_factory.call_args.args[3].details["address_type"] == 1
+    assert client_factory.call_args.args[3].details["address_type"] == 0
+    assert client_factory.call_args.args[3].address == ADDRESS
+    assert client_factory.call_args.args[3].details == {
+        "source": PROXY,
+        "address_type": 0,
+    }
     first_refresh.assert_awaited_once()
     forwarded.assert_awaited_once_with(entry, PLATFORMS)
+
+
+async def test_rule_setup_entry_uses_device_found_after_active_scan(hass, monkeypatch):
+    client = SimpleNamespace(address=ADDRESS)
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
+    )
+    discovered_device = SimpleNamespace(address=ADDRESS, details={"source": PROXY})
+    find_device = Mock(side_effect=[None, discovered_device])
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.ble_device_from_source", find_device
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_request_active_scan",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        DimplexCoordinator, "async_config_entry_first_refresh", AsyncMock()
+    )
+    monkeypatch.setattr(
+        hass.config_entries, "async_forward_entry_setups", AsyncMock()
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+
+    await async_setup_entry(hass, entry)
+
+    assert hass.data[DOMAIN][CLIENTS] == [client]
+    assert client_factory.call_args.args[3] is discovered_device
 
 
 async def test_rule_setup_entry_forwards_platforms_after_first_refresh(
@@ -484,9 +557,9 @@ async def test_rule_setup_entry_forwards_platforms_after_first_refresh(
         "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
     )
     captured_device = object()
+    find_device = Mock(return_value=captured_device)
     monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=captured_device),
+        "custom_components.dimplex_ble.ble_device_from_source", find_device
     )
     first_refresh = AsyncMock()
     monkeypatch.setattr(
@@ -501,8 +574,77 @@ async def test_rule_setup_entry_forwards_platforms_after_first_refresh(
     )
     await async_setup_entry(hass, entry)
     client_factory.assert_called_once_with(hass, ADDRESS, PROXY, captured_device)
+    find_device.assert_called_once_with(hass, ADDRESS, PROXY)
     first_refresh.assert_awaited_once()
     forwarded.assert_awaited_once_with(entry, PLATFORMS)
+
+
+async def test_rule_setup_entry_reuses_pending_discovery_device(hass, monkeypatch):
+    pending_device = object()
+    client = SimpleNamespace(address=ADDRESS)
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
+    )
+    find_device = Mock()
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.ble_device_from_source", find_device
+    )
+    first_refresh = AsyncMock()
+    monkeypatch.setattr(
+        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
+    )
+    monkeypatch.setattr(
+        hass.config_entries, "async_forward_entry_setups", AsyncMock()
+    )
+    hass.data[DOMAIN] = {PENDING_DEVICES: {ADDRESS: pending_device}}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+
+    await async_setup_entry(hass, entry)
+
+    find_device.assert_not_called()
+    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, pending_device)
+    assert hass.data[DOMAIN][PENDING_DEVICES] == {}
+    first_refresh.assert_awaited_once()
+
+
+async def test_rule_setup_entry_does_not_fabricate_device_for_invalid_address_type(
+    hass, monkeypatch
+):
+    client = SimpleNamespace(address=ADDRESS)
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.ble_device_from_source",
+        Mock(side_effect=[None, None]),
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_request_active_scan",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        DimplexCoordinator, "async_config_entry_first_refresh", AsyncMock()
+    )
+    monkeypatch.setattr(
+        hass.config_entries, "async_forward_entry_setups", AsyncMock()
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ADDRESS: ADDRESS,
+            CONF_PROXY_SOURCE: PROXY,
+            CONF_ADDRESS_TYPE: "random",
+        },
+    )
+
+    await async_setup_entry(hass, entry)
+
+    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, None)
 
 async def test_rule_config_entry_unload_and_integration_discovery_unload(
     hass, monkeypatch
@@ -864,6 +1006,20 @@ async def test_rule_climate_translates_preset_write_failures(hass):
     assert err.value.translation_key == "cannot_connect"
     assert err.value.translation_domain == DOMAIN
     assert isinstance(err.value.__cause__, DimplexConnectionError)
+
+
+async def test_rule_climate_translates_protocol_preset_write_failures(hass):
+    from custom_components.dimplex_ble.protocol import DimplexProtocolError
+
+    client = SimpleNamespace(
+        async_write_raw=AsyncMock(side_effect=DimplexProtocolError("invalid"))
+    )
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexClimate(coordinator).async_set_preset_mode("eco")
+
+    assert err.value.translation_key == "invalid_gatt_request"
 
 async def test_rule_climate_writes_verified_preset_mode(hass):
     client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x03"))
@@ -1361,3 +1517,74 @@ async def test_rule_raw_services_translate_client_failures(
             return_response=True,
         )
     assert err.value.translation_key == "cannot_connect"
+
+
+async def test_rule_global_shutdown_isolates_client_cleanup_errors(hass, monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_register_callback",
+        Mock(return_value=Mock()),
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.async_setup_services", Mock()
+    )
+    await async_setup(hass, {})
+    failed = SimpleNamespace(async_shutdown=AsyncMock(side_effect=RuntimeError))
+    healthy = SimpleNamespace(async_shutdown=AsyncMock())
+    hass.data[DOMAIN][CLIENTS].extend([failed, healthy])
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    failed.async_shutdown.assert_awaited_once()
+    healthy.async_shutdown.assert_awaited_once()
+
+
+async def test_rule_unload_entry_shutdowns_runtime_without_registered_client(
+    hass, monkeypatch
+):
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+    shutdown = AsyncMock()
+    entry.runtime_data = SimpleNamespace(client=object(), async_shutdown=shutdown)
+    hass.data[DOMAIN] = {CLIENTS: []}
+
+    assert await async_unload_entry(hass, entry) is False
+
+    shutdown.assert_awaited_once()
+
+
+async def test_rule_unload_entry_handles_runtime_without_client(hass, monkeypatch):
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+    shutdown = AsyncMock()
+    entry.runtime_data = SimpleNamespace(async_shutdown=shutdown)
+    hass.data.clear()
+
+    assert await async_unload_entry(hass, entry) is True
+    shutdown.assert_awaited_once()
+
+
+async def test_rule_unload_entry_handles_missing_client_registry(hass, monkeypatch):
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+    shutdown = AsyncMock()
+    entry.runtime_data = SimpleNamespace(client=object(), async_shutdown=shutdown)
+    hass.data.clear()
+
+    assert await async_unload_entry(hass, entry) is True
+    shutdown.assert_awaited_once()

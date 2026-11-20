@@ -12,8 +12,10 @@ STATS_PATH = Path("mutants/mutmut-cicd-stats.json")
 EQUIVALENT_MUTANTS = frozenset(
     {
         "custom_components.dimplex_ble.protocol.x_parse_snapshot__mutmut_15",
+        "custom_components.dimplex_ble.protocol.x_parse_snapshot__mutmut_34",
         "custom_components.dimplex_ble.client.x__create_pair_aware_client__mutmut_2",
         "custom_components.dimplex_ble.client.xǁDimplexBluetoothClientǁasync_read_raw__mutmut_3",
+        "custom_components.dimplex_ble.client.xǁDimplexBluetoothClientǁasync_read_raw_fields__mutmut_3",
         "custom_components.dimplex_ble.pairing.x_proxy_supports_passkey__mutmut_19",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_bluetooth__mutmut_4",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_user__mutmut_26",
@@ -24,6 +26,18 @@ EQUIVALENT_MUTANTS = frozenset(
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_71",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_80",
         "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁasync_step_passkey__mutmut_83",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_46",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_47",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_51",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_52",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_54",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_56",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_57",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_58",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_59",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_60",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_61",
+        "custom_components.dimplex_ble.config_flow.xǁDimplexBleConfigFlowǁ_async_retry_pairing_while_flow_active__mutmut_62",
     }
 )
 _SURVIVED_MUTANT_PATTERN = re.compile(r"^[ \t]*(\S+): survived$", re.MULTILINE)
