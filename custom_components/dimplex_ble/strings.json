@@ -52,9 +52,75 @@
         }
       }
     },
+    "switch": {
+      "preemptive_heating": {
+        "name": "Adaptive Start",
+        "state_attributes": {
+          "official_name": {
+            "name": "Official Dimplex name",
+            "state": {
+              "dimplex_calls_this_adaptive_start": "Adaptive Start"
+            }
+          },
+          "what_it_does": {
+            "name": "What it does",
+            "state": {
+              "preheats_room_to_target_before_timer_period": "Pre-heats the room so the target temperature is reached by the start of a timer period."
+            }
+          },
+          "how_it_works": {
+            "name": "How it works",
+            "state": {
+              "models_room_heating_characteristics_and_starting_temperature": "Models the room's heating characteristics and starting temperature."
+            }
+          },
+          "when_it_applies": {
+            "name": "When it applies",
+            "state": {
+              "timer_mode_only": "Only applies in Timer Mode."
+            }
+          },
+          "important_note": {
+            "name": "Important note",
+            "state": {
+              "continuously_learning_two_hour_limit_all_same_room_heaters_should_enable": "Learns continuously, enforces a two-hour calculation limit, and should be enabled on all heaters in the same room."
+            }
+          }
+        }
+      },
+      "open_window_detection": {
+        "name": "Open Window Detection",
+        "state_attributes": {
+          "what_it_does": {
+            "name": "What it does",
+            "state": {
+              "switches_heater_to_heating_off_when_open_window_detected": "Switches the heater to Heating Off when an open window is detected."
+            }
+          },
+          "how_it_works": {
+            "name": "How it works",
+            "state": {
+              "detects_sudden_decrease_in_room_temperature": "Looks for a sudden decrease in room temperature."
+            }
+          },
+          "when_it_applies": {
+            "name": "When it applies",
+            "state": {
+              "can_interrupt_any_active_mode": "Can interrupt any active mode."
+            }
+          },
+          "important_note": {
+            "name": "Important note",
+            "state": {
+              "may_trigger_in_drafty_poorly_insulated_or_undersized_rooms": "May trigger incorrectly in drafty or poorly insulated rooms, or when the heater is undersized."
+            }
+          }
+        }
+      }
+    },
     "select": {
       "temperature_unit": {
-        "name": "Display temperature unit",
+        "name": "Temperature Units",
         "state": {
           "celsius": "Celsius",
           "fahrenheit": "Fahrenheit"
@@ -132,12 +198,6 @@
       },
       "raw_1_0001": {
         "name": "Experimental display backlight color"
-      },
-      "raw_0_1007": {
-        "name": "Experimental open-window detection"
-      },
-      "raw_0_1008": {
-        "name": "Experimental pre-emptive heating"
       },
       "raw_0_100d": {
         "name": "Experimental advance heating"

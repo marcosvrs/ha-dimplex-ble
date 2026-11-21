@@ -12,5 +12,12 @@ fi
   --cov-report=term-missing \
   --cov-report=json:coverage.json
 .venv/bin/python scripts/check_function_coverage.py coverage.json
-.venv/bin/mutmut run
+if .venv/bin/mutmut run; then
+  :
+else
+  mutation_status=$?
+  if (( mutation_status != 1 )); then
+    exit "$mutation_status"
+  fi
+fi
 .venv/bin/python scripts/check_mutation_score.py

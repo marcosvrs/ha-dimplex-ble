@@ -61,19 +61,28 @@ not expose a supported heater-side bond-reset operation.
 - Keep one serialized commissioning operation per proxy.
 - Do not run competing pairing attempts for one heater.
 - Forward the displayed six-digit PIN only to the address-scoped proxy relay.
+- During commissioning, use only the proxy that was armed for that address;
+  runtime RSSI balancing must not redirect an unencrypted PIN exchange.
 - Treat a successful API call as insufficient evidence; protected GATT access is
   the readiness check.
 - Reuse a successfully authenticated connection for coordinator and command
   operations.
 - On a failed operation, close and release the connection before retrying.
-- When a fresh connection is required, ask the proxy to re-establish encryption
-  from its existing bond; a valid bond does not require a new PIN.
-- Limit automatic commissioning retries to three attempts; never leave a flow
-  retrying indefinitely. A new PIN submission starts a fresh bounded attempt.
-- If the existing bond cannot be re-established, mark the entry unavailable
-  instead of looping or silently moving it to another proxy.
-- Preserve the selected bond-owning Bluetooth route; do not silently migrate a
-  bond to another proxy.
+- When a fresh connection is required, open the selected route without
+  first-time pairing, then request native encryption from its existing bond;
+  a valid bond does not require a new PIN.
+- Runtime route selection may choose another currently advertised, registered
+  ESPHome proxy only after the current connection is gone and only when that
+  route has capacity. The alternate route must already own a usable bond.
+- At operation boundaries, a stable connection is re-evaluated after a
+  five-minute cooldown; controlled handoff requires a materially stronger
+  alternative (at least 10 dBm) or an unusable current route. A route that
+  fails is excluded from proactive RSSI handoff for five minutes while the
+  current route remains usable.
+- If no eligible route can re-establish the bond, mark the entry unavailable
+  instead of looping or silently starting a new pairing flow.
+- Explicit commissioning/reconfiguration remains the operation that creates or
+  verifies a bond on a selected proxy.
 
 The custom ESPHome component is limited to the passkey callback boundary.
 Connection, encryption, service discovery, retries, availability, and teardown

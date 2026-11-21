@@ -92,6 +92,35 @@ Each configured heater creates:
   class and `MEASUREMENT` state class, so it is available as a power input in
   Home Assistant's Energy dashboard.
 
+
+- one configuration `switch` for **Adaptive Start**; it is an independent
+  heater setting, not an HVAC mode or preset;
+- one configuration `switch` for **Open Window Detection**; it is an independent
+  heater setting, not a temperature or occupancy sensor.
+
+### Device setting guidance
+
+The explanations shown in the entity details are based on the official [PLXE
+Series C manual, Issue 7](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf),
+which explicitly covers the PLX050E Series C:
+
+- **Adaptive Start** is a continuously learning function
+  that models the room's heating characteristics and starting temperature. It
+  only changes Timer Mode operation and starts heating before the user-defined
+  Heating On time so the target temperature is reached when that period starts.
+  The manual enforces a two-hour limit on the pre-heating calculation and
+  recommends enabling it on every heater in the same room.
+- **Open Window Detection** is a global setting that can interrupt any active
+  mode. When the heater detects an open window, it switches to **Heating Off**.
+  Dimplex warns that sudden temperature decreases in drafty, poorly insulated,
+  or undersized-room conditions can trigger it incorrectly.
+
+Home Assistant has no generic long-form entity-help field rendered directly in
+the standard more-info card. The integration therefore exposes these translated
+explanations as entity attributes; open the entity's details view from the
+more-info dialog's menu to see the **What it does**, **How it works**, **When it
+applies**, and **Important note** entries.
+
 Raw GATT actions exist for inspection and controlled administrator-only writes.
 Known security-material and bootloader characteristics are blocked. Unknown
 characteristics are not promoted to Home Assistant entities.

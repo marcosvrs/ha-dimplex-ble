@@ -7,19 +7,23 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.dimplex_ble import pairing
-from custom_components.dimplex_ble.pairing import (
+from custom_components.dimplex_ble import commissioning, esphome_proxy, pairing
+from custom_components.dimplex_ble.commissioning import (
+    DimplexPairingSession,
+    proxy_pairing_lock,
+)
+from custom_components.dimplex_ble.esphome_proxy import (
     DEBUG_LOG_PREFIX,
     DimplexPairingError,
     DimplexPairingInProgressError,
     async_cancel_pairing,
     async_send_passkey,
-    async_start_pairing,
-    ble_device_from_source,
     find_proxy_entry,
     proxy_action_name,
-    proxy_pairing_lock,
     proxy_supports_passkey,
+)
+from custom_components.dimplex_ble.pairing import (
+    ble_device_from_source,
     select_proxy_source,
 )
 
@@ -33,9 +37,9 @@ def make_entry(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         data={
-            pairing.CONF_BLUETOOTH_MAC_ADDRESS: source,
-            pairing.CONF_DEVICE_NAME: name,
-            pairing.CONF_NOISE_PSK: "fake-encryption-key" if encrypted else "",
+            esphome_proxy.CONF_BLUETOOTH_MAC_ADDRESS: source,
+            esphome_proxy.CONF_DEVICE_NAME: name,
+            esphome_proxy.CONF_NOISE_PSK: "fake-encryption-key" if encrypted else "",
         },
         unique_id=unique_id,
     )
@@ -75,7 +79,7 @@ def test_pairing_lock_reuses_casefolded_source_and_separates_proxies() -> None:
     second = proxy_pairing_lock(hass, "other")
     assert second is not first
     assert not first.locked()
-    assert hass.data[pairing.DOMAIN][pairing._PAIRING_LOCKS] == {
+    assert hass.data[commissioning.DOMAIN][commissioning._PAIRING_LOCKS] == {
         "aa:bb": first,
         "other": second,
     }
@@ -87,7 +91,7 @@ def test_find_proxy_entry_matches_loaded_adapter_case_insensitively() -> None:
     assert find_proxy_entry(hass, "aa:bb") is entry
     assert find_proxy_entry(hass, "missing") is None
     hass.config_entries.async_loaded_entries.assert_has_calls(
-        [call(pairing.ESPHOME_DOMAIN), call(pairing.ESPHOME_DOMAIN)]
+        [call(esphome_proxy.ESPHOME_DOMAIN), call(esphome_proxy.ESPHOME_DOMAIN)]
     )
 
 
@@ -114,7 +118,7 @@ def test_proxy_action_name_normalizes_device_name_and_custom_action() -> None:
 
 @pytest.mark.parametrize("name", [None, "", 42])
 def test_proxy_action_name_rejects_missing_or_nonstring_device_name(name: object) -> None:
-    entry = SimpleNamespace(data={pairing.CONF_DEVICE_NAME: name})
+    entry = SimpleNamespace(data={esphome_proxy.CONF_DEVICE_NAME: name})
     with pytest.raises(DimplexPairingError) as err:
         proxy_action_name(entry)
     assert str(err.value) == "The ESPHome proxy has no registered device name"
@@ -136,8 +140,8 @@ def test_proxy_support_requires_encryption_entry_and_all_relay_actions() -> None
     hass.config_entries.async_loaded_entries.return_value = [unencrypted]
     assert proxy_supports_passkey(hass, "plain") is False
     assert hass.services.has_service.call_args_list == [
-        *(call(pairing.ESPHOME_DOMAIN, action) for action in expected_actions),
-        call(pairing.ESPHOME_DOMAIN, expected_actions[0]),
+        *(call(esphome_proxy.ESPHOME_DOMAIN, action) for action in expected_actions),
+        call(esphome_proxy.ESPHOME_DOMAIN, expected_actions[0]),
     ]
 
 
@@ -156,9 +160,9 @@ def test_proxy_support_accepts_entry_identity_scanner_fallback() -> None:
 
     assert proxy_supports_passkey(hass, "aabbccddeeff")
     assert hass.services.has_service.call_args_list == [
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_arm_dimplex_pairing"),
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_set_dimplex_pairing_passkey"),
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_cancel_dimplex_pairing"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_arm_dimplex_pairing"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_set_dimplex_pairing_passkey"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_cancel_dimplex_pairing"),
     ]
 
 def test_select_proxy_source_accepts_entry_identity_fallback() -> None:
@@ -168,9 +172,9 @@ def test_select_proxy_source_accepts_entry_identity_fallback() -> None:
 
     assert select_proxy_source(hass, "heater", service_infos) == "aabbccddeeff"
     assert hass.services.has_service.call_args_list == [
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_arm_dimplex_pairing"),
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_set_dimplex_pairing_passkey"),
-        call(pairing.ESPHOME_DOMAIN, "heater_proxy_cancel_dimplex_pairing"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_arm_dimplex_pairing"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_set_dimplex_pairing_passkey"),
+        call(esphome_proxy.ESPHOME_DOMAIN, "heater_proxy_cancel_dimplex_pairing"),
     ]
 
 
@@ -255,7 +259,7 @@ def test_cached_proxy_route_rejects_full_capacity(
         ),
     )
 
-    assert pairing._source_has_capacity(hass, "full") is False
+    assert pairing._route_candidate(hass, "full", -50).has_capacity is False
 
 
 
@@ -414,9 +418,8 @@ async def test_pairing_starts_after_arm_and_cleans_up_after_pin_submission() -> 
         pair_started.set()
         await pair_gate
 
-    task = await async_start_pairing(
-        hass, "proxy", "AA:BB:CC:DD:EE:01", pair
-    )
+    session = DimplexPairingSession(hass, "proxy", "AA:BB:CC:DD:EE:01", pair)
+    task = await session.async_start()
     await pair_started.wait()
     assert [event[0] for event in events] == [
         "heater_proxy_arm_dimplex_pairing",
@@ -445,7 +448,9 @@ async def test_pairing_start_rejects_a_busy_proxy_without_arming() -> None:
     await lock.acquire()
     try:
         with pytest.raises(DimplexPairingInProgressError) as err:
-            await async_start_pairing(hass, "proxy", "AA:BB", AsyncMock())
+            await DimplexPairingSession(
+                hass, "proxy", "AA:BB", AsyncMock()
+            ).async_start()
         assert str(err.value) == (
             "The selected ESPHome proxy is already pairing with another heater"
         )
@@ -457,7 +462,7 @@ async def test_pairing_start_rejects_a_busy_proxy_without_arming() -> None:
 async def test_pairing_start_releases_lock_when_proxy_cannot_be_armed() -> None:
     hass = make_hass()
     with pytest.raises(DimplexPairingError):
-        await async_start_pairing(hass, "proxy", "AA:BB", AsyncMock())
+        await DimplexPairingSession(hass, "proxy", "AA:BB", AsyncMock()).async_start()
     assert not proxy_pairing_lock(hass, "proxy").locked()
 
 
@@ -465,15 +470,16 @@ async def test_pairing_timeout_clears_relay_and_releases_proxy_lock(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger=pairing.__name__)
-    monkeypatch.setattr(pairing, "PAIRING_TIMEOUT", 0.01)
+    caplog.set_level("WARNING")
+    monkeypatch.setattr(esphome_proxy, "PAIRING_TIMEOUT", 0.01)
     hass = make_hass([make_entry("proxy")])
     hass.async_create_task = lambda coroutine: asyncio.create_task(coroutine)
 
     async def never_pair() -> None:
         await asyncio.get_running_loop().create_future()
 
-    task = await async_start_pairing(hass, "proxy", "AA:BB", never_pair)
+    session = DimplexPairingSession(hass, "proxy", "AA:BB", never_pair)
+    task = await session.async_start()
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(task, timeout=0.1)
     assert any(
@@ -491,14 +497,15 @@ async def test_pairing_cancellation_clears_relay_and_releases_proxy_lock(
 ) -> None:
     hass = make_hass([make_entry("proxy")])
     hass.async_create_task = lambda coroutine: asyncio.create_task(coroutine)
-    caplog.set_level("WARNING", logger=pairing.__name__)
+    caplog.set_level("WARNING")
     pair_started = asyncio.Event()
 
     async def never_pair() -> None:
         pair_started.set()
         await asyncio.get_running_loop().create_future()
 
-    task = await async_start_pairing(hass, "proxy", "AA:BB", never_pair)
+    session = DimplexPairingSession(hass, "proxy", "AA:BB", never_pair)
+    task = await session.async_start()
     await pair_started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -518,14 +525,15 @@ async def test_pairing_cancellation_clears_relay_and_releases_proxy_lock(
 async def test_pairing_failure_clears_relay_and_releases_proxy_lock(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger=pairing.__name__)
+    caplog.set_level("WARNING")
     hass = make_hass([make_entry("proxy")])
     hass.async_create_task = lambda coroutine: asyncio.create_task(coroutine)
 
     async def fail_pair() -> None:
         raise RuntimeError("pair rejected")
 
-    task = await async_start_pairing(hass, "proxy", "AA:BB", fail_pair)
+    session = DimplexPairingSession(hass, "proxy", "AA:BB", fail_pair)
+    task = await session.async_start()
     with pytest.raises(RuntimeError, match="pair rejected"):
         await task
     failure_record = next(
@@ -547,7 +555,7 @@ async def test_pairing_cleanup_failure_does_not_leak_proxy_lock(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hass = make_hass([make_entry("proxy")])
-    caplog.set_level("DEBUG", logger=pairing.__name__)
+    caplog.set_level("DEBUG")
     hass.async_create_task = lambda coroutine: asyncio.create_task(coroutine)
 
     async def fail_cancel(_domain, action, _data, **_kwargs) -> None:
@@ -555,7 +563,8 @@ async def test_pairing_cleanup_failure_does_not_leak_proxy_lock(
             raise HomeAssistantError("proxy disconnected")
 
     hass.services.async_call = AsyncMock(side_effect=fail_cancel)
-    task = await async_start_pairing(hass, "proxy", "AA:BB", AsyncMock())
+    session = DimplexPairingSession(hass, "proxy", "AA:BB", AsyncMock())
+    task = await session.async_start()
     await task
     assert not proxy_pairing_lock(hass, "proxy").locked()
     warning = next(
@@ -583,7 +592,7 @@ async def test_send_passkey_routes_normalized_address_and_pin_to_proxy_action() 
     hass = make_hass([entry])
     await async_send_passkey(hass, "aa:bb", "a1:b2:c3", "123456")
     hass.services.async_call.assert_awaited_once_with(
-        pairing.ESPHOME_DOMAIN,
+        esphome_proxy.ESPHOME_DOMAIN,
         "kitchen_proxy_set_dimplex_pairing_passkey",
         {"address": "a1b2c3", "passkey": "123456"},
         blocking=True,
@@ -617,7 +626,7 @@ async def test_send_passkey_rejects_ineligible_proxy_without_disclosing_secrets(
     assert "654321" not in str(err.value)
     if entries and service is False:
         hass.services.has_service.assert_called_once_with(
-            pairing.ESPHOME_DOMAIN,
+            esphome_proxy.ESPHOME_DOMAIN,
             "heater_proxy_set_dimplex_pairing_passkey",
         )
     hass.services.async_call.assert_not_awaited()
@@ -627,7 +636,7 @@ async def test_cancel_pairing_routes_to_proxy_clear_action() -> None:
     hass = make_hass([make_entry("AA:BB", name="living-proxy")])
     await async_cancel_pairing(hass, "aa:bb")
     hass.services.async_call.assert_awaited_once_with(
-        pairing.ESPHOME_DOMAIN,
+        esphome_proxy.ESPHOME_DOMAIN,
         "living_proxy_cancel_dimplex_pairing",
         {},
         blocking=True,

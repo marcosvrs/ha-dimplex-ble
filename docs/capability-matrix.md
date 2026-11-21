@@ -74,8 +74,8 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read buffer observed; schedule structure/write not verified on AM6532 |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
-| `0/0x1007` | 9 | RW | OpenWindowDetection | yes | present | Raw read only; bit layout/write unverified |
-| `0/0x1008` | 1 | RW | PreEmptiveHeating | yes | present | Raw read only; boolean semantics unverified |
+| `0/0x1007` | 9 | RW | OpenWindowDetection | yes | present | Verified configuration switch; `00/01` in the first byte with eight zero bytes, read/write/readback verified on AM2086; behavior matches the official [PLXE Series C manual, Issue 7](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf) |
+| `0/0x1008` | 1 | RW | PreEmptiveHeating | yes | present | Verified configuration switch; `00/01` boolean read/write/readback verified on AM2086; Dimplex documents this behavior as Adaptive Start in the same manual |
 | `2/0x100C` | 1 | RW | RfComms | yes | present | Read-only diagnostic sensor; writes blocked |
 | `0/0x100D` | 1 | RW | AdvanceHeating | yes | present | Raw read only; reversible AM6532 command unverified |
 | `1/0x100E` | 1 | RW | OtaEnable | yes | absent | Not available on live AM6532 inventory |
@@ -197,8 +197,8 @@ remain separate from implemented Home Assistant semantics.
 | Address | ConfigR name/evidence | Live value | Decision |
 |---|---|---|---|
 | `0/0x1003` | Effective/current setpoint mirror | `1400` at a 20 °C target | Duplicate of the climate target; no second target entity |
-| `0/0x1007` | OpenWindowDetection | `010000000000000000` | Configuration payload; field semantics and safe control not verified |
-| `0/0x1008` | PreEmptiveHeating | `01` | Configuration flag; enabled/disabled semantics not verified |
+| `0/0x1007` | OpenWindowDetection | `010000000000000000` | Configuration switch; disabled-to-enabled readback verified on AM2086; manual confirms global interruption of active modes and Heating Off behavior |
+| `0/0x1008` | PreEmptiveHeating | `01` | Configuration switch; disabled-to-enabled readback verified on AM2086; manual confirms Adaptive Start behavior in Timer Mode |
 | `0/0x100D` | AdvanceHeating | `00` | Readable status; reversible command not tested on this model |
 | `0/0x1016` | Setback | `0008` | Configuration value; unit/meaning not verified |
 | `0/0x1017` | Runback | `017c` | Configuration value; encoding not verified |
@@ -259,8 +259,8 @@ Protected values are intentionally not read.
 | `0x1023` | `1200` | Current target, 18°C |
 | `0x1005` | `00` | Temperature-unit value observed as Celsius |
 | `0x1006` | `07001e00` | Setpoint bounds 7–30°C from bytes 0 and 2 |
-| `0x1007` | `010000000000000000` | Open-window payload; semantics not decoded |
-| `0x1008` | `01` | Pre-emptive-heating payload; enable semantics not verified |
+| `0x1007` | `010000000000000000` | Open Window Detection enabled; first-byte boolean layout and write/readback behavior verified on AM2086; official manual describes the resulting Heating Off behavior |
+| `0x1008` | `01` | Adaptive Start enabled; one-byte boolean layout and write/readback behavior verified on AM2086; official manual calls this Adaptive Start |
 | `0x100D` | `00` | Advance-heating payload; no command mapping |
 | `0x1011` | `00` | Error status clear |
 | `0x1012`–`0x1015` | protected/unread | Security or undocumented boundary; blocked |
@@ -361,8 +361,8 @@ undocumented boundaries.
 | `0/0x1023` | `1000` | Current target payload; first byte is 16°C in this live state |
 | `0/0x1005` | `00` | Current display-unit value; the integration currently interprets this as Celsius |
 | `0/0x1006` | `07001e00` | Bounds payload; current integration interpretation is 7–30°C |
-| `0/0x1007` | `010000000000000000` | Stable configuration payload; semantics remain unproven |
-| `0/0x1008` | `01` | Stable configuration payload; semantics remain unproven |
+| `0/0x1007` | `010000000000000000` | Open Window Detection enabled; decoded as a verified boolean setting |
+| `0/0x1008` | `01` | Adaptive Start enabled; decoded as a verified boolean setting |
 | `0/0x100d` | `00` | Stable status/configuration payload; no command semantics inferred |
 | `0/0x1011` | `00` | No error value in this sample |
 | `0/0x1016` | `0008` | Stable two-byte configuration payload; units remain unknown |
@@ -629,7 +629,7 @@ ConfigR-derived hypotheses, not confirmed Home Assistant semantics:
 | Experimental radiator clock | `0/0x0006` | 7 bytes | ConfigR `SetRtc` format; write is available, but no semantic date validation is performed |
 | Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout is inferred; AM6532 schedule behavior remains unverified |
 | Experimental display backlight color | `1/0x0001` | 4 bytes | Reversible color payload observed in the protocol family |
-| Existing experimental fields | `0/0x1007`, `0/0x1008`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x0005`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |
+| Existing experimental fields | `0/0x0006`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x0005`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |
 
 The controls are for controlled manual testing, not normal automations. Protected
 security, credential, OTA, factory-reset, EOL, and undocumented write boundaries

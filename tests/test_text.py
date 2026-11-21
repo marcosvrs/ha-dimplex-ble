@@ -31,7 +31,7 @@ def make_coordinator(hass, client):
 async def test_setup_reads_and_exposes_experimental_fields(hass) -> None:
     client = SimpleNamespace(
         address=ADDRESS,
-        async_read_raw_fields=AsyncMock(return_value={(0, 0x1007): b"\x01" * 9}),
+        async_read_raw_fields=AsyncMock(return_value={(0, 0x100D): b"\x01"}),
     )
     coordinator = make_coordinator(hass, client)
     entry = SimpleNamespace(runtime_data=coordinator)
@@ -39,20 +39,23 @@ async def test_setup_reads_and_exposes_experimental_fields(hass) -> None:
 
     await async_setup_entry(hass, entry, entities.extend)
 
-    field = next(field for field in EXPERIMENTAL_FIELDS if field.address == (0, 0x1007))
+    field = next(field for field in EXPERIMENTAL_FIELDS if field.address == (0, 0x100D))
     entity = next(entity for entity in entities if entity._field == field)
-    assert entity.native_value == "01" * 9
+    assert entity.native_value == "01"
     assert entity.extra_state_attributes == {
         "service_group": 0,
-        "characteristic": 0x1007,
-        "payload_bytes": 9,
-        "raw_value": "01" * 9,
+        "characteristic": 0x100D,
+        "payload_bytes": 1,
+        "raw_value": "01",
+        "advance_active": True,
+        "decoded_value": "on",
     }
     assert {entity._field.address for entity in entities} >= {
         (0, 0x0006),
         (0, 0x1002),
         (1, 0x0001),
     }
+    assert all(field.address != (0, 0x1007) for field in EXPERIMENTAL_FIELDS)
     client.async_read_raw_fields.assert_awaited_once_with(
         tuple(field.address for field in EXPERIMENTAL_FIELDS)
     )
@@ -86,36 +89,6 @@ async def test_experimental_text_adds_established_decoded_attributes(hass) -> No
     assert entity.extra_state_attributes["decoded_value"] == "on"
 
 
-
-def test_experimental_text_exposes_fixed_payload_metadata(hass) -> None:
-    coordinator = make_coordinator(hass, SimpleNamespace(address=ADDRESS))
-    field = next(field for field in EXPERIMENTAL_FIELDS if field.address == (0, 0x1007))
-    entity = DimplexExperimentalRawText(coordinator, field, None)
-
-    assert entity._attr_translation_key == field.translation_key
-    assert entity._attr_native_min == field.payload_length * 2
-    assert entity._attr_native_max == field.payload_length * 2
-    assert entity._attr_pattern == rf"[0-9a-fA-F]{{{field.payload_length * 2}}}"
-async def test_experimental_text_writes_readback_and_refreshes(
-    hass, monkeypatch
-) -> None:
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_write_raw=AsyncMock(return_value=b"\x00" * 9),
-    )
-    coordinator = make_coordinator(hass, client)
-    coordinator.async_request_refresh = AsyncMock()
-    field = next(field for field in EXPERIMENTAL_FIELDS if field.address == (0, 0x1007))
-    entity = DimplexExperimentalRawText(coordinator, field, b"\x01" * 9)
-    write_state = Mock()
-    monkeypatch.setattr(entity, "async_write_ha_state", write_state)
-
-    await entity.async_set_value("00" * 9)
-
-    client.async_write_raw.assert_awaited_once_with(0, 0x1007, b"\x00" * 9)
-    coordinator.async_request_refresh.assert_awaited_once()
-    assert entity.native_value == "00" * 9
-    write_state.assert_called_once_with()
 
 
 async def test_experimental_text_maps_write_failure(hass) -> None:

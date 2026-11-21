@@ -50,6 +50,7 @@ async def test_multiple_heaters_share_proxy_connection_slots(
             active -= 1
 
         backend.disconnect = AsyncMock(side_effect=disconnect)
+        backend.pair = AsyncMock()
         return backend
 
     monkeypatch.setattr(client_module, "establish_connection", connect)

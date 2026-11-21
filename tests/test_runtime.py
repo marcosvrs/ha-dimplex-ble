@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import probatio
 import pytest
+from homeassistant.components.bluetooth import BluetoothScanningMode
 from homeassistant.components.climate import ClimateEntityFeature, HVACAction, HVACMode
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     PERCENTAGE,
@@ -64,6 +66,15 @@ from custom_components.dimplex_ble.sensor import (
 
 ADDRESS = "AA:BB:CC:DD:EE:20"
 PROXY = "esphome-proxy"
+
+
+@pytest.fixture(autouse=True)
+def mock_entry_bluetooth_callback_registration(monkeypatch):
+    """Keep entry setup tests independent of the live Bluetooth manager."""
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_register_callback",
+        Mock(return_value=Mock()),
+    )
 
 
 def snapshot(
@@ -224,6 +235,38 @@ async def test_rule_advertisement_callback_queues_matching_and_ignores_nonmatchi
     )
     assert len(queued) == 1
     assert hass.data[DOMAIN]["cancel_discovery"] is register.return_value
+
+
+async def test_rule_advertisement_reloads_retrying_entry(hass, monkeypatch):
+    register = Mock(return_value=Mock())
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_register_callback", register
+    )
+    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
+    entry = SimpleNamespace(
+        unique_id=ADDRESS,
+        state=ConfigEntryState.SETUP_RETRY,
+        entry_id="entry-id",
+    )
+    monkeypatch.setattr(
+        hass.config_entries, "async_entries", Mock(return_value=[entry])
+    )
+    reload_entry = Mock()
+    monkeypatch.setattr(
+        hass.config_entries, "async_schedule_reload", reload_entry
+    )
+
+    await async_setup(hass, {})
+    discovered = register.call_args.args[1]
+    discovered(
+        SimpleNamespace(
+            name="heater<Dimplex>",
+            device=SimpleNamespace(address=ADDRESS, name=None),
+        ),
+        None,
+    )
+
+    reload_entry.assert_called_once_with("entry-id")
 
 
 async def test_rule_advertisement_flow_is_executed_and_manifest_names_are_skipped(
@@ -514,6 +557,56 @@ async def test_rule_setup_entry_uses_default_address_type_when_route_is_missing(
     }
     first_refresh.assert_awaited_once()
     forwarded.assert_awaited_once_with(entry, PLATFORMS)
+
+
+async def test_rule_setup_entry_refreshes_when_heater_reappears(
+    hass, monkeypatch
+):
+    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.DimplexBluetoothClient",
+        Mock(return_value=client),
+    )
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.ble_device_from_source",
+        Mock(return_value=object()),
+    )
+    first_refresh = AsyncMock()
+    monkeypatch.setattr(
+        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
+    )
+    forward = AsyncMock()
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forward)
+    refresh = AsyncMock()
+    monkeypatch.setattr(DimplexCoordinator, "async_request_refresh", refresh)
+    cancel = Mock()
+    register = Mock(return_value=cancel)
+    monkeypatch.setattr(
+        "custom_components.dimplex_ble.bluetooth.async_register_callback",
+        register,
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+
+    await async_setup_entry(hass, entry)
+
+    register.assert_called_once()
+    assert register.call_args.args[2] == {
+        "address": ADDRESS.casefold(),
+        "connectable": True,
+    }
+    assert register.call_args.args[3] is BluetoothScanningMode.ACTIVE
+    register.call_args.args[1](SimpleNamespace(), None)
+    await hass.async_block_till_done()
+    refresh.assert_awaited_once()
+
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+    )
+    assert await async_unload_entry(hass, entry) is True
+    cancel.assert_called_once()
 
 
 async def test_rule_setup_entry_uses_device_found_after_active_scan(hass, monkeypatch):

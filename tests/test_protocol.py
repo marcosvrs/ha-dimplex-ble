@@ -7,6 +7,8 @@ from custom_components.dimplex_ble.protocol import (
     BLOCKED_WRITES,
     DIMPLEX_GROUPS,
     MAX_GATT_VALUE_BYTES,
+    OPEN_WINDOW_DETECTION,
+    PREEMPTIVE_HEATING,
     DimplexProtocolError,
     HeaterSnapshot,
     ProtectedCharacteristicError,
@@ -338,6 +340,26 @@ def test_preset_mode_encoding_rejects_unverified_modes() -> None:
     with pytest.raises(DimplexProtocolError) as err:
         encode_preset_mode("boost")
     assert str(err.value) == "Unsupported preset mode"
+
+
+def test_parse_snapshot_decodes_preemptive_heating_only_for_boolean_payloads() -> None:
+    assert parse_snapshot({PREEMPTIVE_HEATING: b"\x01"}).preemptive_heating is True
+    assert parse_snapshot({PREEMPTIVE_HEATING: b"\x00"}).preemptive_heating is False
+    assert parse_snapshot({PREEMPTIVE_HEATING: b"\x02"}).preemptive_heating is None
+    assert parse_snapshot({PREEMPTIVE_HEATING: b"\x01\x00"}).preemptive_heating is None
+
+
+def test_parse_snapshot_decodes_open_window_only_for_boolean_payloads() -> None:
+    enabled = b"\x01" + b"\x00" * 8
+    disabled = b"\x00" + b"\x00" * 8
+    assert parse_snapshot({OPEN_WINDOW_DETECTION: enabled}).open_window_detection is True
+    assert parse_snapshot({OPEN_WINDOW_DETECTION: disabled}).open_window_detection is False
+    assert (
+        parse_snapshot({OPEN_WINDOW_DETECTION: b"\x02" + b"\x00" * 8})
+        .open_window_detection
+        is None
+    )
+    assert parse_snapshot({OPEN_WINDOW_DETECTION: b"\x01"}).open_window_detection is None
 
 
 def test_parse_snapshot_decodes_all_available_fields() -> None:

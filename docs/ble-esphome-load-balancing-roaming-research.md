@@ -18,10 +18,11 @@ There are three different behaviors that are often called roaming:
    bond; the ESPHome protocol has no bond-replication or cross-proxy migration
    mechanism.
 
-For a Dimplex heater, only the first two are generally safe automatically. The
-current integration deliberately pins each heater to its configured proxy for
-runtime connections because the bond belongs to the proxy that performed
-pairing.
+For a Dimplex heater, advertisement aggregation is safe automatically. Runtime
+connection-path selection is safe only among currently advertised routes whose
+proxy-local bond has already been verified. The integration therefore keeps the
+configured proxy for commissioning and uses controlled failover/rebalancing only
+after a fresh encrypted connection can be established.
 
 ## ESPHome proxy capacity
 
@@ -117,91 +118,146 @@ Automatic migration must not be used as a recovery retry.
 
 ## Current Dimplex integration behavior
 
-The integration intentionally differs from generic Home Assistant path
-selection:
+The integration keeps the configured `proxy_source` as the commissioning and
+bond-ownership route. It now uses Home Assistant's registered Bluetooth paths
+for new runtime connections:
 
-- `proxy_source` is stored in each config entry.
-- `ble_device_from_source()` resolves the heater through that exact proxy.
-- The client uses that proxy's connector and does not silently roam.
-- One semaphore is maintained per proxy, currently matching ESPHome's default
-  three-slot configuration.
-- The semaphore limits Dimplex integration concurrency only; it does not know
-  about slots consumed by other Home Assistant integrations.
-- A persistent client connection is reused while healthy and released on
-  operation failure or unload.
+- `async_scanner_devices_by_address()` supplies the current connectable
+  advertisements.
+- RSSI is read from the HA advertisement record (`advertisement.rssi`), which
+  is the current Home Assistant `BluetoothScannerDevice` API.
+- Home Assistant's native wrapped client already uses this same scanner
+  registry and scanner connection-capacity model. The integration keeps the
+  source-specific connector only because the ESPHome client exposes the
+  required native `pair()` encryption request there; the HA wrapper does not
+  expose that ESPHome-specific operation. No proxy firmware routing logic is
+  duplicated.
+- The connector's current `can_connect()` result is also honored, so a route
+  that is registered but temporarily unable to accept connections is skipped
+  before any GATT attempt.
+- For a fresh connection, known free connection capacity is preferred, then the
+  current advertisement RSSI; a live connection is retained until a safe
+  operation-boundary handoff is justified.
+- A route that drops an operation is deprioritized for the next fresh
+  connection, so recovery tries another eligible path before retrying the
+  failed proxy. Failed routes are also held out of proactive RSSI rebalancing
+  for five minutes while a working route remains available.
+- The selected route is retained for the persistent connection and is
+  reconsidered after disconnect, operation failure, reload, or restart.
+- While connected, the client evaluates current advertisements at operation
+  boundaries. After a five-minute stability cooldown, it performs a controlled
+  disconnect/reconnect only when another available route is at least 10 dBm
+  stronger or the active route is no longer usable.
 
-This protects proxy-local bonding and prevents a reconnect from accidentally
-being attempted through a different controller. It also means the integration
-currently does not benefit from Home Assistant's generic cross-proxy path
-scoring for runtime Dimplex connections.
+This is not in-place GATT migration. The client never changes a live
+connection's proxy underneath an operation; it closes the connection at a safe
+operation boundary, then establishes a fresh encrypted connection. This avoids
+breaking device transaction state or creating competing proxy-local bonds.
 
-## Implications for two proxies and three heaters
+Each newly established runtime route uses:
+
+1. `connect(pair=False)` to open the GATT link without starting PIN pairing;
+2. the native ESPHome `client.pair()` operation to request encryption from an
+   existing proxy-local bond; and
+3. the first protected GATT read only after that encryption request succeeds.
+
+The second step maps to ESPHome's native `esp_ble_set_encryption()` path. It
+does not submit a passkey. Explicit `pair=True` remains limited to intentional
+commissioning and reauthentication.
+
+The integration maintains one semaphore per proxy, matching ESPHome's default
+three-slot configuration. The semaphore limits Dimplex's own connection
+attempts; ESPHome's allocation response remains authoritative because other
+Bluetooth integrations may consume slots.
+
+## Two-proxy, three-heater implications
 
 The current layout is valid:
 
 - AM6532 and AM8224 share one proxy: two active GATT clients, below the default
   three-slot limit.
-- AM2086 uses the second proxy: one active GATT client.
-- Passive advertisements can be heard by either proxy without consuming slots,
-  but active reads and writes use the configured bond-owning proxy.
+- AM2086 uses the second proxy, subject to that heater being currently
+  discoverable and bonded.
+- Passive advertisements can be heard by either proxy without consuming slots.
+- Active reads and writes use a route that has a usable bond; a stronger RSSI
+  alone does not create a bond.
 
-Other active Bluetooth integrations may consume the remaining slot on the
-shared proxy. The integration's local semaphore cannot account for those
-external consumers; ESPHome's actual allocation response and proxy logs are the
-authoritative capacity view.
+AM6532 and AM8224 were independently verified with authenticated protected
+reads through both ESPHome proxies. This proves that those heaters can fail
+over between the two routes without a new PIN after each route has been
+commissioned. AM2086 remains unverified when it is not advertised; the
+integration does not guess a route or invent a bond.
 
-## Safe design options
+## Safe design boundaries
 
-### Recommended now: proxy affinity
+### Automatic runtime route selection
 
-Keep the configured proxy for already-paired Dimplex heaters. On a temporary
-failure, retry and reconnect through the same proxy. Mark the entity
-unavailable if that proxy cannot reach the device. Do not probe an unverified
-alternate proxy during normal runtime.
+Automatic selection is safe at a fresh connection boundary or at a controlled
+operation boundary where the existing GATT connection is closed before the new
+route is selected:
 
-### Safe load balancing: assignment only
+- use currently advertised, connectable paths;
+- use registered ESPHome proxies only;
+- select the best eligible route at a fresh connection boundary;
+- retain the active route during healthy operation until a rebalance threshold
+  is met;
+- respect reported slot capacity;
+- fall back to another candidate only after the first candidate fails; and
+- request existing-bond encryption without sending a PIN.
 
-For a new heater before pairing, the integration ranks eligible proxies by:
+If an alternate path has no usable bond, it fails cleanly and the next route is
+tried. The integration does not automatically begin first-time pairing on an
+alternate path.
 
-1. passkey-relay support;
-2. an available ESPHome connection slot;
-3. remaining proxy capacity;
-4. the number of existing Dimplex entries assigned to that proxy; and
-5. RSSI as the final tie-breaker.
+### Explicit commissioning or migration
 
-The allocation value is read from Home Assistant's registered scanner, so the
-selection uses the proxy's actual reported slot state rather than only the
-integration's local semaphore. The selected route is persisted after pairing.
-This balances new assignments without moving an existing bond.
+An explicit pairing flow can select a proxy, perform the supported PIN exchange,
+verify a protected read after reconnect, and then persist that proxy as the
+configured route. This remains user-driven because ESPHome has no bond export or
+cross-proxy bond replication API.
 
-### Explicit migration: possible, but user-driven
+### Not implemented
 
-A migration flow could let the user choose another proxy, perform a fresh
-pairing, verify a protected read, and only then save the new `proxy_source`. It
-must not assume that a proxy-side `UNPAIR` operation erases the heater's own
-bond or that a new proxy can recover the old bond without a PIN.
+The integration does not:
 
+- change a proxy underneath an active GATT operation;
+- round-robin healthy persistent connections;
+- open GATT probes to every proxy periodically just to score RSSI;
+- send a PIN automatically during runtime failover; or
+- treat advertisement strength as proof of authentication.
 
-### Not recommended: automatic runtime roaming
-
-Do not automatically switch a bonded Dimplex heater to another proxy merely
-because that proxy has stronger RSSI or a free slot. This can produce repeated
-PIN prompts, failed encryption, stale availability, and competing bonds.
+These restrictions avoid the previously observed failure mode where arbitrary
+alternate-proxy probes disrupted otherwise healthy assigned connections.
 
 ## Evidence and remaining questions
 
-**Verified upstream facts:** ESPHome has per-proxy GATT slots; Home Assistant's
-generic Bluetooth wrapper scores available scanner paths; the ESPHome API has
-per-proxy pairing and allocation messages; no cross-proxy bond-transfer API was
-found in the current protocol.
+**Verified upstream facts:** ESPHome has per-proxy GATT slots; Home Assistant
+exposes source-specific scanner paths and allocation state; ESPHome has
+per-proxy pairing and encryption operations; no cross-proxy bond-transfer API
+was found in the current protocol.
 
-**Project-specific fact:** the Dimplex integration stores and enforces a
-proxy-specific route because the current pairing design requires the same proxy
-to own the authenticated connection.
+**Verified project facts:** the integration stores the configured proxy for
+commissioning; AM6532 and AM8224 have usable bonds on both proxies; AM2086 was
+not observed in the available raw scan and therefore is not claimed as
+cross-proxy verified.
 
-**Open implementation question:** whether future `bleak-esphome` or ESPHome
-versions add portable bond export/import. Until an upstream API and a verified
-Dimplex migration sequence exist, runtime roaming should remain disabled.
+An independent 120-second raw-advertisement scan on both proxies saw only
+AM6532 and AM8224. A direct address-only GATT attempt to AM2086 through the
+living-room proxy also failed before authentication. The current evidence
+therefore does not justify adding an address-only connection fallback.
+
+The later direct `aioesphomeapi` raw-advertisement test attached independent
+API clients to both live proxies. It saw no AM2086 advertisements, then the
+existing HA connections began timing out until Home Assistant was restarted.
+This does not prove a universal ESPHome single-client limitation, but it is
+conclusive operational evidence for this installation: diagnostics must not
+attach competing API subscribers to live proxies. The integration therefore
+uses only Home Assistant's already-managed scanner registry for route
+selection and monitoring.
+
+**Remaining limitation:** a heater must first be commissioned through every
+proxy that may be used for automatic failover. Runtime route selection cannot
+manufacture a missing bond.
 
 ## Project runtime finding: pairing is not a reconnect operation
 
@@ -216,10 +272,15 @@ requested a new pairing operation instead of only reconnecting with the
 existing bond. This was a concrete integration defect, not a limitation of
 ESPHome roaming.
 
-The client now uses `pair=True` only for the intentional first-time pairing
-operation. Runtime reads, writes, and the post-pair bond verification use
-`pair=False`. This keeps the proxy-local bond in use without repeatedly
-starting the PIN exchange.
+The client now uses `pair=True` only for the intentional commissioning or
+reauthentication operation. Runtime reads, writes, and the post-pair bond
+verification use `pair=False`, followed immediately by the native
+`client.pair()` encryption request. This keeps the proxy-local bond in use
+without repeatedly starting the PIN exchange.
+During commissioning, route selection is intentionally narrower than runtime
+roaming: the client may use only the proxy that received the address-scoped
+pairing arm action. This prevents a stronger advertisement from silently
+redirecting a PIN exchange to a second proxy whose relay was not armed.
 
 The live two-proxy test also showed that arbitrary alternate-proxy GATT probes
 are unsafe as a health check: while the three heaters were actively connected
@@ -228,11 +289,20 @@ left the assigned connections unavailable until both proxies were rebooted.
 This is evidence against probing unbonded alternate paths during normal
 polling. It is not evidence that the alternate proxies lack radio range.
 
-Current live allocation after recovery:
+The last observed live allocation after recovery was:
 
 - Main Bedroom proxy: two allocated heater connections, one free slot.
 - Living Room proxy: one allocated heater connection, two free slots.
 
-The safe next step for roaming is explicit per-heater commissioning through a
-second proxy, followed by authenticated-read verification. Runtime load
-balancing must only choose among routes proven to own a usable Dimplex bond.
+AM6532 and AM8224 have completed explicit commissioning and authenticated-read
+verification through both proxies. AM2086 still requires an observed,
+authenticated route before it can participate in automatic failover.
+The post-cooldown observation then recorded successful coordinator updates for
+AM6532 and AM8224 throughout the 15-minute window. No route-switch or
+authentication-failure log occurred for either bonded heater. The only failed
+entry was AM2086, whose configured address remains `c4:d8:d5:69:c0:86`.
+
+An active pairing flow was separately attempting address
+`d0:ef:76:36:dd:be` through the main-bedroom proxy and timed out before
+authentication. That address is not stored in any of the three configured
+entries, so its relationship to AM2086 remains unproven.

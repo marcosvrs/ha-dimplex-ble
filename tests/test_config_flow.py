@@ -22,7 +22,7 @@ from custom_components.dimplex_ble.const import (
     CONF_PROXY_SOURCE,
     DOMAIN,
 )
-from custom_components.dimplex_ble.pairing import (
+from custom_components.dimplex_ble.esphome_proxy import (
     DEBUG_LOG_PREFIX,
     DimplexPairingError,
     DimplexPairingInProgressError,
@@ -641,6 +641,51 @@ async def test_rule_manual_route_name_prefers_selected_proxy_and_falls_back_safe
             "label": "Dimplex sample-heater-3 (-45 dBm)",
         },
     ]
+
+
+async def test_rule_cached_route_missing_from_snapshot_does_not_500(hass, monkeypatch):
+    address = format_mac("AA:BB:CC:DD:EE:44")
+    infos = [service_info(address, "radiator-cached<Dimplex>", -70, source="host")]
+    monkeypatch.setattr(
+        config_flow.bluetooth,
+        "async_discovered_service_info",
+        Mock(return_value=infos),
+    )
+    monkeypatch.setattr(
+        config_flow, "select_proxy_source", Mock(return_value="cached-proxy")
+    )
+    cached_device = object()
+    monkeypatch.setattr(
+        config_flow, "ble_device_from_source", Mock(return_value=cached_device)
+    )
+
+    result = await start_user_flow(hass)
+    selected = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ADDRESS: address}
+    )
+
+    assert selected["step_id"] == "passkey"
+    flow = hass.config_entries.flow._progress[selected["flow_id"]]
+    assert flow._ble_device is cached_device
+
+
+async def test_rule_cached_route_without_cached_device_is_skipped(hass, monkeypatch):
+    address = format_mac("AA:BB:CC:DD:EE:45")
+    infos = [service_info(address, "radiator-unsupported<Dimplex>", -70)]
+    monkeypatch.setattr(
+        config_flow.bluetooth,
+        "async_discovered_service_info",
+        Mock(return_value=infos),
+    )
+    monkeypatch.setattr(
+        config_flow, "select_proxy_source", Mock(return_value="cached-proxy")
+    )
+    monkeypatch.setattr(config_flow, "ble_device_from_source", Mock(return_value=None))
+
+    result = await start_user_flow(hass)
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "proxy_passkey_support_missing"
 
 
 async def test_rule_manual_labels_number_heaters_without_local_names(hass, monkeypatch):
