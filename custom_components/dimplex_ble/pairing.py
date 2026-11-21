@@ -141,6 +141,7 @@ def _source_has_capacity(hass: HomeAssistant, source: str) -> bool:
     allocations = scanner.get_allocations() if scanner is not None else None
     return allocations is None or allocations.free > 0
 
+
 def select_proxy_source(
     hass: HomeAssistant,
     address: str,
