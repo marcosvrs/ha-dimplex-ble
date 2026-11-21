@@ -6,6 +6,7 @@ esp32:
   board: esp32-s3-devkitc-1
   framework:
     type: esp-idf
+    version: 5.5.5
 
 external_components:
   # The stock ESPHome proxy already provides scanning, connections, bonding,

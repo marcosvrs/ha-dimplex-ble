@@ -122,6 +122,21 @@ heaters. `CONFIG_BT_BLE_RPA_SUPPORTED: "n"` is retained because the verified
 production proxy used it successfully; it is not a license to add more BLE
 customization.
 
+### Deployment invariant
+
+Both production proxies must resolve the framework pin to ESP-IDF 5.5.5. On
+2026-11-21, the main-bedroom YAML had drifted back to the package default
+(5.5.6) while the living-room YAML still pinned 5.5.5. This was observable with
+`esphome config`, before firmware upload. Restore the explicit pin before
+building the main proxy; otherwise the bonded-reconnect regression workaround
+is not active.
+
+The passkey action address must be the normalized twelve-hex-digit Bluetooth
+address (for example `c4d8d56f6532`), not a colon-separated address. The HA
+integration normalizes it before calling ESPHome. Direct diagnostic scripts
+must do the same or the relay rejects the action as invalid and the subsequent
+authentication attempt times out.
+
 The proxy must expose only these Dimplex user actions:
 
 - `arm_dimplex_pairing(address)`
