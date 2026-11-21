@@ -55,6 +55,7 @@ sequence is not recoverable from the artifact and is therefore not guessed.
   proxy-local. RSSI-based cross-proxy roaming is intentionally not used.
 
 ## Installation
+[![Open your Home Assistant instance and start setting up Dimplex BLE.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=dimplex_ble)
 
 1. Install the `custom_components/dimplex_ble` directory.
 2. Install the minimal `components/dimplex_passkey_proxy` component in the ESPHome
@@ -64,7 +65,9 @@ sequence is not recoverable from the artifact and is therefore not guessed.
    `arm_dimplex_pairing`, `set_dimplex_pairing_passkey`, and
    `cancel_dimplex_pairing`, plus the stock `esp32_ble` settings
    `io_capability: keyboard_only` and `auth_req_mode: bond_mitm`.
-5. Restart Home Assistant and add **Dimplex BLE**.
+5. If manually copying into a running Home Assistant instance, restart Home
+   Assistant, then add **Dimplex BLE**. Marketplace installs can load the
+   config flow without a restart.
 
 The config flow selects a reachable heater and its proxy, arms pairing, then asks
 for the six-digit PIN shown by the heater. The PIN is forwarded to the selected
