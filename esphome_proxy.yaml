@@ -26,8 +26,6 @@ logger:
 api:
   encryption:
     key: !secret api_encryption_key
-  # HA and the ESPHome management client need concurrent API sessions.
-  max_connections: 16
   actions:
     - action: arm_dimplex_pairing
       variables:
