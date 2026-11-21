@@ -8,7 +8,7 @@ from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
     BluetoothServiceInfoBleak,
 )
-from homeassistant.config_entries import SOURCE_BLUETOOTH
+from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
@@ -100,10 +100,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if is_manifest_discovery_name(name):
             return
         address = format_mac(service_info.device.address)
-        if any(
-            existing.unique_id and existing.unique_id.casefold() == address.casefold()
-            for existing in hass.config_entries.async_entries(DOMAIN)
-        ):
+        existing_entry = next(
+            (
+                existing
+                for existing in hass.config_entries.async_entries(DOMAIN)
+                if existing.unique_id
+                and existing.unique_id.casefold() == address.casefold()
+            ),
+            None,
+        )
+        if existing_entry is not None:
+            if existing_entry.state is ConfigEntryState.SETUP_RETRY:
+                hass.config_entries.async_schedule_reload(existing_entry.entry_id)
             return
         if (
             address in pending
@@ -151,17 +159,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> N
     clients.append(client)
     coordinator = DimplexCoordinator(hass, entry, client)
     entry.runtime_data = coordinator
-
     # Config entries are created only after pairing succeeds. Require one live
     # snapshot before forwarding entities so startup retries remain meaningful.
     try:
+        cancel_advertisement = bluetooth.async_register_callback(
+            hass,
+            coordinator.async_handle_advertisement,
+            {"address": format_mac(address), "connectable": True},
+            BluetoothScanningMode.ACTIVE,
+        )
+        coordinator.set_advertisement_callback_canceller(cancel_advertisement)
         await coordinator.async_config_entry_first_refresh()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
         clients.remove(client)
-        shutdown = getattr(client, "async_shutdown", None)
-        if shutdown is not None:
-            await shutdown()
+        await coordinator.async_shutdown()
         raise
 
 

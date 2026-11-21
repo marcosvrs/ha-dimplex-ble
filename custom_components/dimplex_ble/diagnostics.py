@@ -9,11 +9,8 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_ADDRESS, CONF_PROXY_SOURCE
 from .coordinator import DimplexConfigEntry
-from .pairing import (
-    ble_device_from_source,
-    find_proxy_entry,
-    proxy_supports_passkey,
-)
+from .esphome_proxy import find_proxy_entry, proxy_supports_passkey
+from .pairing import ble_device_from_source
 
 
 async def async_get_config_entry_diagnostics(

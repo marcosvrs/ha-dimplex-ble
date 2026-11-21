@@ -17,4 +17,10 @@ PENDING_DEVICES = "pending_devices"
 CLIENTS = "clients"
 
 DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
-PLATFORMS = (Platform.CLIMATE, Platform.SELECT, Platform.SENSOR, Platform.TEXT)
+PLATFORMS = (
+    Platform.CLIMATE,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TEXT,
+)

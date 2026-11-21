@@ -6,6 +6,8 @@ from math import isfinite
 from typing import Final
 
 type GattAddress = tuple[int, int]
+OPEN_WINDOW_DETECTION: Final[GattAddress] = (0, 0x1007)
+PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
 
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
 MAX_GATT_VALUE_BYTES: Final = 512
@@ -86,6 +88,8 @@ class HeaterSnapshot:
     product_code: str | None = None
     ui_version: str | None = None
     rf_firmware_revision: int | None = None
+    open_window_detection: bool | None = None
+    preemptive_heating: bool | None = None
 
 
 def service_uuid(group: int) -> str:
@@ -347,6 +351,20 @@ def parse_snapshot(
 
     mode = values.get((0, 0x1001))
     display_unit = values.get((0, 0x1005))
+    open_window = values.get(OPEN_WINDOW_DETECTION)
+    open_window_detection = (
+        bool(open_window[0])
+        if open_window is not None
+        and len(open_window) == 9
+        and open_window[0] in (0, 1)
+        else None
+    )
+    preemptive = values.get(PREEMPTIVE_HEATING)
+    preemptive_heating = (
+        bool(preemptive[0])
+        if preemptive is not None and len(preemptive) == 1 and preemptive[0] in (0, 1)
+        else None
+    )
 
     power_loading = values.get((3, 0x000A))
     rated_power_w = (
@@ -383,4 +401,6 @@ def parse_snapshot(
         trac_output_power_percent=trac_output_power_percent,
         ui_version=_parse_selected_version(ui_version, 1),
         rf_firmware_revision=rf_firmware_revision,
+        open_window_detection=open_window_detection,
+        preemptive_heating=preemptive_heating,
     )

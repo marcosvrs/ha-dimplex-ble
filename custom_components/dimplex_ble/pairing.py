@@ -1,103 +1,27 @@
-"""ESPHome proxy selection and one-time PIN forwarding."""
+"""Select ESPHome proxy routes for Dimplex pairing."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from collections.abc import Sequence
 
 from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 
 from .const import CONF_PROXY_SOURCE, DOMAIN
-
-# ESPHome config-entry keys; avoid importing its eager package initializer.
-ESPHOME_DOMAIN = "esphome"
-CONF_BLUETOOTH_MAC_ADDRESS = "bluetooth_mac_address"
-CONF_DEVICE_NAME = "device_name"
-CONF_NOISE_PSK = "noise_psk"
-
-PAIRING_ARM_ACTION = "arm_dimplex_pairing"
-PAIRING_ACTION = "set_dimplex_pairing_passkey"
-PAIRING_CANCEL_ACTION = "cancel_dimplex_pairing"
-PAIRING_TIMEOUT = 180
+from .esphome_proxy import (
+    find_proxy_entry,
+    proxy_supports_passkey,
+)
+from .esphome_proxy import (
+    normalize_address as _normalize_address,
+)
+from .route_policy import RouteCandidate, rank_route, rank_routes
 
 _LOGGER = logging.getLogger(__name__)
 DEBUG_LOG_PREFIX = "[DEBUG-DIMPLEX-PIN-20261117]"
-
-
-def _normalize_address(address: str) -> str:
-    """Normalize a Bluetooth address without changing its identity."""
-    return address.replace(":", "").replace("-", "").casefold()
-
-
-_PAIRING_LOCKS = "proxy_pairing_locks"
-
-
-def proxy_pairing_lock(hass: HomeAssistant, source: str) -> asyncio.Lock:
-    """Return one lock per proxy so concurrent flows cannot replace a pending PIN."""
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    locks: dict[str, asyncio.Lock] = domain_data.setdefault(_PAIRING_LOCKS, {})
-    key = source.casefold()
-    lock = locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        locks[key] = lock
-    return lock
-
-
-class DimplexPairingError(Exception):
-    """The selected proxy cannot complete first-time passkey pairing."""
-
-
-class DimplexPairingInProgressError(DimplexPairingError):
-    """The selected proxy is already pairing with another heater."""
-
-
-def find_proxy_entry(hass: HomeAssistant, source: str) -> ConfigEntry[Any] | None:
-    """Find the loaded ESPHome entry that owns one Bluetooth scanner."""
-    normalized_source = _normalize_address(source)
-    for entry in hass.config_entries.async_loaded_entries(ESPHOME_DOMAIN):
-        addresses = (
-            entry.data.get(CONF_BLUETOOTH_MAC_ADDRESS),
-            getattr(entry, "unique_id", None),
-        )
-        if any(
-            isinstance(address, str)
-            and _normalize_address(address) == normalized_source
-            for address in addresses
-        ):
-            return entry
-    return None
-
-
-def proxy_action_name(entry: ConfigEntry[Any], action: str = PAIRING_ACTION) -> str:
-    """Build the Home Assistant action name used by ESPHome's native API."""
-    device_name = entry.data.get(CONF_DEVICE_NAME)
-    if not isinstance(device_name, str) or not device_name:
-        raise DimplexPairingError("The ESPHome proxy has no registered device name")
-    return f"{device_name.replace('-', '_')}_{action}"
-
-
-def proxy_supports_passkey(hass: HomeAssistant, source: str) -> bool:
-    """Return whether this encrypted proxy exposes the complete pairing relay."""
-    entry = find_proxy_entry(hass, source)
-    if entry is None or not entry.data.get(CONF_NOISE_PSK):
-        return False
-    try:
-        actions = (
-            proxy_action_name(entry, PAIRING_ARM_ACTION),
-            proxy_action_name(entry, PAIRING_ACTION),
-            proxy_action_name(entry, PAIRING_CANCEL_ACTION),
-        )
-    except DimplexPairingError:
-        return False
-    return all(hass.services.has_service(ESPHOME_DOMAIN, action) for action in actions)
 
 
 def _assigned_proxy_count(hass: HomeAssistant, source: str) -> int:
@@ -110,36 +34,21 @@ def _assigned_proxy_count(hass: HomeAssistant, source: str) -> int:
     )
 
 
-def _route_rank(
-    hass: HomeAssistant,
-    candidate: BluetoothServiceInfoBleak,
-) -> tuple[int, int, int, int]:
-    """Rank a passkey-capable route for safe assignment-time balancing."""
-    source = candidate.source
+def _route_candidate(hass: HomeAssistant, source: str, rssi: int) -> RouteCandidate:
+    """Build normalized route facts from one Home Assistant scanner."""
     scanner = (
         bluetooth.async_scanner_by_source(hass, source)
-        if source and isinstance(hass, HomeAssistant)
+        if isinstance(hass, HomeAssistant)
         else None
     )
     allocations = scanner.get_allocations() if scanner is not None else None
-    if allocations is not None and allocations.free <= 0:
-        return (-1, 0, 0, candidate.rssi)
-
-    # Prefer routes with a known free slot. The fallback keeps host/local
-    # adapters eligible when their allocation is not exposed.
-    allocation_known = int(allocations is not None)
-    free_slots = allocations.free if allocations is not None else 0
-    assigned_heaters = _assigned_proxy_count(hass, source) if source else 0
-    return (allocation_known, free_slots, -assigned_heaters, candidate.rssi)
-
-
-def _source_has_capacity(hass: HomeAssistant, source: str) -> bool:
-    """Return whether a known proxy route can accept a new GATT connection."""
-    if not isinstance(hass, HomeAssistant):
-        return True
-    scanner = bluetooth.async_scanner_by_source(hass, source)
-    allocations = scanner.get_allocations() if scanner is not None else None
-    return allocations is None or allocations.free > 0
+    free_slots = getattr(allocations, "free", None)
+    return RouteCandidate(
+        source=source,
+        rssi=rssi,
+        free_slots=free_slots if type(free_slots) is int else None,
+        assigned_heaters=_assigned_proxy_count(hass, source),
+    )
 
 
 def select_proxy_source(
@@ -161,17 +70,27 @@ def select_proxy_source(
         for candidate in candidates
         if proxy_supports_passkey(hass, candidate.source)
     ]
-    selected = max(
-        (candidate for candidate in eligible if _route_rank(hass, candidate)[0] >= 0),
-        key=lambda candidate: _route_rank(hass, candidate),
-        default=None,
+    ranked = rank_routes(
+        [
+            _route_candidate(hass, candidate.source, candidate.rssi)
+            for candidate in eligible
+        ]
     )
-    if selected is not None:
+    if ranked:
+        selected_source = ranked[0].source.casefold()
+        selected = max(
+            (
+                candidate
+                for candidate in eligible
+                if candidate.source.casefold() == selected_source
+            ),
+            key=lambda candidate: candidate.rssi,
+        )
         _LOGGER.debug(
             "%s Selected pairing route %s (rank=%s)",
             DEBUG_LOG_PREFIX,
             selected.source,
-            _route_rank(hass, selected),
+            rank_route(ranked[0]),
         )
         return selected.source
 
@@ -186,25 +105,19 @@ def select_proxy_source(
         )
         if scanner_device.scanner.source
     }
-    fallback_sources = [
-        source
+    fallback_routes = [
+        _route_candidate(hass, source, -127)
         for source in known_sources
-        if _source_has_capacity(hass, source)
-        and proxy_supports_passkey(hass, source)
+        if proxy_supports_passkey(hass, source)
     ]
-    if fallback_sources:
+    ranked_fallbacks = rank_routes(fallback_routes)
+    if ranked_fallbacks:
         _LOGGER.debug(
             "%s Using a cached passkey-capable Bluetooth route not present in "
             "the current discovery snapshot",
             DEBUG_LOG_PREFIX,
         )
-        return min(
-            fallback_sources,
-            key=lambda source: (
-                _assigned_proxy_count(hass, source),
-                source.casefold(),
-            ),
-        )
+        return ranked_fallbacks[0].source
 
     sources = [candidate.source for candidate in candidates]
     matching_entries = sum(
@@ -242,123 +155,3 @@ def ble_device_from_source(
         DEBUG_LOG_PREFIX,
     )
     return None
-
-
-async def _async_call_proxy_action(
-    hass: HomeAssistant,
-    source: str,
-    action: str,
-    data: dict[str, str],
-) -> None:
-    """Call one encrypted action on the ESPHome proxy that owns this heater."""
-    entry = find_proxy_entry(hass, source)
-    if entry is None:
-        raise DimplexPairingError("The selected ESPHome Bluetooth proxy is unavailable")
-    if not entry.data.get(CONF_NOISE_PSK):
-        raise DimplexPairingError("The ESPHome proxy native API must be encrypted")
-    service = proxy_action_name(entry, action)
-    if not hass.services.has_service(ESPHOME_DOMAIN, service):
-        raise DimplexPairingError(
-            "The ESPHome proxy needs the Dimplex passkey component installed"
-        )
-    try:
-        await hass.services.async_call(ESPHOME_DOMAIN, service, data, blocking=True)
-    except HomeAssistantError as err:
-        _LOGGER.warning(
-            "%s ESPHome pairing action %s failed (%s)",
-            DEBUG_LOG_PREFIX,
-            action,
-            type(err).__name__,
-        )
-        raise
-
-
-async def async_arm_pairing(hass: HomeAssistant, source: str, address: str) -> None:
-    """Arm one address-scoped, short-lived pairing attempt on its proxy."""
-    await _async_call_proxy_action(
-        hass,
-        source,
-        PAIRING_ARM_ACTION,
-        {"address": address.replace(":", "")},
-    )
-
-
-async def async_send_passkey(
-    hass: HomeAssistant, source: str, address: str, passkey: str
-) -> None:
-    """Send a short-lived passkey to the ESPHome proxy over its API action."""
-    await _async_call_proxy_action(
-        hass,
-        source,
-        PAIRING_ACTION,
-        {"address": address.replace(":", ""), "passkey": passkey},
-    )
-
-
-async def async_cancel_pairing(hass: HomeAssistant, source: str) -> None:
-    """Clear any pending passkey state after the pairing attempt ends."""
-    await _async_call_proxy_action(hass, source, PAIRING_CANCEL_ACTION, {})
-
-
-async def _async_run_pairing(
-    hass: HomeAssistant,
-    source: str,
-    pair: Callable[[], Awaitable[None]],
-    lock: asyncio.Lock,
-) -> None:
-    """Run pairing with a bounded wait, then clear relay state and release lock."""
-    try:
-        await asyncio.wait_for(pair(), timeout=PAIRING_TIMEOUT)
-    except asyncio.CancelledError:
-        _LOGGER.warning(
-            "%s BLE pairing task cancelled",
-            DEBUG_LOG_PREFIX,
-        )
-        raise
-    except TimeoutError:
-        _LOGGER.warning(
-            "%s BLE pairing attempt timed out after %d seconds",
-            DEBUG_LOG_PREFIX,
-            PAIRING_TIMEOUT,
-        )
-        raise
-    except Exception as err:
-        _LOGGER.warning(
-            "%s BLE pairing attempt failed (%s)",
-            DEBUG_LOG_PREFIX,
-            type(err).__name__,
-            exc_info=True,
-        )
-        raise
-    finally:
-        try:
-            await async_cancel_pairing(hass, source)
-        except (DimplexPairingError, HomeAssistantError):
-            _LOGGER.debug(
-                "%s Could not clear the ESPHome pairing relay",
-                DEBUG_LOG_PREFIX,
-                exc_info=True,
-            )
-        finally:
-            lock.release()
-
-
-async def async_start_pairing(
-    hass: HomeAssistant,
-    source: str,
-    address: str,
-    pair: Callable[[], Awaitable[None]],
-) -> asyncio.Task[None]:
-    """Arm the relay, then pair in the background while holding its proxy lock."""
-    lock = proxy_pairing_lock(hass, source)
-    if lock.locked():
-        raise DimplexPairingInProgressError(
-            "The selected ESPHome proxy is already pairing with another heater"
-        )
-    await lock.acquire()
-    try:
-        await async_arm_pairing(hass, source, address)
-        return hass.async_create_task(_async_run_pairing(hass, source, pair, lock))
-    except BaseException:
-        lock.release()
-        raise

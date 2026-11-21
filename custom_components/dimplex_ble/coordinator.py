@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
+from homeassistant.components.bluetooth import (
+    BluetoothChange,
+    BluetoothServiceInfoBleak,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -47,10 +52,31 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             always_update=False,
         )
         self.client = client
+        self._cancel_advertisement_callback: Callable[[], None] | None = None
+
+    @callback
+    def set_advertisement_callback_canceller(
+        self, cancel_callback: Callable[[], None]
+    ) -> None:
+        """Store the targeted Bluetooth advertisement callback cleanup."""
+        self._cancel_advertisement_callback = cancel_callback
+
+    @callback
+    def async_handle_advertisement(
+        self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
+    ) -> None:
+        """Request an immediate refresh when the configured heater reappears."""
+        del service_info, change
+        self.hass.async_create_task(self.async_request_refresh())
 
     async def async_shutdown(self) -> None:
-        """Release the persistent BLE connection during entry unload."""
-        await self.client.async_shutdown()
+        """Release callbacks and the persistent BLE connection during unload."""
+        if self._cancel_advertisement_callback is not None:
+            self._cancel_advertisement_callback()
+            self._cancel_advertisement_callback = None
+        shutdown = getattr(self.client, "async_shutdown", None)
+        if shutdown is not None:
+            await shutdown()
 
     async def _async_update_data(self) -> HeaterSnapshot:
         """Read the heater, retrying one clean authenticated connection."""

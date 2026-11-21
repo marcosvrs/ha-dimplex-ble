@@ -38,8 +38,6 @@ EXPERIMENTAL_FIELDS: tuple[ExperimentalField, ...] = (
     ExperimentalField((0, 0x0006), "raw_0_0006", 7),
     ExperimentalField((0, 0x1002), "raw_0_1002", 31),
     ExperimentalField((1, 0x0001), "raw_1_0001", 4),
-    ExperimentalField((0, 0x1007), "raw_0_1007", 9),
-    ExperimentalField((0, 0x1008), "raw_0_1008", 1),
     ExperimentalField((0, 0x100D), "raw_0_100d", 1),
     ExperimentalField((0, 0x1016), "raw_0_1016", 2),
     ExperimentalField((0, 0x1017), "raw_0_1017", 2),

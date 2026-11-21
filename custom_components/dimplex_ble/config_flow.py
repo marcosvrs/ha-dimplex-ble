@@ -24,6 +24,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .client import DimplexBluetoothClient, DimplexConnectionError
+from .commissioning import async_start_pairing
 from .const import (
     CONF_ADDRESS,
     CONF_ADDRESS_TYPE,
@@ -33,15 +34,13 @@ from .const import (
     PENDING_DEVICES,
 )
 from .discovery import advertisement_label, is_dimplex_advertisement
-from .pairing import (
+from .esphome_proxy import (
     DEBUG_LOG_PREFIX,
     DimplexPairingError,
     DimplexPairingInProgressError,
     async_send_passkey,
-    async_start_pairing,
-    ble_device_from_source,
-    select_proxy_source,
 )
+from .pairing import ble_device_from_source, select_proxy_source
 
 _LOGGER = logging.getLogger(__name__)
 # ConfigR waits roughly ten seconds for the heater to enter standby before
@@ -162,7 +161,15 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             key=lambda info: info.rssi,
             default=None,
         )
-        self._ble_device = selected_route.device if selected_route else None
+        if selected_route is not None:
+            self._ble_device = selected_route.device
+        else:
+            try:
+                self._ble_device = ble_device_from_source(
+                    self.hass, address, proxy_source
+                )
+            except RuntimeError:
+                self._ble_device = None
         self._address = address
         self._proxy_source = proxy_source
         return await self.async_step_passkey()
@@ -217,18 +224,40 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                         if info.connectable and info.source == proxy_source
                     ),
                     key=lambda info: info.rssi,
+                    default=None,
                 )
-                selected_name = (
-                    selected_route.name or selected_route.device.name or advertised_name
-                )
+                if selected_route is not None:
+                    selected_name = (
+                        selected_route.name
+                        or selected_route.device.name
+                        or advertised_name
+                    )
+                    selected_rssi = selected_route.rssi
+                    self._device_by_address[address] = selected_route.device
+                else:
+                    cached_device = ble_device_from_source(
+                        self.hass, address, proxy_source
+                    )
+                    if cached_device is None:
+                        unsupported_heater_seen = True
+                        continue
+                    selected_name = advertised_name
+                    selected_rssi = max(
+                        (
+                            info.rssi
+                            for info in routes_by_address[address]
+                            if info.connectable
+                        ),
+                        default=-127,
+                    )
+                    self._device_by_address[address] = cached_device
                 if not is_dimplex_advertisement(selected_name):
                     selected_name = advertised_name
                 self._devices[address] = (
                     proxy_source,
-                    selected_route.rssi,
+                    selected_rssi,
                     advertisement_label(selected_name),
                 )
-                self._device_by_address[address] = selected_route.device
             if not self._devices:
                 reason = (
                     "proxy_passkey_support_missing"
@@ -343,7 +372,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _async_start_pairing(self, address: str, proxy_source: str) -> str | None:
-        """Arm the selected proxy and start its connection attempt."""
+        """Start one managed pairing session for the selected heater."""
         if self._pairing_task is not None and not self._pairing_task.done():
             return None
 
