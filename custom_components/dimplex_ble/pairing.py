@@ -133,6 +133,14 @@ def _route_rank(
     return (allocation_known, free_slots, -assigned_heaters, candidate.rssi)
 
 
+def _source_has_capacity(hass: HomeAssistant, source: str) -> bool:
+    """Return whether a known proxy route can accept a new GATT connection."""
+    if not isinstance(hass, HomeAssistant):
+        return True
+    scanner = bluetooth.async_scanner_by_source(hass, source)
+    allocations = scanner.get_allocations() if scanner is not None else None
+    return allocations is None or allocations.free > 0
+
 def select_proxy_source(
     hass: HomeAssistant,
     address: str,
@@ -178,7 +186,10 @@ def select_proxy_source(
         if scanner_device.scanner.source
     }
     fallback_sources = [
-        source for source in known_sources if proxy_supports_passkey(hass, source)
+        source
+        for source in known_sources
+        if _source_has_capacity(hass, source)
+        and proxy_supports_passkey(hass, source)
     ]
     if fallback_sources:
         _LOGGER.debug(
