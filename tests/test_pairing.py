@@ -243,6 +243,21 @@ def test_select_proxy_source_prefers_capacity_before_rssi(
 
     assert select_proxy_source(hass, "aa:bb", service_infos) == "balanced"
 
+def test_cached_proxy_route_rejects_full_capacity(
+    hass, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached route with no free GATT slot is not a pairing fallback."""
+    monkeypatch.setattr(
+        pairing.bluetooth,
+        "async_scanner_by_source",
+        lambda _hass, _source: SimpleNamespace(
+            get_allocations=lambda: SimpleNamespace(free=0, slots=3)
+        ),
+    )
+
+    assert pairing._source_has_capacity(hass, "full") is False
+
+
 
 def test_proxy_support_rejects_entry_without_registered_device_name() -> None:
     hass = make_hass([make_entry("proxy", name="")])
