@@ -304,7 +304,10 @@ class DimplexBluetoothClient:
                     self.address,
                     type(err).__name__,
                 )
-                if "BluetoothDevicePairingResponse" in str(err):
+                error_message = str(err)
+                if "BluetoothDevicePairingResponse" in error_message:
+                    if "timeout" in error_message.casefold():
+                        raise DimplexConnectionError("BLE pairing timed out") from err
                     raise DimplexAuthenticationError("BLE pairing is required") from err
             raise DimplexConnectionError(
                 "Could not connect to the panel heater"
@@ -418,6 +421,23 @@ class DimplexBluetoothClient:
                         raise DimplexConnectionError(
                             "Pairing did not return the panel-heater identity"
                         )
+
+                # A successful PIN exchange is not enough: the bond must also be
+                # reusable by the normal authenticated runtime path.
+                await self._disconnect_locked()
+                # ConfigR waits for the panel heater to leave its pairing transition
+                # before testing the persisted bond on a fresh connection.
+                await asyncio.sleep(_PAIRING_RECONNECT_DELAY)
+                self._force_service_refresh = True
+                async with self._connected(pair=False, lock_held=True) as client:
+                    snapshot = await self._async_read_snapshot(client)
+                    if snapshot.model is None:
+                        raise DimplexConnectionError(
+                            "The paired connection did not return the panel-heater identity"
+                        )
+            finally:
+                self._force_service_refresh = True
+                await self._disconnect_locked()
 
     async def _async_read_selector(
         self,
