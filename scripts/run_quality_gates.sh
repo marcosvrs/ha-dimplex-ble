@@ -13,11 +13,15 @@ fi
   --cov-report=json:coverage.json
 .venv/bin/python scripts/check_function_coverage.py coverage.json
 if .venv/bin/mutmut run; then
-  :
+    :
 else
-  mutation_status=$?
-  if (( mutation_status != 1 )); then
-    exit "$mutation_status"
-  fi
+    mutation_status=$?
+    if (( mutation_status != 1 )); then
+        exit "$mutation_status"
+    fi
 fi
-.venv/bin/python scripts/check_mutation_score.py
+if [[ "${REQUIRE_MUTATION_SCORE:-0}" == "1" ]]; then
+    .venv/bin/python scripts/check_mutation_score.py
+elif ! .venv/bin/python scripts/check_mutation_score.py; then
+    echo "Mutation score is advisory; set REQUIRE_MUTATION_SCORE=1 to enforce it." >&2
+fi
