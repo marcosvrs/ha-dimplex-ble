@@ -28,9 +28,9 @@ the constant cluster at
 | `LCD_THERMISTOR` | `1/0x0008` selector 2 | ConfigR has an LCD thermistor concept; it does not prove the selector-2 payload's exact sensor identity |
 | `CHARGE_TIMES` | `0/0x1002` / schedule-like data | ConfigR has charge-time configuration; it does not prove the AM6532 zero buffer layout |
 | `MIN_SETBACK` | `0/0x1016` and related setback behavior | ConfigR has a minimum-setback concept; it does not prove the payload encoding or characteristic mapping |
-| `MANUAL`, `ECO`, `BOOST`, `AWAY` | `0/0x1001` mode payloads | ConfigR has these product modes; it does not prove numeric mode-byte assignments |
+| `MANUAL`, `ECO`, `BOOST`, `AWAY` | `0/0x1001` mode payloads | ConfigR has these product modes; live AM6532/AM2086 reads and controlled writes verify Manual, Eco Mode, and Frost Protect plus Timer/User Timer |
 | `WIRELESSCOMM`, `RF` | `2/0x100c` and RF metadata | ConfigR has RF communication/status concepts; it does not prove that `01` is the live field's complete meaning |
-| `MUTE`, `VSound` | `2/0x0005` candidate sound setting | ConfigR has sound/mute concepts; it does not prove this raw payload's semantics |
+| `MUTE`, `VSound` | `2/0x0005` Sound setting | Live `000000`/`010000` readback establishes a three-byte boolean Sound setting; the integration exposes it as a low-frequency configuration switch |
 
 The extracted text also contains behavioral descriptions:
 
@@ -70,7 +70,7 @@ meaning from a single payload.
 | `0/0x1027` | `0000 → 0000` | Read back exactly | Unchanged | No mutation attempted; countdown behavior remains unknown |
 | `0/0x1028` | `1500 → 1600` | Trial read back exactly | Restored exactly | Writable setpoint-like payload; temporary-mode semantics still unknown |
 | `0/0x102a` | Same-value write | Read back exactly | Unchanged | No mutation attempted; Away semantics remain untested |
-| `2/0x0005` | `000000 → 010000` | Trial read back exactly | Restored exactly | Writable payload; sound/mute semantics remain unknown |
+| `2/0x0005` | `000000 → 010000` | Trial read back exactly | Restored exactly | Verified three-byte boolean Sound setting; `00` is off and `01` is on |
 | `2/0x100a` | `01 → 00` | Trial read back exactly | Restored exactly | Writable payload; semantics remain unknown |
 | `2/0x100b` | `05 → 06` | Trial read back exactly | Restored exactly | Writable payload; semantics remain unknown |
 | `2/0x100f` | `00 → 01` | Trial read back exactly | Restored exactly | Writable payload; semantics remain unknown |
@@ -227,7 +227,7 @@ meanings:
 | Experimental runback countdown | `0/0x1027` | 2 bytes | No-op trial only |
 | Experimental runback setpoint | `0/0x1028` | 2 bytes | Reversible write/readback |
 | Experimental away mode | `0/0x102A` | 7 bytes | Same-value write only |
-| Experimental sound / mute | `2/0x0005` | 3 bytes | Reversible write/readback |
+| Sound | `2/0x0005` | 3 bytes | Verified boolean configuration; exposed as a Sound switch with independent low-frequency polling |
 | Experimental setting 0x100A | `2/0x100A` | 1 byte | Reversible write/readback |
 | Experimental setting 0x100B | `2/0x100B` | 1 byte | Reversible write/readback |
 | Experimental setting 0x100F | `2/0x100F` | 1 byte | Reversible write/readback |

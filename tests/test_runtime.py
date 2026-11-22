@@ -1295,19 +1295,20 @@ async def test_rule_raw_access_translates_protocol_rejections(
     assert err.value.translation_key == translation_key
 
 
-def test_rule_climate_exposes_only_reported_temperature_and_supported_capabilities(
-    hass,
-):
+def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(hass):
     _, coordinator = make_coordinator(hass, data=snapshot())
     entity = DimplexClimate(coordinator)
     assert entity.available is True
     assert entity.hvac_mode == HVACMode.HEAT
-    assert entity.hvac_modes == [HVACMode.HEAT]
+    assert entity.hvac_modes == [HVACMode.HEAT, HVACMode.AUTO]
     assert entity.native_temperature_unit == UnitOfTemperature.CELSIUS
     assert entity.target_temperature_step == 1
+    assert entity.precision == 1
     assert entity.supported_features == (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
+    assert entity.preset_modes == ["manual", "eco", "frost_protect"]
+    assert entity.preset_mode == "manual"
     assert entity.native_current_temperature == 19.5
     assert entity.native_target_temperature == 21.0
     assert entity.min_temp == 5.0
@@ -1362,20 +1363,134 @@ def test_rule_diagnostic_sensors_expose_lcd_temperature_and_output_power(
 
 
 @pytest.mark.parametrize(
-    ("mode_hex", "expected"),
-    [("030000000000", "eco"), ("040000000000", None), ("020000000000", None)],
+    ("mode_hex", "expected", "expected_hvac_mode"),
+    [
+        ("010300000000", None, HVACMode.AUTO),
+        ("020000000000", "manual", HVACMode.HEAT),
+        ("030000000000", "eco", HVACMode.HEAT),
+        ("040000000000", "frost_protect", HVACMode.HEAT),
+    ],
 )
-def test_rule_climate_reports_only_verified_presets(hass, mode_hex, expected):
+def test_rule_climate_reports_verified_modes(
+    hass, mode_hex, expected, expected_hvac_mode
+):
     _, coordinator = make_coordinator(hass, data=snapshot(mode_hex=mode_hex))
     entity = DimplexClimate(coordinator)
-    assert entity.preset_modes == ["eco"]
+    assert entity.preset_modes == ["manual", "eco", "frost_protect"]
+    assert entity.hvac_mode == expected_hvac_mode
     assert entity.preset_mode == expected
 
 
 
-def test_rule_climate_ignores_malformed_reported_preset(hass):
+async def test_rule_climate_writes_verified_hvac_modes(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01\x03"))
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+    coordinator.async_request_refresh = AsyncMock()
+
+    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.AUTO)
+
+    assert client.async_write_raw.await_args.args == (
+        0,
+        0x1001,
+        b"\x01\x03\x00\x00\x00\x00",
+    )
+    coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_rule_climate_rejects_unsupported_hvac_mode(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.COOL)
+
+    assert err.value.translation_key == "invalid_hvac_mode"
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_rule_climate_does_not_rewrite_current_hvac_mode(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+
+    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.HEAT)
+
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_rule_climate_translates_hvac_mode_write_failures(hass) -> None:
+    from custom_components.dimplex_ble.client import DimplexConnectionError
+
+    failure = DimplexConnectionError("offline")
+    client = SimpleNamespace(async_write_raw=AsyncMock(side_effect=failure))
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.AUTO)
+
+    assert err.value.translation_key == "cannot_connect"
+    assert err.value.__cause__ is failure
+
+
+async def test_rule_climate_changes_auto_to_manual_before_setting_temperature(
+    hass,
+) -> None:
+    client = SimpleNamespace(
+        async_write_raw=AsyncMock(
+            side_effect=[b"\x02\x00\x00\x00\x00\x00", b"\x16\x00"]
+        )
+    )
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+
+    await DimplexClimate(coordinator).async_set_temperature(
+        temperature=22, hvac_mode=HVACMode.HEAT
+    )
+
+    assert client.async_write_raw.await_args_list[0].args == (
+        0,
+        0x1001,
+        b"\x02\x00\x00\x00\x00\x00",
+    )
+    assert client.async_write_raw.await_args_list[1].args == (
+        0,
+        0x1023,
+        b"\x16\x00",
+    )
+
+
+async def test_rule_climate_rejects_temperature_in_auto(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000"), client=client
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
+
+    assert err.value.translation_key == "temperature_not_allowed_in_auto"
+    client.async_write_raw.assert_not_awaited()
+
+    _, heat_coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="020000000000"), client=client
+    )
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexClimate(heat_coordinator).async_set_temperature(
+            temperature=22, hvac_mode=HVACMode.COOL
+        )
+    assert err.value.translation_key == "invalid_hvac_mode"
+
+
+def test_rule_climate_ignores_malformed_reported_modes(hass):
     _, coordinator = make_coordinator(hass, data=snapshot(mode_hex="not-hex"))
-    assert DimplexClimate(coordinator).preset_mode is None
+    entity = DimplexClimate(coordinator)
+    assert entity.hvac_mode is None
+    assert entity.preset_mode is None
+    _, unknown_coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="fe0000000000")
+    )
+    assert DimplexClimate(unknown_coordinator).hvac_mode is None
     _, empty_coordinator = make_coordinator(hass)
     assert DimplexClimate(empty_coordinator).preset_mode is None
 

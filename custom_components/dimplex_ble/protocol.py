@@ -8,6 +8,18 @@ from typing import Final
 type GattAddress = tuple[int, int]
 OPEN_WINDOW_DETECTION: Final[GattAddress] = (0, 0x1007)
 PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
+HEATING_MODE: Final[GattAddress] = (0, 0x1001)
+SOUND: Final[GattAddress] = (2, 0x0005)
+SOUND_PAYLOAD_LENGTH: Final = 3
+
+HEATING_MODE_TIMER = 0x01
+HEATING_MODE_MANUAL = 0x02
+HEATING_MODE_ECO = 0x03
+HEATING_MODE_FROST_PROTECT = 0x04
+TIMER_SUBMODE_USER_TIMER = 0x03
+
+PRESET_MANUAL = "manual"
+PRESET_FROST_PROTECT = "frost_protect"
 
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
 MAX_GATT_VALUE_BYTES: Final = 512
@@ -68,7 +80,6 @@ EXPERIMENTAL_RAW_FIELD_SPECS: Final[tuple[tuple[GattAddress, int], ...]] = (
     ((0, 0x1027), 2),
     ((0, 0x1028), 2),
     ((0, 0x102A), 7),
-    ((2, 0x0005), 3),
     ((2, 0x100A), 1),
     ((2, 0x100B), 1),
     ((2, 0x100F), 1),
@@ -276,36 +287,54 @@ def encode_setpoint(temperature_c: float) -> bytes:
 
 
 _HEATING_MODE_NAMES: Final[dict[int, str]] = {
-    0x01: "Timer Mode",
-    0x02: "Manual",
-    0x03: "Eco Mode",
-    0x04: "Frost Protect",
+    HEATING_MODE_TIMER: "Timer Mode",
+    HEATING_MODE_MANUAL: "Manual",
+    HEATING_MODE_ECO: "Eco Mode",
+    HEATING_MODE_FROST_PROTECT: "Frost Protect",
 }
 _TIMER_SUBMODE_NAMES: Final[dict[int, str]] = {
     0x01: "Out All Day",
     0x02: "Home All Day",
-    0x03: "User Timer",
+    TIMER_SUBMODE_USER_TIMER: "User Timer",
     0x05: "Away",
 }
 
 _PRESET_MODE_CODES: Final[dict[str, int]] = {
-    "eco": 0x03,
-    "frost": 0x04,
+    PRESET_MANUAL: HEATING_MODE_MANUAL,
+    "eco": HEATING_MODE_ECO,
+    PRESET_FROST_PROTECT: HEATING_MODE_FROST_PROTECT,
 }
+_PRESET_MODES_BY_CODE: Final[dict[int, str]] = {
+    code: preset for preset, code in _PRESET_MODE_CODES.items()
+}
+
+
+def parse_heating_mode_code(value: bytes | None) -> int | None:
+    """Return a known operating-mode code."""
+    if not value or value[0] not in _HEATING_MODE_NAMES:
+        return None
+    return value[0]
 
 
 def format_heating_mode(value: bytes | None) -> str | None:
     """Return the documented heating mode, or None for an unknown payload."""
-    if not value:
+    mode_code = parse_heating_mode_code(value)
+    if mode_code is None:
         return None
-    mode = _HEATING_MODE_NAMES.get(value[0])
-    if mode is None:
-        return None
-    if value[0] == 0x01 and len(value) > 1:
+    mode = _HEATING_MODE_NAMES[mode_code]
+    if mode_code == HEATING_MODE_TIMER and value is not None and len(value) > 1:
         submode = _TIMER_SUBMODE_NAMES.get(value[1])
         if submode is not None:
             return f"{mode} ({submode})"
     return mode
+
+
+def encode_heating_mode(mode_code: int) -> bytes:
+    """Encode a verified operating-mode command."""
+    if mode_code not in _HEATING_MODE_NAMES:
+        raise DimplexProtocolError("Unsupported heating mode")
+    timer_submode = TIMER_SUBMODE_USER_TIMER if mode_code == HEATING_MODE_TIMER else 0
+    return bytes((mode_code, timer_submode, 0, 0, 0, 0))
 
 
 def encode_preset_mode(preset: str) -> bytes:
@@ -314,17 +343,29 @@ def encode_preset_mode(preset: str) -> bytes:
         code = _PRESET_MODE_CODES[preset]
     except KeyError as err:
         raise DimplexProtocolError("Unsupported preset mode") from err
-    return bytes((code, 0, 0, 0, 0, 0))
+    return encode_heating_mode(code)
 
 
 def parse_preset_mode(value: bytes | None) -> str | None:
-    """Return a known preset name from the panel-heater operating-mode payload."""
-    if not value:
+    """Return a known non-scheduled preset from the operating-mode payload."""
+    mode_code = parse_heating_mode_code(value)
+    if mode_code is None or mode_code == HEATING_MODE_TIMER:
         return None
-    for preset, code in _PRESET_MODE_CODES.items():
-        if value[0] == code:
-            return preset
-    return None
+    return _PRESET_MODES_BY_CODE.get(mode_code)
+
+
+def parse_sound_enabled(value: bytes | None) -> bool | None:
+    """Decode the verified three-byte Sound setting."""
+    if value is None or len(value) != SOUND_PAYLOAD_LENGTH:
+        return None
+    if value[0] not in (0, 1) or value[1:] != b"\x00\x00":
+        return None
+    return bool(value[0])
+
+
+def encode_sound(enabled: bool) -> bytes:
+    """Encode the verified three-byte Sound setting."""
+    return bytes((int(enabled), 0, 0))
 
 
 def _parse_selected_temperature(value: bytes | None, selector: int) -> float | None:

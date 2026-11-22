@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
+    ATTR_HVAC_MODE,
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
     PRESET_ECO,
@@ -14,7 +15,7 @@ from homeassistant.components.climate.const import (
     HVACAction,
     HVACMode,
 )
-from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -25,9 +26,18 @@ from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
 from .exceptions import to_homeassistant_error
 from .protocol import (
+    HEATING_MODE,
+    HEATING_MODE_ECO,
+    HEATING_MODE_FROST_PROTECT,
+    HEATING_MODE_MANUAL,
+    HEATING_MODE_TIMER,
+    PRESET_FROST_PROTECT,
+    PRESET_MANUAL,
     DimplexProtocolError,
+    encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
+    parse_heating_mode_code,
     parse_preset_mode,
 )
 
@@ -47,14 +57,34 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     """Expose the panel heater's target and room temperature using HA's climate domain."""
 
     _attr_translation_key = "heater"
-    _attr_hvac_mode = HVACMode.HEAT
-    _attr_hvac_modes = [HVACMode.HEAT]
+    _attr_hvac_modes = [HVACMode.HEAT, HVACMode.AUTO]
     _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1
+    _attr_precision = PRECISION_WHOLE
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    _attr_preset_modes = [PRESET_ECO]
+    _attr_preset_modes = [PRESET_MANUAL, PRESET_ECO, PRESET_FROST_PROTECT]
+
+    @property
+    def hvac_mode(self) -> HVACMode | None:
+        """Return the Home Assistant mode represented by the device mode."""
+        data = self.coordinator.data
+        if data is None or data.operating_mode_hex is None:
+            return None
+        try:
+            mode_code = parse_heating_mode_code(bytes.fromhex(data.operating_mode_hex))
+        except ValueError:
+            return None
+        if mode_code == HEATING_MODE_TIMER:
+            return HVACMode.AUTO
+        if mode_code in {
+            HEATING_MODE_MANUAL,
+            HEATING_MODE_ECO,
+            HEATING_MODE_FROST_PROTECT,
+        }:
+            return HVACMode.HEAT
+        return None
 
     @property
     def available(self) -> bool:
@@ -98,7 +128,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def hvac_action(self) -> HVACAction | None:
-        """Return the panel heater's directly reported physical heating state."""
+        """Return only the verified Trac active/idle action."""
         data = self.coordinator.data
         if data is None or data.heating_active is None:
             return None
@@ -129,8 +159,42 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             else float(DEFAULT_MAX_TEMP)
         )
 
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Write the requested verified operating mode."""
+        if hvac_mode not in self.hvac_modes:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_hvac_mode",
+            )
+        if self.hvac_mode == hvac_mode:
+            return
+        mode_code = (
+            HEATING_MODE_TIMER if hvac_mode == HVACMode.AUTO else HEATING_MODE_MANUAL
+        )
+        try:
+            await self._client.async_write_raw(
+                *HEATING_MODE, encode_heating_mode(mode_code)
+            )
+            await self.coordinator.async_request_refresh()
+        except (DimplexError, DimplexProtocolError) as err:
+            raise to_homeassistant_error(err) from err
+
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Write a whole-degree Celsius target and wait for panel heater readback."""
+        requested_mode = kwargs.get(ATTR_HVAC_MODE)
+        if requested_mode == HVACMode.AUTO or (
+            requested_mode is None and self.hvac_mode == HVACMode.AUTO
+        ):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="temperature_not_allowed_in_auto",
+            )
+        if requested_mode is not None and requested_mode != HVACMode.HEAT:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_hvac_mode",
+            )
+
         requested = kwargs.get(ATTR_TEMPERATURE)
         if isinstance(requested, bool) or not isinstance(requested, (int, float)):
             raise ServiceValidationError(
@@ -161,6 +225,8 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             )
 
         try:
+            if requested_mode == HVACMode.HEAT and self.hvac_mode == HVACMode.AUTO:
+                await self.async_set_hvac_mode(HVACMode.HEAT)
             payload = encode_setpoint(temperature_c)
             await self._client.async_write_raw(0, 0x1023, payload)
             await self.coordinator.async_request_refresh()
@@ -177,7 +243,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
         try:
             await self._client.async_write_raw(
-                0, 0x1001, encode_preset_mode(preset_mode)
+                *HEATING_MODE, encode_preset_mode(preset_mode)
             )
             await self.coordinator.async_request_refresh()
         except (DimplexError, DimplexProtocolError) as err:

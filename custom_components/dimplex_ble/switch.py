@@ -19,6 +19,7 @@ from .protocol import (
     PREEMPTIVE_HEATING,
     DimplexProtocolError,
     GattAddress,
+    parse_sound_enabled,
 )
 
 PARALLEL_UPDATES = 1
@@ -31,12 +32,52 @@ async def async_setup_entry(
 ) -> None:
     """Set up verified independent panel-heater controls."""
     del hass
+    coordinator = entry.runtime_data
+    coordinator.async_start_sound_polling()
     async_add_entities(
         [
-            DimplexOpenWindowDetectionSwitch(entry.runtime_data),
-            DimplexPreemptiveHeatingSwitch(entry.runtime_data),
+            DimplexSoundSwitch(coordinator),
+            DimplexOpenWindowDetectionSwitch(coordinator),
+            DimplexPreemptiveHeatingSwitch(coordinator),
         ]
     )
+
+
+class DimplexSoundSwitch(DimplexEntity, SwitchEntity):
+    """Control the verified panel-heater Sound setting."""
+
+    _attr_translation_key = "sound"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:volume-high"
+
+    @property
+    def available(self) -> bool:
+        """Require a valid independently refreshed Sound value."""
+        return (
+            super().available
+            and parse_sound_enabled(self.coordinator.sound_value) is not None
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether panel-heater sounds are enabled."""
+        return parse_sound_enabled(self.coordinator.sound_value) is True
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Enable panel-heater sounds."""
+        del kwargs
+        try:
+            await self.coordinator.async_set_sound(True)
+        except (DimplexError, DimplexProtocolError) as err:
+            raise to_homeassistant_error(err) from err
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        """Disable panel-heater sounds."""
+        del kwargs
+        try:
+            await self.coordinator.async_set_sound(False)
+        except (DimplexError, DimplexProtocolError) as err:
+            raise to_homeassistant_error(err) from err
 
 
 class _DimplexBooleanSettingSwitch(DimplexEntity, SwitchEntity):

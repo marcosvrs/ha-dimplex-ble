@@ -17,6 +17,7 @@ PENDING_DEVICES = "pending_devices"
 CLIENTS = "clients"
 
 DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
+SOUND_UPDATE_INTERVAL = timedelta(minutes=5)
 PLATFORMS = (
     Platform.CLIMATE,
     Platform.SELECT,

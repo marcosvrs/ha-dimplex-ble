@@ -46,7 +46,9 @@
       "invalid_passkey": "Enter exactly six digits.",
       "proxy_passkey_support_missing": "The selected proxy cannot accept a Bluetooth PIN.",
       "pairing_failed": "Pairing failed or timed out. The panel heater's PIN request expires after about 30 seconds. Home Assistant automatically retries a limited number of times; submit the PIN again to start another bounded attempt. Check the panel heater display before entering a PIN.",
-      "pairing_in_progress": "This ESPHome proxy is pairing with another panel heater. Finish or cancel that setup, then try again."
+      "pairing_in_progress": "This ESPHome proxy is pairing with another panel heater. Finish or cancel that setup, then try again.",
+      "invalid_hvac_mode": "That HVAC mode is not supported by this panel heater.",
+      "temperature_not_allowed_in_auto": "The panel heater follows its timer in Auto mode; set the temperature in a non-scheduled mode."
     }
   },
   "entity": {
@@ -54,11 +56,16 @@
       "heater": {
         "name": "Panel Heater",
         "state": {
-          "eco": "Eco"
+          "eco": "Eco",
+          "manual": "Manual",
+          "frost_protect": "Frost Protect"
         }
       }
     },
     "switch": {
+      "sound": {
+        "name": "Sound"
+      },
       "preemptive_heating": {
         "name": "Adaptive Start",
         "state_attributes": {
@@ -222,9 +229,6 @@
       },
       "raw_0_102a": {
         "name": "Experimental away mode"
-      },
-      "raw_2_0005": {
-        "name": "Experimental sound / mute"
       },
       "raw_2_100a": {
         "name": "Experimental setting 0x100A"

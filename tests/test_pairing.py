@@ -335,6 +335,17 @@ def test_select_proxy_source_uses_cached_scanner_route(
         "Bluetooth route not present in the current discovery snapshot"
     ]
 
+    assert selected == "proxy"
+    scanner_devices.assert_called_once_with(hass, "HEATER", connectable=True)
+    assert passkey_support.call_args_list == [
+        call(hass, "host-adapter"),
+        call(hass, "proxy"),
+    ]
+    assert caplog.messages == [
+        "[DEBUG-DIMPLEX-PIN-20261117] Using a cached passkey-capable "
+        "Bluetooth route not present in the current discovery snapshot"
+    ]
+
 def test_ble_device_lookup_is_pinned_to_bond_owner(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from datetime import datetime
 from typing import cast
 
 from homeassistant.components.bluetooth import (
@@ -14,6 +17,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -32,8 +36,16 @@ from .const import (
     CONF_PROXY_SOURCE,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
+    SOUND_UPDATE_INTERVAL,
 )
-from .protocol import EXPERIMENTAL_RAW_FIELDS, GattAddress, HeaterSnapshot
+from .protocol import (
+    EXPERIMENTAL_RAW_FIELDS,
+    SOUND,
+    GattAddress,
+    HeaterSnapshot,
+    encode_sound,
+    parse_sound_enabled,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _AUTHENTICATION_FAILURE_THRESHOLD = 3
@@ -67,10 +79,13 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         )
         self.client = client
         self._cancel_advertisement_callback: Callable[[], None] | None = None
+        self._cancel_sound_poll: Callable[[], None] | None = None
+        self._sound_refresh_task: asyncio.Task[None] | None = None
         self._authentication_failures = 0
         self._automatic_repair_until = 0.0
         self._raw_field_offset = 0
         self.raw_fields: dict[GattAddress, bytes] = {}
+        self.sound_value: bytes | None = None
 
     @callback
     def set_advertisement_callback_canceller(
@@ -89,8 +104,66 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             return
         self.hass.async_create_task(self.async_request_refresh())
 
+    @callback
+    def async_start_sound_polling(self) -> None:
+        """Start the low-frequency sound-setting refresh."""
+        if self._cancel_sound_poll is None:
+            self._cancel_sound_poll = async_track_time_interval(
+                self.hass,
+                self._async_schedule_sound_refresh,
+                SOUND_UPDATE_INTERVAL,
+            )
+        self._async_schedule_sound_refresh(None)
+
+    @callback
+    def _async_schedule_sound_refresh(self, now: datetime | None) -> None:
+        """Schedule one sound read without adding it to the main poll."""
+        del now
+        if self._sound_refresh_task is None or self._sound_refresh_task.done():
+            self._sound_refresh_task = self.hass.async_create_task(
+                self.async_refresh_sound()
+            )
+
+    async def async_refresh_sound(self) -> None:
+        """Read the sound setting on its independent slow schedule."""
+        read_raw_fields = getattr(self.client, "async_read_raw_fields", None)
+        if read_raw_fields is None:
+            return
+        try:
+            values = await read_raw_fields((SOUND,))
+        except DimplexError as err:
+            _LOGGER.debug(
+                "Optional sound-setting read failed for %s (%s)",
+                self.config_entry.title,
+                type(err).__name__,
+            )
+            return
+        value = values.get(SOUND)
+        if value is None or parse_sound_enabled(value) is None:
+            return
+        if value != self.sound_value:
+            self.sound_value = value
+            self.async_update_listeners()
+
+    async def async_set_sound(self, enabled: bool) -> None:
+        """Write the sound setting and retain its verified readback."""
+        payload = encode_sound(enabled)
+        readback = await self.client.async_write_raw(*SOUND, payload)
+        value = readback if readback is not None else payload
+        if parse_sound_enabled(value) is None:
+            raise DimplexError("Panel heater returned an invalid sound value")
+        self.sound_value = value
+        self.async_update_listeners()
+
     async def async_shutdown(self) -> None:
         """Stop coordinator refreshes before releasing the panel heater connection."""
+        if self._cancel_sound_poll is not None:
+            self._cancel_sound_poll()
+            self._cancel_sound_poll = None
+        if self._sound_refresh_task is not None and not self._sound_refresh_task.done():
+            self._sound_refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._sound_refresh_task
         await super().async_shutdown()
         if self._cancel_advertisement_callback is not None:
             self._cancel_advertisement_callback()

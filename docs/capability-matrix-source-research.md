@@ -53,7 +53,7 @@ All four main service groups use Bluetooth SIG base `00000000-0000-1000-8000-008
 | `1/0x0008` | `TemperatureSensor`, selector write `[n,0,0]`, read `[n,whole,tenths]`; n=1 room, n=2 LCD, n=3 core. QRAD live 24.5 °C; AM6532 selectors 1 `011308` (19.8 °C), 2 `021d01` (29.1 °C), 3 `030000` unavailable. | Selector layout verified live QRAD and AM6532; core semantics absent on AM6532. | Read-only selector exchange; expose only verified room/LCD diagnostics. |
 | `1/0x100E` | ConfigR `OtaEnable`, 1 byte; absent on QRAD; no AM6532 evidence. | ConfigR-only/absent observed profile. | Protected/unsafe; never write. |
 | `1/0x1010`, `0x1020`, `0x300E` | ConfigR names EolTest, TestMode, Esp32OtaEnable; AM6532 raw values `47`, `00`, `00`; Q-Rad raw/unknown. | Protected/unsafe. | Current project blocks writes; no semantic mapping. |
-| `2/0x0005` | ConfigR `Sound`, 3 bytes; AM6532 `000000`, QRAD `010000`; exact encoding unknown. | ConfigR/source + raw observations. | No write. |
+| `2/0x0005` | ConfigR `Sound`, 3 bytes; AM6532 `000000`, QRAD `010000`; controlled read/write/readback establishes a boolean setting (`00` off, `01` on). | ConfigR/source + live readback. | Implemented as the Sound configuration switch with independent low-frequency polling. |
 | `2/0x100C` | See `0/0x100C` above; service-2 address is ConfigR `RfComms`; AM6532 live `01`. | Verified raw read, protected write. | Never write. |
 | `2/0x1019` | ConfigR `SpConfig`, 1 byte; AM6532 raw `00`; semantics unknown. | ConfigR-only name + raw value. | No write. |
 | `2/0x1030` | ConfigR `FactoryReset`, 1-byte write; absent Q-Rad. | Protected/unsafe. | Never probe/write. |

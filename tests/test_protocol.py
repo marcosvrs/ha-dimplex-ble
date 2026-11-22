@@ -15,8 +15,10 @@ from custom_components.dimplex_ble.protocol import (
     _parse_selected_version,
     characteristic_uuid,
     decode_known_raw_value,
+    encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
+    encode_sound,
     format_heating_mode,
     format_known_raw_value,
     format_readonly_raw_value,
@@ -24,6 +26,7 @@ from custom_components.dimplex_ble.protocol import (
     parse_hex_payload,
     parse_preset_mode,
     parse_snapshot,
+    parse_sound_enabled,
     service_uuid,
     validate_raw_access,
 )
@@ -343,7 +346,11 @@ def test_encode_setpoint_rejects_values_outside_byte_range(value: int) -> None:
 
 @pytest.mark.parametrize(
     ("preset", "payload"),
-    [("eco", b"\x03\x00\x00\x00\x00\x00"), ("frost", b"\x04\x00\x00\x00\x00\x00")],
+    [
+        ("manual", b"\x02\x00\x00\x00\x00\x00"),
+        ("eco", b"\x03\x00\x00\x00\x00\x00"),
+        ("frost_protect", b"\x04\x00\x00\x00\x00\x00"),
+    ],
 )
 def test_preset_mode_encoding_matches_verified_commands(
     preset: str, payload: bytes
@@ -352,16 +359,39 @@ def test_preset_mode_encoding_matches_verified_commands(
     assert parse_preset_mode(payload) == preset
 
 
-def test_preset_mode_parser_ignores_unknown_and_malformed_values() -> None:
+def test_preset_mode_parser_ignores_unknown_and_scheduled_values() -> None:
     assert parse_preset_mode(None) is None
     assert parse_preset_mode(b"") is None
-    assert parse_preset_mode(b"\x02\x00\x00\x00\x00\x00") is None
+    assert parse_preset_mode(b"\x01\x03\x00\x00\x00\x00") is None
+    assert parse_preset_mode(b"\xfe\x00\x00\x00\x00\x00") is None
 
 
 def test_preset_mode_encoding_rejects_unverified_modes() -> None:
     with pytest.raises(DimplexProtocolError) as err:
         encode_preset_mode("boost")
     assert str(err.value) == "Unsupported preset mode"
+
+
+def test_heating_mode_encoding_rejects_unknown_modes() -> None:
+    with pytest.raises(DimplexProtocolError) as err:
+        encode_heating_mode(0xFF)
+    assert str(err.value) == "Unsupported heating mode"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [(b"\x00\x00\x00", False), (b"\x01\x00\x00", True)],
+)
+def test_sound_setting_decodes_verified_payload(payload: bytes, expected: bool) -> None:
+    assert parse_sound_enabled(payload) is expected
+    assert encode_sound(expected) == payload
+
+
+def test_sound_setting_rejects_unknown_payloads() -> None:
+    assert parse_sound_enabled(None) is None
+    assert parse_sound_enabled(b"\x01") is None
+    assert parse_sound_enabled(b"\x02\x00\x00") is None
+    assert parse_sound_enabled(b"\x01\x01\x00") is None
 
 
 def test_parse_snapshot_decodes_preemptive_heating_only_for_boolean_payloads() -> None:

@@ -85,7 +85,7 @@ The current component exposes 17 experimental raw text controls. Every one is a 
 | `0/0x1027` | `RunbackTime` / boost countdown | Experimental raw control |
 | `0/0x1028` | `RunbackSetpoint` | Experimental raw control |
 | `0/0x102a` | `AwayMode` | Experimental raw control |
-| `2/0x0005` | `Sound` | Experimental raw control |
+| `2/0x0005` | `Sound` | Verified configuration switch with independent low-frequency refresh |
 | `2/0x100a` | unnamed boolean candidate | Experimental raw control |
 | `2/0x100b` | unnamed value | Experimental raw control |
 | `2/0x100f` | unnamed value | Experimental raw control |

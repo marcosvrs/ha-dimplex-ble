@@ -63,14 +63,14 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 |---|---:|---|---|---|---|---|
 | `1/0x0002` | 3 | R | Trac | yes | present | Mapped through selector write/read; active flag and PLX output correlation verified |
 | `1/0x0003` | 2 | R | Relay | no | absent | Not available |
-| `2/0x0005` | 3 | RW | Sound | yes | present | Raw read only; write semantics unverified |
+| `2/0x0005` | 3 | RW | Sound | yes | present | Verified `00 00 00`/`01 00 00` boolean; exposed as the Sound configuration switch and refreshed on an independent five-minute schedule |
 | `0/0x0006` | 7 | W | SetRtc | yes | present | Raw read observed; no clock entity/write |
 | `1/0x0007` | 1 | R | LastKeyPressValue | yes | present | Read-only diagnostic sensor; transient UI event |
 | `1/0x0008` | 3 | R | TemperatureSensor | yes | present | Selector 1 room and selector 2 LCD mapped; selector 3 unavailable |
 | `3/0x000A` | 8 | RW | PowerLoading | yes | present | First LE16 rated power mapped; remaining bytes retained/unknown; writes blocked |
 | `1/0x000E` | 1 | R | OffpeakStatus | no | absent | Not available |
 | `0/0x0106` | 8 | W | SetRtcWithSeconds | no | absent | Not available |
-| `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm Eco Mode on AM2086 and Frost Protect on AM6532/AM8224. Direct admin writes on AM2086 accepted and read back for Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), and Timer Mode/User Timer (`01 03`). Characteristic readback proves payload acceptance; timer submode behavior and safe user-facing climate mapping remain unverified. AM1382 is currently unavailable. |
+| `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm all four PLX modes. Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), and Timer Mode/User Timer (`01 03`) writes were accepted and read back; climate maps Timer Mode to `AUTO` and the other verified modes to `HEAT` with presets |
 | `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read buffer observed; schedule structure/write not verified on AM6532 |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
@@ -162,9 +162,9 @@ or command is inferred from the binary contents.
 | Current humidity | ConfigR has generic humidity resources for other product families; no AM6532 field was identified | NOT SUPPORTED | No humidity entity or climate humidity feature |
 | Target humidity and humidity limits | No AM6532 protocol field identified | NOT SUPPORTED | No humidity control |
 | Power/on/off control | No safe AM6532 power command identified; ConfigR's storage-heater profile describes heating modes rather than a generic power switch | UNKNOWN/NEEDS CONFIRMATION | Do not advertise `TURN_ON` or `TURN_OFF` |
-| HVAC operating modes | CONFIGR-PROFILE names Auto/Timer, Manual, Eco, Frost, Boost, and Away for supported storage-heater profiles. LIVE-AM6532 accepted mode `03` and selected 18 °C; the user confirmed the panel heater displayed `Eco Mode / 18C`. LIVE-AM6532 mode `04` selected 7 °C, matching ConfigR's Frost profile; physical display confirmation remains pending | SUPPORTED-CONDITIONAL | Keep the single `HEAT` Home Assistant mode; expose only Eco. Keep Frost as phase-2 evidence until its display state is confirmed |
+| HVAC operating modes | LIVE-AM6532 and controlled AM2086 reads/writes identify Timer Mode, Manual, Eco Mode, and Frost Protect. ConfigR documents Timer as weekly schedule control; the safe Timer/User Timer payload is `01 03`, while arbitrary schedule-buffer writes remain out of scope | SUPPORTED-CONDITIONAL | Map Timer Mode to `HVACMode.AUTO`; map Manual, Eco Mode, and Frost Protect to `HVACMode.HEAT` with translated presets |
 | HVAC action | LIVE-AM6532: selector `1/0x0002` returned `010164` while the panel heater was actively heating and `010000` after it became idle; ConfigR and Q-Rad research define byte 1 as the Trac active flag | SUPPORTED-CONDITIONAL | Report `HEATING` or `IDLE` only from the Trac active flag; return no action when the response is unavailable or invalid |
-| Presets | LIVE-AM6532 Eco command `03 00 00 00 00 00` was accepted and read back; the user confirmed Eco mode. LIVE-AM6532 Frost command `04 00 00 00 00 00` selected 7 °C, but the physical display confirmation remains pending | SUPPORTED-CONDITIONAL | Expose Eco as the only climate preset; retain Frost as phase-2 protocol evidence and do not expose it yet |
+| Presets | LIVE-AM6532/AM2086 verified Manual, Eco Mode, and Frost Protect payloads; Eco and Frost were display-confirmed and all writes were read back | SUPPORTED-CONDITIONAL | Expose translated Manual, Eco, and Frost Protect presets; Timer is represented by `HVACMode.AUTO` |
 | Fan modes | ConfigR fan resources are associated with ventilation product families; no AM6532 fan control/status was identified | NOT SUPPORTED | No fan feature |
 | Vertical swing | No AM6532 swing field identified | NOT SUPPORTED | No swing feature |
 | Horizontal swing | No AM6532 swing field identified | NOT SUPPORTED | No horizontal-swing feature |
@@ -621,15 +621,18 @@ control.
 
 ### Experimental raw controls
 
-These controls are intentionally raw hexadecimal text entities. Friendly names are
+These controls remain raw hexadecimal text entities. Friendly names are
 ConfigR-derived hypotheses, not confirmed Home Assistant semantics:
 
 | Entity | Address | Length | Evidence and boundary |
 |---|---|---:|---|
 | Experimental panel-heater clock | `0/0x0006` | 7 bytes | ConfigR `SetRtc` format; write is available, but no semantic date validation is performed |
-| Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout is inferred; AM6532 schedule behavior remains unverified |
+| Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout is inferred; AM6532 schedule-buffer behavior remains unverified |
 | Experimental display backlight color | `1/0x0001` | 4 bytes | Reversible color payload observed in the protocol family |
-| Existing experimental fields | `0/0x0006`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x0005`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |
+| Existing experimental fields | `0/0x0006`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |
+
+The verified `2/0x0005` Sound setting is no longer an experimental raw control.
+It is a configuration switch with an independent five-minute read schedule.
 
 The controls are for controlled manual testing, not normal automations. Protected
 security, credential, OTA, factory-reset, EOL, and undocumented write boundaries
