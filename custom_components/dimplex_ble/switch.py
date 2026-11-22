@@ -1,4 +1,4 @@
-"""Independent Dimplex heater controls."""
+"""Independent Dimplex panel-heater controls."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up verified independent heater controls."""
+    """Set up verified independent panel-heater controls."""
     del hass
     async_add_entities(
         [
@@ -40,7 +40,7 @@ async def async_setup_entry(
 
 
 class _DimplexBooleanSettingSwitch(DimplexEntity, SwitchEntity):
-    """Control a verified independent boolean heater setting."""
+    """Control a verified independent boolean panel-heater setting."""
 
     _setting_address: ClassVar[GattAddress]
     _snapshot_attribute: ClassVar[str]
@@ -90,7 +90,7 @@ class _DimplexBooleanSettingSwitch(DimplexEntity, SwitchEntity):
 
 
 class DimplexOpenWindowDetectionSwitch(_DimplexBooleanSettingSwitch):
-    """Control the heater's open-window detection."""
+    """Control the panel heater's open-window detection."""
 
     _attr_translation_key = "open_window_detection"
     _attr_entity_category = EntityCategory.CONFIG
@@ -106,7 +106,7 @@ class DimplexOpenWindowDetectionSwitch(_DimplexBooleanSettingSwitch):
 
 
 class DimplexPreemptiveHeatingSwitch(_DimplexBooleanSettingSwitch):
-    """Control the heater's independently configurable pre-emptive heating."""
+    """Control the panel heater's independently configurable pre-emptive heating."""
 
     _attr_translation_key = "preemptive_heating"
     _attr_entity_category = EntityCategory.CONFIG

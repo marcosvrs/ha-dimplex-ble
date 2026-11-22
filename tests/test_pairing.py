@@ -452,7 +452,7 @@ async def test_pairing_start_rejects_a_busy_proxy_without_arming() -> None:
                 hass, "proxy", "AA:BB", AsyncMock()
             ).async_start()
         assert str(err.value) == (
-            "The selected ESPHome proxy is already pairing with another heater"
+            "The selected ESPHome proxy is already pairing with another panel heater"
         )
     finally:
         lock.release()

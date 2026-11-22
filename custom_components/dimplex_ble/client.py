@@ -1,4 +1,4 @@
-"""Async BLE access for Dimplex heaters through Home Assistant Bluetooth."""
+"""Async BLE access for Dimplex panel heaters through Home Assistant Bluetooth."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from functools import partial
 from typing import Any, TypedDict, cast
 
@@ -19,7 +19,6 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from .const import DEVICE_NAME, DOMAIN
-from .esphome_proxy import find_proxy_entry
 from .pairing import ble_device_from_source
 from .protocol import (
     MAX_GATT_VALUE_BYTES,
@@ -32,11 +31,11 @@ from .protocol import (
     parse_snapshot,
     validate_raw_access,
 )
-from .route_policy import RouteCandidate, rank_routes, source_key
 
 _PROXY_CONNECTION_LIMIT = 3
 _PAIRING_RECONNECT_DELAY = 10.0
 _PROXY_CONNECTION_SEMAPHORES = "proxy_connection_semaphores"
+_PROXY_CONNECTION_LOCKS = "proxy_connection_locks"
 
 
 def _proxy_connection_semaphore(hass: HomeAssistant, source: str) -> asyncio.Semaphore:
@@ -53,13 +52,24 @@ def _proxy_connection_semaphore(hass: HomeAssistant, source: str) -> asyncio.Sem
     return semaphore
 
 
+def _proxy_connection_lock(hass: HomeAssistant, source: str) -> asyncio.Lock:
+    """Serialize ESPHome BLE connection establishment per proxy."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    locks: dict[str, asyncio.Lock] = domain_data.setdefault(_PROXY_CONNECTION_LOCKS, {})
+    key = source.casefold()
+    lock = locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[key] = lock
+    return lock
+
+
 _LOGGER = logging.getLogger(__name__)
 DEBUG_LOG_PREFIX = "[DEBUG-DIMPLEX-PIN-20261117]"
 CONNECT_TIMEOUT = 15.0
+GATT_READ_TIMEOUT = 5.0
+RAW_READ_TIMEOUT = 3.0
 CONNECT_ATTEMPTS = 3
-ROUTE_REBALANCE_COOLDOWN = 300.0
-ROUTE_FAILURE_COOLDOWN = 300.0
-ROUTE_RSSI_MARGIN = 10
 READ_SNAPSHOT_FIELDS: tuple[GattAddress, ...] = (
     (3, 0x2005),
     (3, 0x200A),
@@ -96,7 +106,22 @@ class _PairAwareBleakClient:
 
     async def connect(self, **kwargs: Any) -> None:
         """Pass the ESPHome-only pairing flag when the retry helper connects."""
+        _LOGGER.debug(
+            "%s Establishing BLE link for %s (pair=%s)",
+            DEBUG_LOG_PREFIX,
+            self._client,
+            self._pair,
+        )
         await self._client.connect(pair=self._pair, **kwargs)
+
+    async def pair(self, *args: Any, **kwargs: Any) -> None:
+        """Log any explicit pairing request before forwarding it."""
+        _LOGGER.debug(
+            "%s Explicit BLE pair request for %s",
+            DEBUG_LOG_PREFIX,
+            self._client,
+        )
+        await self._client.pair(*args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
@@ -116,11 +141,21 @@ class DimplexError(Exception):
 
 
 class DimplexConnectionError(DimplexError):
-    """Home Assistant could not connect to the heater."""
+    """Home Assistant could not connect to the panel heater."""
 
 
 class DimplexAuthenticationError(DimplexConnectionError):
-    """The heater rejected an operation because BLE authentication is missing."""
+    """The panel heater rejected an operation because BLE authentication is missing."""
+
+
+def _is_authentication_error(error: BaseException) -> bool:
+    """Return whether a BLE error explicitly reports missing link security."""
+    message = str(error).casefold()
+    return (
+        "insufficient authentication" in message
+        or "insufficient encryption" in message
+        or "pairing failed due to error:" in message
+    )
 
 
 class DimplexCharacteristicError(DimplexError):
@@ -128,7 +163,7 @@ class DimplexCharacteristicError(DimplexError):
 
 
 class DimplexBluetoothClient:
-    """Maintain one encrypted BLE connection for the heater lifecycle."""
+    """Maintain one encrypted BLE connection for the panel heater lifecycle."""
 
     def __init__(
         self,
@@ -137,20 +172,16 @@ class DimplexBluetoothClient:
         proxy_source: str,
         device: BLEDevice | None = None,
     ) -> None:
-        """Initialize a client bound to the proxy that owns this heater's bond."""
+        """Initialize a client bound to the proxy that owns this panel heater's bond."""
         self.hass = hass
         self.address = address
         self.proxy_source = proxy_source
         self._device = device
-        self._active_proxy_source: str | None = None
-        self._avoid_proxy_source: str | None = None
-        self._last_route_switch = 0.0
-        self._route_rssi: dict[str, int] = {}
-        self._route_backoff_until: dict[str, float] = {}
-        self._force_service_refresh = True
+        self._force_service_refresh = False
         self._lock = asyncio.Lock()
         self._connection: BleakClient | None = None
         self._connection_semaphore: asyncio.Semaphore | None = None
+        self._operation_task: asyncio.Task[Any] | None = None
 
     async def _disconnect_locked(self) -> None:
         """Close and release the persistent connection; caller owns the lock."""
@@ -169,163 +200,50 @@ class DimplexBluetoothClient:
                 semaphore.release()
 
     async def async_shutdown(self) -> None:
-        """Close the persistent BLE connection during entry unload."""
+        """Cancel an in-flight BLE operation and close its connection."""
+        operation = self._operation_task
+        current_task = asyncio.current_task()
+        if (
+            operation is not None
+            and operation is not current_task
+            and not operation.done()
+        ):
+            operation.cancel()
+            try:
+                await operation
+            except asyncio.CancelledError:
+                pass
         async with self._lock:
             await self._disconnect_locked()
 
-    def _connection_routes(
-        self, *, pair: bool, prefer_active: bool = True
-    ) -> list[tuple[str, BLEDevice, Any]]:
-        """Return valid ESPHome routes, ranked by the shared route policy."""
-        if pair:
-            device = ble_device_from_source(self.hass, self.address, self.proxy_source)
-            if device is None:
-                device = self._device
-            try:
-                scanner = bluetooth.async_scanner_by_source(
-                    self.hass, self.proxy_source
-                )
-            except RuntimeError:
-                scanner = None
-            if device is None:
-                return []
-            if scanner is None or scanner.connector is None:
-                raise DimplexConnectionError(
-                    "The selected ESPHome Bluetooth proxy is unavailable"
-                )
-            can_connect = getattr(scanner.connector, "can_connect", None)
-            if callable(can_connect) and not can_connect():
-                raise DimplexConnectionError(
-                    "The selected ESPHome Bluetooth proxy is unavailable"
-                )
-            return [(self.proxy_source, device, scanner)]
+    def _connection_routes(self, *, pair: bool) -> list[tuple[str, BLEDevice, Any]]:
+        """Return only the configured proxy route for this panel heater.
 
-        routes: dict[str, tuple[str, BLEDevice, Any, RouteCandidate]] = {}
-        self._route_rssi.clear()
-
-        def add_route(source: str, device: BLEDevice, scanner: Any, rssi: int) -> None:
-            get_allocations = getattr(scanner, "get_allocations", None)
-            allocations = get_allocations() if callable(get_allocations) else None
-            free_slots = getattr(allocations, "free", None)
-            candidate = RouteCandidate(
-                source=source,
-                rssi=rssi,
-                free_slots=free_slots if type(free_slots) is int else None,
-            )
-            routes.setdefault(source_key(source), (source, device, scanner, candidate))
-
+        ESPHome Bluetooth proxy bonds are local to the proxy that completed
+        commissioning.  An advertisement seen by another proxy does not make
+        that proxy a valid authenticated route, so runtime reconnects must not
+        roam between proxies.
+        """
+        del pair
+        device = ble_device_from_source(self.hass, self.address, self.proxy_source)
+        if device is None:
+            device = self._device
         try:
-            scanner_devices = bluetooth.async_scanner_devices_by_address(
-                self.hass, self.address.upper(), connectable=True
-            )
+            scanner = bluetooth.async_scanner_by_source(self.hass, self.proxy_source)
         except RuntimeError:
-            scanner_devices = []
-        for scanner_device in scanner_devices:
-            source = scanner_device.scanner.source
-            if (
-                not isinstance(source, str)
-                or find_proxy_entry(self.hass, source) is None
-            ):
-                continue
-            scanner = bluetooth.async_scanner_by_source(self.hass, source)
-            if scanner is None or scanner.connector is None:
-                continue
-            can_connect = getattr(scanner.connector, "can_connect", None)
-            if callable(can_connect) and not can_connect():
-                continue
-            advertisement = getattr(scanner_device, "advertisement", None)
-            rssi = getattr(advertisement, "rssi", getattr(scanner_device, "rssi", -127))
-            add_route(
-                source,
-                scanner_device.ble_device,
-                scanner,
-                rssi if isinstance(rssi, int) else -127,
+            scanner = None
+        if device is None:
+            return []
+        if scanner is None or scanner.connector is None:
+            raise DimplexConnectionError(
+                "The configured ESPHome Bluetooth proxy is unavailable"
             )
-
-        if source_key(self.proxy_source) not in routes:
-            device = ble_device_from_source(self.hass, self.address, self.proxy_source)
-            try:
-                scanner = bluetooth.async_scanner_by_source(
-                    self.hass, self.proxy_source
-                )
-            except RuntimeError:
-                scanner = None
-            if scanner is not None and scanner.connector is not None:
-                can_connect = getattr(scanner.connector, "can_connect", None)
-                if callable(can_connect) and not can_connect():
-                    scanner = None
-            if (
-                device is not None
-                and scanner is not None
-                and scanner.connector is not None
-            ):
-                add_route(self.proxy_source, device, scanner, -127)
-            elif not routes and device is not None:
-                raise DimplexConnectionError(
-                    "The selected ESPHome Bluetooth proxy is unavailable"
-                )
-
-        self._route_rssi.update(
-            {
-                source_key(source): candidate.rssi
-                for source, _, _, candidate in routes.values()
-            }
-        )
-        ranked_candidates = rank_routes(
-            [candidate for _, _, _, candidate in routes.values()],
-            active_source=self._active_proxy_source,
-            prefer_active=prefer_active,
-        )
-        ranked = [
-            routes[source_key(candidate.source)][:3] for candidate in ranked_candidates
-        ]
-        if not pair and len(ranked) > 1:
-            now = time.monotonic()
-            healthy = [
-                route
-                for route in ranked
-                if self._route_backoff_until.get(source_key(route[0]), 0) <= now
-            ]
-            if healthy:
-                ranked = healthy
-        if self._avoid_proxy_source is not None and len(ranked) > 1:
-            avoided_source = source_key(self._avoid_proxy_source)
-            ranked.sort(key=lambda route: source_key(route[0]) == avoided_source)
-        return ranked
-
-    def _should_rebalance(self) -> bool:
-        """Return whether a materially better route should replace the current one."""
-        active_source = self._active_proxy_source
-        if active_source is None:
-            return False
-        if time.monotonic() - self._last_route_switch < ROUTE_REBALANCE_COOLDOWN:
-            return False
-        try:
-            routes = self._connection_routes(pair=False, prefer_active=False)
-        except DimplexConnectionError:
-            return False
-        active_key = active_source.casefold()
-        if active_key in {source.casefold() for source, _, _ in routes}:
-            now = time.monotonic()
-            routes = [
-                route
-                for route in routes
-                if route[0].casefold() == active_key
-                or self._route_backoff_until.get(route[0].casefold(), 0) <= now
-            ]
-        if not routes or routes[0][0].casefold() == active_key:
-            return False
-        if active_source.casefold() not in {
-            source.casefold() for source, _, _ in routes
-        }:
-            return True
-        active_rssi = self._route_rssi.get(active_source.casefold())
-        best_rssi = self._route_rssi.get(routes[0][0].casefold())
-        return (
-            active_rssi is not None
-            and best_rssi is not None
-            and best_rssi >= active_rssi + ROUTE_RSSI_MARGIN
-        )
+        can_connect = getattr(scanner.connector, "can_connect", None)
+        if callable(can_connect) and not can_connect():
+            raise DimplexConnectionError(
+                "The configured ESPHome Bluetooth proxy is unavailable"
+            )
+        return [(self.proxy_source, device, scanner)]
 
     async def _async_connect_route(
         self,
@@ -335,7 +253,21 @@ class DimplexBluetoothClient:
         *,
         pair: bool,
     ) -> tuple[BleakClient, asyncio.Semaphore]:
-        """Connect and request link encryption on one ESPHome route."""
+        """Serialize connection establishment for one ESPHome proxy."""
+        async with _proxy_connection_lock(self.hass, source):
+            return await self._async_connect_route_locked(
+                source, device, scanner, pair=pair
+            )
+
+    async def _async_connect_route_locked(
+        self,
+        source: str,
+        device: BLEDevice,
+        scanner: Any,
+        *,
+        pair: bool,
+    ) -> tuple[BleakClient, asyncio.Semaphore]:
+        """Connect through one ESPHome route without changing its bond."""
         semaphore = _proxy_connection_semaphore(self.hass, source)
         await semaphore.acquire()
         client: BleakClient | None = None
@@ -352,32 +284,19 @@ class DimplexBluetoothClient:
                 pair=pair,
                 use_services_cache=not self._force_service_refresh,
             )
-            if not pair:
-                # ESPHome's pair=False connection opens the GATT link but does
-                # not request encryption from an existing bond. The native
-                # proxy pair operation maps to esp_ble_set_encryption(); it
-                # does not submit a new PIN.
-                try:
-                    await cast(Any, client).pair()
-                except (BleakError, OSError, TimeoutError) as err:
-                    raise DimplexAuthenticationError(
-                        "BLE authentication is required"
-                    ) from err
             return client, semaphore
-        except DimplexAuthenticationError:
-            if client is not None:
-                try:
-                    await client.disconnect()
-                except (BleakError, OSError, TimeoutError):
-                    _LOGGER.debug(
-                        "%s BLE encryption cleanup failed",
-                        DEBUG_LOG_PREFIX,
-                        exc_info=True,
-                    )
+        except asyncio.CancelledError:
+            semaphore.release()
+            raise
+        except DimplexConnectionError:
             semaphore.release()
             raise
         except (BleakError, OSError, TimeoutError) as err:
             semaphore.release()
+            if _is_authentication_error(err):
+                raise DimplexAuthenticationError(
+                    "BLE authentication is required"
+                ) from err
             if pair:
                 _LOGGER.warning(
                     "%s BLE connection failed for %s (%s)",
@@ -387,40 +306,38 @@ class DimplexBluetoothClient:
                 )
                 if "BluetoothDevicePairingResponse" in str(err):
                     raise DimplexAuthenticationError("BLE pairing is required") from err
-            raise DimplexConnectionError("Could not connect to the heater") from err
+            raise DimplexConnectionError(
+                "Could not connect to the panel heater"
+            ) from err
 
     @asynccontextmanager
-    async def _connected(self, *, pair: bool = False) -> AsyncIterator[BleakClient]:
+    async def _connected(
+        self, *, pair: bool = False, lock_held: bool = False
+    ) -> AsyncIterator[BleakClient]:
         """Reuse one connection; select a route and restore encryption when needed."""
 
-        async with self._lock:
-            if (
-                self._connection is not None
-                and self._connection.is_connected
-                and not pair
-                and self._should_rebalance()
-            ):
-                self._avoid_proxy_source = self._active_proxy_source
-                await self._disconnect_locked()
+        operation_task = asyncio.current_task()
+        previous_operation = self._operation_task
+        self._operation_task = operation_task
+        lock_context = nullcontext() if lock_held else self._lock
+        try:
+            async with lock_context:
+                if self._connection is not None and not self._connection.is_connected:
+                    await self._disconnect_locked()
 
-            if self._connection is not None and not self._connection.is_connected:
-                await self._disconnect_locked()
-
-            if self._connection is None:
-                routes = self._connection_routes(pair=pair, prefer_active=False)
-                if not routes:
-                    if pair:
-                        _LOGGER.warning(
-                            "%s Pairing could not start: the selected ESPHome proxy has no current route to the heater",
-                            DEBUG_LOG_PREFIX,
+                if self._connection is None:
+                    routes = self._connection_routes(pair=pair)
+                    if not routes:
+                        if pair:
+                            _LOGGER.warning(
+                                "%s Pairing could not start: the configured ESPHome proxy has no current route to the panel heater",
+                                DEBUG_LOG_PREFIX,
+                            )
+                        raise DimplexConnectionError(
+                            "The configured ESPHome proxy cannot currently reach the panel heater"
                         )
-                    raise DimplexConnectionError(
-                        "The configured ESPHome proxy cannot currently reach the heater"
-                    )
 
-                last_error = DimplexConnectionError("Could not connect to the heater")
-                authentication_error: DimplexAuthenticationError | None = None
-                for source, device, scanner in routes:
+                    source, device, scanner = routes[0]
                     _LOGGER.debug(
                         "%s Connecting heater %s through ESPHome proxy %s (pair=%s)",
                         DEBUG_LOG_PREFIX,
@@ -432,116 +349,75 @@ class DimplexBluetoothClient:
                         client, semaphore = await self._async_connect_route(
                             source, device, scanner, pair=pair
                         )
-                    except DimplexAuthenticationError as err:
-                        if not pair:
-                            self._route_backoff_until[source.casefold()] = (
-                                time.monotonic() + ROUTE_FAILURE_COOLDOWN
-                            )
-                        authentication_error = err
-                        last_error = err
+                    except DimplexAuthenticationError:
                         _LOGGER.debug(
-                            "%s Bond is not usable through proxy %s",
+                            "%s Bond is not usable through configured proxy %s",
                             DEBUG_LOG_PREFIX,
                             source,
                         )
-                        if pair:
-                            raise
-                        continue
-                    except DimplexConnectionError as err:
-                        if not pair:
-                            self._route_backoff_until[source.casefold()] = (
-                                time.monotonic() + ROUTE_FAILURE_COOLDOWN
-                            )
-                        last_error = err
+                        raise
+                    except DimplexConnectionError:
                         _LOGGER.debug(
-                            "%s Connection route %s failed; trying the next route",
+                            "%s Configured connection route %s failed",
                             DEBUG_LOG_PREFIX,
                             source,
                         )
-                        if pair:
-                            raise
-                        continue
+                        raise
 
-                    self._route_backoff_until.pop(source.casefold(), None)
-                    self._active_proxy_source = source
-                    self._last_route_switch = time.monotonic()
                     self._force_service_refresh = False
-                    self._avoid_proxy_source = None
                     self._connection = client
                     self._connection_semaphore = semaphore
-                    break
-                else:
-                    if authentication_error is not None:
-                        raise authentication_error
-                    raise last_error
 
-            try:
-                connection = self._connection
-                assert connection is not None
-                yield connection
-            except asyncio.CancelledError:
-                await self._disconnect_locked()
-                raise
-            except (BleakError, OSError, TimeoutError) as err:
-                self._force_service_refresh = True
-                self._avoid_proxy_source = self._active_proxy_source
-                if not pair and self._active_proxy_source is not None:
-                    self._route_backoff_until[self._active_proxy_source.casefold()] = (
-                        time.monotonic() + ROUTE_FAILURE_COOLDOWN
-                    )
-                await self._disconnect_locked()
-                error_text = str(err)
-                if (
-                    "Insufficient authentication" in error_text
-                    or "Insufficient encryption" in error_text
-                ):
-                    raise DimplexAuthenticationError(
-                        "BLE authentication is required"
-                    ) from err
-                raise DimplexConnectionError("BLE operation failed") from err
+                try:
+                    connection = self._connection
+                    assert connection is not None
+                    yield connection
+                except asyncio.CancelledError:
+                    await self._disconnect_locked()
+                    raise
+                except (BleakError, OSError, TimeoutError) as err:
+                    self._force_service_refresh = True
+                    await self._disconnect_locked()
+                    if _is_authentication_error(err):
+                        raise DimplexAuthenticationError(
+                            "BLE authentication is required"
+                        ) from err
+                    raise DimplexConnectionError("BLE operation failed") from err
+        finally:
+            if self._operation_task is operation_task:
+                self._operation_task = previous_operation
+
+    async def async_retry_connection(self) -> HeaterSnapshot:
+        """Restart one failed GATT session and restore link security."""
+        await self.async_shutdown()
+        return await self.async_read_snapshot()
 
     async def async_retry_authenticated_connection(self) -> HeaterSnapshot:
-        """Retry the existing bond without initiating a new PIN exchange."""
+        """Retry the existing bond through the proxy's encryption handshake."""
         _LOGGER.info(
             "%s Retrying the existing authenticated connection for %s",
             DEBUG_LOG_PREFIX,
             self.address,
         )
-        await self.async_shutdown()
-        return await self.async_read_snapshot()
+        return await self.async_retry_connection()
 
     async def async_pair(self) -> None:
         """Establish a bond, verify it survives reconnect, and close it."""
-        self._force_service_refresh = True
-        _LOGGER.info(
-            "%s Starting PIN pairing for %s",
-            DEBUG_LOG_PREFIX,
-            self.address,
-        )
-        try:
-            async with self._connected(pair=True) as client:
-                snapshot = await self._async_read_snapshot(client)
-                if snapshot.model is None:
-                    raise DimplexConnectionError(
-                        "Pairing did not return the heater identity"
-                    )
-
-            # A successful PIN exchange is not enough: the bond must also be
-            # reusable by the normal authenticated runtime path.
-            await self.async_shutdown()
-            # ConfigR waits for the heater to leave its pairing transition
-            # before testing the persisted bond on a fresh connection.
-            await asyncio.sleep(_PAIRING_RECONNECT_DELAY)
+        async with self._lock:
+            await self._disconnect_locked()
             self._force_service_refresh = True
-            async with self._connected(pair=False) as client:
-                snapshot = await self._async_read_snapshot(client)
-                if snapshot.model is None:
-                    raise DimplexConnectionError(
-                        "The paired connection did not return the heater identity"
-                    )
-        finally:
-            self._force_service_refresh = True
-            await self.async_shutdown()
+            _LOGGER.info(
+                "%s Starting PIN pairing for %s",
+                DEBUG_LOG_PREFIX,
+                self.address,
+            )
+            try:
+                async with self._connected(pair=True, lock_held=True) as client:
+                    snapshot = await self._async_read_snapshot(client)
+                    if snapshot.model is None:
+                        raise DimplexConnectionError(
+                            "Pairing did not return the panel-heater identity"
+                        )
 
     async def _async_read_selector(
         self,
@@ -560,11 +436,24 @@ class DimplexBluetoothClient:
             )
         ):
             return None
-        await client.write_gatt_char(
-            characteristic,
-            bytes((selector_value, 0, 0)),
-            response="write" in characteristic.properties,
-        )
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(GATT_READ_TIMEOUT):
+                await client.write_gatt_char(
+                    characteristic,
+                    bytes((selector_value, 0, 0)),
+                    response="write" in characteristic.properties,
+                )
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > 1:
+                _LOGGER.debug(
+                    "%s Selector write %s=%s took %.3fs",
+                    DEBUG_LOG_PREFIX,
+                    address,
+                    selector_value,
+                    elapsed,
+                )
         return await self._async_read_optional(client, address)
 
     async def _async_read_snapshot(self, client: BleakClient) -> HeaterSnapshot:
@@ -590,7 +479,7 @@ class DimplexBluetoothClient:
         )
 
     async def async_read_snapshot(self) -> HeaterSnapshot:
-        """Read mapped fields on an authenticated GATT connection."""
+        """Read mapped fields over the existing authenticated bond."""
         async with self._connected(pair=False) as client:
             return await self._async_read_snapshot(client)
 
@@ -625,7 +514,20 @@ class DimplexBluetoothClient:
         characteristic = self._find_characteristic(client, address)
         if characteristic is None or "read" not in characteristic.properties:
             return None
-        return bytes(await client.read_gatt_char(characteristic))
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(GATT_READ_TIMEOUT):
+                value = bytes(await client.read_gatt_char(characteristic))
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > 1:
+                _LOGGER.debug(
+                    "%s GATT read %s took %.3fs",
+                    DEBUG_LOG_PREFIX,
+                    address,
+                    elapsed,
+                )
+        return value
 
     async def async_get_gatt_services(self) -> list[_GattServiceInfo]:
         """Return GATT service metadata without reading characteristic values."""
@@ -670,7 +572,18 @@ class DimplexBluetoothClient:
                 characteristic = self._find_characteristic(client, address)
                 if characteristic is None or "read" not in characteristic.properties:
                     continue
-                values[address] = bytes(await client.read_gatt_char(characteristic))
+                try:
+                    async with asyncio.timeout(RAW_READ_TIMEOUT):
+                        values[address] = bytes(
+                            await client.read_gatt_char(characteristic)
+                        )
+                except (BleakError, OSError, TimeoutError):
+                    _LOGGER.debug(
+                        "%s Optional raw read failed for %s",
+                        DEBUG_LOG_PREFIX,
+                        address,
+                        exc_info=True,
+                    )
         return values
 
     async def async_write_raw(

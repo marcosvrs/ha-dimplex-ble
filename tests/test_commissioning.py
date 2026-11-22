@@ -86,3 +86,29 @@ async def test_start_pairing_function_uses_managed_session(pairing_actions) -> N
     await task
     pairing_actions[0].assert_awaited_once_with(hass, "proxy", "AA:BB")
     pairing_actions[1].assert_awaited_once_with(hass, "proxy")
+
+
+async def test_pair_with_passkey_sends_pin_before_pair(monkeypatch) -> None:
+    hass = make_hass()
+    send_passkey = AsyncMock()
+    pair = AsyncMock()
+    monkeypatch.setattr(commissioning.esphome_proxy, "async_send_passkey", send_passkey)
+
+    async def start_pairing(_hass, _source, _address, pair_callback, *, pairing_timeout):
+        assert pairing_timeout == 30.0
+        await pair_callback()
+        return asyncio.create_task(asyncio.sleep(0))
+
+    monkeypatch.setattr(commissioning, "async_start_pairing", start_pairing)
+
+    await commissioning.async_pair_with_passkey(
+        hass,
+        "proxy",
+        "AA:BB",
+        "123456",
+        pair,
+        repair_timeout=30.0,
+    )
+
+    send_passkey.assert_awaited_once_with(hass, "proxy", "AA:BB", "123456")
+    pair.assert_awaited_once_with()

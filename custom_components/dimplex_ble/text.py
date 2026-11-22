@@ -1,4 +1,4 @@
-"""Experimental raw-GATT text controls for Dimplex heaters."""
+"""Experimental raw-GATT text controls for Dimplex panel heaters."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .exceptions import to_homeassistant_error
 from .protocol import (
+    EXPERIMENTAL_RAW_FIELD_SPECS,
     DimplexProtocolError,
     GattAddress,
     decode_known_raw_value,
@@ -34,22 +35,13 @@ class ExperimentalField:
     payload_length: int
 
 
-EXPERIMENTAL_FIELDS: tuple[ExperimentalField, ...] = (
-    ExperimentalField((0, 0x0006), "raw_0_0006", 7),
-    ExperimentalField((0, 0x1002), "raw_0_1002", 31),
-    ExperimentalField((1, 0x0001), "raw_1_0001", 4),
-    ExperimentalField((0, 0x100D), "raw_0_100d", 1),
-    ExperimentalField((0, 0x1016), "raw_0_1016", 2),
-    ExperimentalField((0, 0x1017), "raw_0_1017", 2),
-    ExperimentalField((0, 0x1027), "raw_0_1027", 2),
-    ExperimentalField((0, 0x1028), "raw_0_1028", 2),
-    ExperimentalField((0, 0x102A), "raw_0_102a", 7),
-    ExperimentalField((2, 0x0005), "raw_2_0005", 3),
-    ExperimentalField((2, 0x100A), "raw_2_100a", 1),
-    ExperimentalField((2, 0x100B), "raw_2_100b", 1),
-    ExperimentalField((2, 0x100F), "raw_2_100f", 1),
-    ExperimentalField((2, 0x1018), "raw_2_1018", 1),
-    ExperimentalField((2, 0x1019), "raw_2_1019", 1),
+EXPERIMENTAL_FIELDS: tuple[ExperimentalField, ...] = tuple(
+    ExperimentalField(
+        (group, characteristic),
+        f"raw_{group}_{characteristic:04x}",
+        payload_length,
+    )
+    for (group, characteristic), payload_length in EXPERIMENTAL_RAW_FIELD_SPECS
 )
 
 
@@ -58,18 +50,12 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up experimental raw payload controls."""
+    """Set up experimental raw payload controls from coordinator data."""
     del hass
-    client = entry.runtime_data.client
-    try:
-        values = await client.async_read_raw_fields(
-            tuple(field.address for field in EXPERIMENTAL_FIELDS)
-        )
-    except DimplexError:
-        values = {}
-
+    coordinator = entry.runtime_data
+    values = coordinator.raw_fields
     async_add_entities(
-        DimplexExperimentalRawText(entry.runtime_data, field, values.get(field.address))
+        DimplexExperimentalRawText(coordinator, field, values.get(field.address))
         for field in EXPERIMENTAL_FIELDS
     )
 
@@ -99,8 +85,9 @@ class DimplexExperimentalRawText(DimplexEntity, TextEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return the last observed or written raw hexadecimal value."""
-        return self._value
+        """Return the latest polled or written raw hexadecimal value."""
+        raw_value = self.coordinator.raw_fields.get(self._field.address)
+        return raw_value.hex() if raw_value is not None else self._value
 
     @property
     def extra_state_attributes(self) -> dict[str, str | int | bool]:
@@ -111,9 +98,10 @@ class DimplexExperimentalRawText(DimplexEntity, TextEntity):
             "characteristic": characteristic,
             "payload_bytes": self._field.payload_length,
         }
-        if self._value is not None:
-            payload = bytes.fromhex(self._value)
-            attributes["raw_value"] = self._value
+        value = self.native_value
+        if value is not None:
+            payload = bytes.fromhex(value)
+            attributes["raw_value"] = value
             attributes.update(decode_known_raw_value(self._field.address, payload))
             decoded_value = format_known_raw_value(self._field.address, payload)
             if decoded_value is not None:

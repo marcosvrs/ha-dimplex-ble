@@ -1,6 +1,6 @@
 # Dimplex BLE
 
-Standalone Home Assistant custom integration for local Dimplex Bluetooth heaters.
+Standalone Home Assistant custom integration for local Dimplex Bluetooth panel heaters.
 It is engineered against the current applicable Home Assistant Quality Scale
 requirements; it is not an official Home Assistant Quality Scale-rated integration.
 
@@ -15,10 +15,10 @@ The repository does not distribute the ConfigR application, decompiled source,
 extracted binaries, proprietary assets, Dimplex firmware, credentials, or cloud
 access. Private research artifacts remain outside the repository and are not
 required at runtime. The project does not bypass authentication or security
-controls; pairing uses the PIN displayed by the user's own heater.
+controls; pairing uses the PIN displayed by the user's own panel heater.
 
 No warranty is made that this integration is safe for unattended or
-safety-critical heating control. Follow the heater manufacturer's safety
+safety-critical heating control. Follow the panel heater manufacturer's safety
 instructions and local laws. The MIT license applies only to original project
 code and grants no rights to Dimplex intellectual property.
 
@@ -49,9 +49,9 @@ sequence is not recoverable from the artifact and is therefore not guessed.
   asked to re-establish encryption from its existing bond; this is not a new
   PIN request when the bond is valid. Bond repair is not retried in a loop.
 - A shared proxy has three integration connection slots, matching ESPHome's
-  default active BLE capacity. Additional heaters queue until a slot is released.
+  default active BLE capacity. Additional panel heaters queue until a slot is released.
 - The configured proxy remains the runtime route. The integration does not
-  silently probe or move a heater to another proxy because ESPHome bonds are
+  silently probe or move a panel heater to another proxy because ESPHome bonds are
   proxy-local. RSSI-based cross-proxy roaming is intentionally not used.
 
 ## Installation
@@ -59,7 +59,7 @@ sequence is not recoverable from the artifact and is therefore not guessed.
 
 1. Install the `custom_components/dimplex_ble` directory.
 2. Install the minimal `components/dimplex_passkey_proxy` component in the ESPHome
-   Bluetooth Proxy that will own the heater connection.
+   Bluetooth Proxy that will own the panel heater connection.
 3. Keep the proxy's standard `esp32_ble_tracker` and `bluetooth_proxy` components.
 4. Configure the proxy's encrypted API actions for
    `arm_dimplex_pairing`, `set_dimplex_pairing_passkey`, and
@@ -69,18 +69,20 @@ sequence is not recoverable from the artifact and is therefore not guessed.
    Assistant, then add **Dimplex BLE**. Marketplace installs can load the
    config flow without a restart.
 
-The config flow selects a reachable heater and its proxy, arms pairing, then asks
-for the six-digit PIN shown by the heater. The PIN is forwarded to the selected
-proxy and is not stored.
+The config flow selects a reachable panel heater and its proxy, arms pairing, then asks
+for the six-digit PIN shown by the panel heater. The PIN is stored in the Home Assistant
+config entry and is never logged or included in diagnostics. That lets the
+integration repair a lost proxy bond automatically, with a bounded attempt and
+cooldown; a missing or invalid PIN still requires the normal reauthentication flow.
 
 ## Entities and controls
 
-Each configured heater creates:
+Each configured panel heater creates:
 
-- one heat-only `climate` entity with native Celsius temperature, heater-reported
+- one heat-only `climate` entity with native Celsius temperature, panel-heater-reported
   current temperature, target temperature, target limits, the verified Eco preset,
   and directly reported `HEATING`/`IDLE` HVAC action when available;
-- one configuration `select` for the heater-reported display unit;
+- one configuration `select` for the panel-heater-reported display unit;
 - one diagnostic error-code `sensor`;
 - one disabled-by-default diagnostic raw operating-mode `sensor`;
 - one disabled-by-default diagnostic rated-power `sensor`; its raw
@@ -97,9 +99,9 @@ Each configured heater creates:
 
 
 - one configuration `switch` for **Adaptive Start**; it is an independent
-  heater setting, not an HVAC mode or preset;
+  panel-heater setting, not an HVAC mode or preset;
 - one configuration `switch` for **Open Window Detection**; it is an independent
-  heater setting, not a temperature or occupancy sensor.
+  panel-heater setting, not a temperature or occupancy sensor.
 
 ### Device setting guidance
 
@@ -112,9 +114,9 @@ which explicitly covers the PLX050E Series C:
   only changes Timer Mode operation and starts heating before the user-defined
   Heating On time so the target temperature is reached when that period starts.
   The manual enforces a two-hour limit on the pre-heating calculation and
-  recommends enabling it on every heater in the same room.
+  recommends enabling it on every panel heater in the same room.
 - **Open Window Detection** is a global setting that can interrupt any active
-  mode. When the heater detects an open window, it switches to **Heating Off**.
+  mode. When the panel heater detects an open window, it switches to **Heating Off**.
   Dimplex warns that sudden temperature decreases in drafty, poorly insulated,
   or undersized-room conditions can trigger it incorrectly.
 
@@ -133,39 +135,45 @@ characteristics are not promoted to Home Assistant entities.
 The coordinator polls every ten seconds and shares one client per config entry.
 A failed connection or GATT operation closes the connection; coordinator entities
 become unavailable until a fresh snapshot succeeds. Repeated failures are handled
-by Home Assistant's coordinator without publishing stale live values. Commissioning
-automatic retries are bounded to three attempts.
+by Home Assistant's coordinator without publishing stale live values. If a stored
+PIN is available, a missing bond triggers one address-scoped automatic repair
+attempt, limited to thirty seconds and followed by a five-minute cooldown.
+Commissioning retries are bounded to three attempts.
 
 The integration exposes only the verified Eco preset. Frost has a known bounded
 protocol payload but remains phase 2 until the physical display state is
-confirmed. HVAC action comes only from the heater's Trac response; it is not
+confirmed. HVAC action comes only from the panel heater's Trac response; it is not
 inferred from temperature or selected mode. The integration exposes calculated
 instantaneous power but no device-reported cumulative energy counter. To add
-kWh tracking to the Energy dashboard, create a Home Assistant Integration
-(Riemann sum) sensor from the calculated power-consumption entity. It does not
+kWh tracking, add each calculated power sensor directly under Home Assistant's
+Energy dashboard → Individual electrical devices; Home Assistant creates the
+required kWh energy sensor. If custom integration settings are needed, create a
+native Integration (Riemann sum) sensor first and add that sensor instead. Both
+methods estimate energy from the calculated power and do not recover historical
+values.
 expose Boost/Away/Manual/Timer presets, fan modes, swing, humidity, schedules,
 firmware updates, or other capabilities that have not been verified on the
 supported device.
 
 ## Troubleshooting
 
-- **No heater found:** verify Home Assistant Bluetooth and the selected ESPHome
+- **No panel heater found:** verify Home Assistant Bluetooth and the selected ESPHome
   proxy are online, connectable, and within range.
-- **Pairing times out:** confirm the heater is switched off before the local
+- **Pairing times out:** confirm the panel heater is switched off before the local
   verification attempt, the proxy has the passkey relay, and the PIN is entered
-  only when the heater displays it. If the heater-side verification state is
-  stale, follow the documented recovery boundary: power it off, wait, and power it on.
+  only when the panel heater displays it. If the panel-heater-side verification
+  state is stale, follow the documented recovery boundary: power it off, wait, and
+  power it on.
 - **Entities unavailable:** check the selected bond-owning proxy and the
-  integration diagnostics. The integration will not silently roam to another
-  controller.
-- **Several heaters use one proxy:** the integration queues connections beyond
+  integration diagnostics. The integration will not silently roam to another proxy.
+- **Several panel heaters use one proxy:** the integration queues connections beyond
   the three available slots. Other Bluetooth integrations also consume proxy
   capacity.
 
 ## Removal
 
 Delete the config entry from **Settings → Devices & services**. This removes the
-Home Assistant entities and entry; it does not erase heater state or change proxy
+Home Assistant entities and entry; it does not erase panel-heater state or change proxy
 firmware.
 
 ## Development

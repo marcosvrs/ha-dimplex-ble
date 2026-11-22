@@ -12,7 +12,7 @@ PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
 MAX_GATT_VALUE_BYTES: Final = 512
 
-# These reads have disconnected observed heaters or expose device-specific credentials.
+# These reads have disconnected observed panel heaters or expose device-specific credentials.
 BLOCKED_READS: Final = frozenset(
     {(0, value) for value in range(0x1012, 0x1016)}
     | {(3, 0x2002), (3, 0x2006), (3, 0x2007), (3, 0x2008)}
@@ -58,6 +58,28 @@ BLOCKED_WRITES: Final = frozenset(
 )
 
 
+EXPERIMENTAL_RAW_FIELD_SPECS: Final[tuple[tuple[GattAddress, int], ...]] = (
+    ((0, 0x0006), 7),
+    ((0, 0x1002), 31),
+    ((1, 0x0001), 4),
+    ((0, 0x100D), 1),
+    ((0, 0x1016), 2),
+    ((0, 0x1017), 2),
+    ((0, 0x1027), 2),
+    ((0, 0x1028), 2),
+    ((0, 0x102A), 7),
+    ((2, 0x0005), 3),
+    ((2, 0x100A), 1),
+    ((2, 0x100B), 1),
+    ((2, 0x100F), 1),
+    ((2, 0x1018), 1),
+    ((2, 0x1019), 1),
+)
+EXPERIMENTAL_RAW_FIELDS: Final[tuple[GattAddress, ...]] = tuple(
+    address for address, _ in EXPERIMENTAL_RAW_FIELD_SPECS
+)
+
+
 class DimplexProtocolError(ValueError):
     """A requested GATT value or payload is invalid."""
 
@@ -68,7 +90,7 @@ class ProtectedCharacteristicError(DimplexProtocolError):
 
 @dataclass(frozen=True, slots=True)
 class HeaterSnapshot:
-    """Decoded values from one read-only heater poll."""
+    """Decoded values from one read-only panel-heater poll."""
 
     model: str | None
     setpoint_c: int | None
@@ -247,11 +269,24 @@ def encode_setpoint(temperature_c: float) -> bytes:
     """Encode a whole-degree Celsius setpoint as the observed two-byte value."""
     value = float(temperature_c)
     if not isfinite(value) or not value.is_integer():
-        raise DimplexProtocolError("The heater accepts whole-degree setpoints")
+        raise DimplexProtocolError("The panel heater accepts whole-degree setpoints")
     if not 0 <= value <= 0xFF:
         raise DimplexProtocolError("Setpoint is outside the encodable range")
     return bytes((int(value), 0))
 
+
+_HEATING_MODE_NAMES: Final[dict[int, str]] = {
+    0x01: "Timer Mode",
+    0x02: "Manual",
+    0x03: "Eco Mode",
+    0x04: "Frost Protect",
+}
+_TIMER_SUBMODE_NAMES: Final[dict[int, str]] = {
+    0x01: "Out All Day",
+    0x02: "Home All Day",
+    0x03: "User Timer",
+    0x05: "Away",
+}
 
 _PRESET_MODE_CODES: Final[dict[str, int]] = {
     "eco": 0x03,
@@ -259,8 +294,22 @@ _PRESET_MODE_CODES: Final[dict[str, int]] = {
 }
 
 
+def format_heating_mode(value: bytes | None) -> str | None:
+    """Return the documented heating mode, or None for an unknown payload."""
+    if not value:
+        return None
+    mode = _HEATING_MODE_NAMES.get(value[0])
+    if mode is None:
+        return None
+    if value[0] == 0x01 and len(value) > 1:
+        submode = _TIMER_SUBMODE_NAMES.get(value[1])
+        if submode is not None:
+            return f"{mode} ({submode})"
+    return mode
+
+
 def encode_preset_mode(preset: str) -> bytes:
-    """Encode a verified storage-heater preset command."""
+    """Encode a verified panel-heater preset command."""
     try:
         code = _PRESET_MODE_CODES[preset]
     except KeyError as err:
@@ -269,7 +318,7 @@ def encode_preset_mode(preset: str) -> bytes:
 
 
 def parse_preset_mode(value: bytes | None) -> str | None:
-    """Return a known preset name from the heater operating-mode payload."""
+    """Return a known preset name from the panel-heater operating-mode payload."""
     if not value:
         return None
     for preset, code in _PRESET_MODE_CODES.items():

@@ -28,7 +28,7 @@ async def async_setup_entry(
 
 
 class DimplexDisplayUnitSelect(DimplexEntity, SelectEntity):
-    """Read and write the heater's display temperature unit."""
+    """Read and write the panel heater's display temperature unit."""
 
     _attr_translation_key = "temperature_unit"
     _attr_entity_category = EntityCategory.CONFIG
@@ -36,7 +36,7 @@ class DimplexDisplayUnitSelect(DimplexEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the last unit reported by the heater."""
+        """Return the last unit reported by the panel heater."""
         data = self.coordinator.data
         if data is None or data.display_unit not in (0, 1):
             return None

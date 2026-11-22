@@ -11,7 +11,7 @@ The readable ConfigR output is a Native AOT application plus extracted managed
 resources. This document records only behavior directly recovered from that
 artifact or verified against the running integration. Undocumented packet
 values, retry rules, cloud registration writes, firmware-update commands, and
-heater-side bond deletion are not invented.
+panel-heater bond deletion are not invented.
 
 ## Advanced Verification lifecycle
 
@@ -36,7 +36,7 @@ commands.
 
 The extracted localized resources also state that:
 
-- the heater's Bluetooth pairing mode must be enabled from its product controls;
+- the panel heater's Bluetooth setting must be enabled;
 - ConfigR starts the central connection attempt and then accepts the PIN shown
   by the product;
 - ConfigR disconnects the current product before connecting to another product;
@@ -54,12 +54,12 @@ asking for the PIN.
 
 These are commissioning/recovery prerequisites, not reasons to add device
 power-cycling or bond-deletion commands to the integration. The artifact does
-not expose a supported heater-side bond-reset operation.
+not expose a supported panel-heater bond-reset operation.
 
 ## Connection and pairing policy
 
 - Keep one serialized commissioning operation per proxy.
-- Do not run competing pairing attempts for one heater.
+- Do not run competing pairing attempts for one panel heater.
 - Forward the displayed six-digit PIN only to the address-scoped proxy relay.
 - During commissioning, use only the proxy that was armed for that address;
   runtime RSSI balancing must not redirect an unencrypted PIN exchange.
@@ -109,15 +109,15 @@ The integration exposes the AM6532 fields that were read and decoded repeatedly:
 current room temperature, selected LCD/controller temperature, target
 temperature, target limits, display unit, error code, model identity, rated
 output, raw operating mode, Trac heating state, and the PLX report-screen output
-power percentage. The Eco operating-mode command was accepted by the heater and
+power percentage. The Eco operating-mode command was accepted by the panel heater and
 confirmed on its display as `Eco Mode / 18C`; the Frost payload selected the
 ConfigR-documented 7 °C target, but its physical display confirmation remains
 phase 2.
 
-Official Dimplex [PLX Series C support documentation](https://support.dimplex.co.uk/what-does-the-letters-numbers-report-screen-mean-on-my-panel-heater?journey=consumer) defines report-screen field C as output power and explicitly includes PLX050E. On this heater, the live Trac response correlated
+Official Dimplex [PLX Series C support documentation](https://support.dimplex.co.uk/what-does-the-letters-numbers-report-screen-mean-on-my-panel-heater?journey=consumer) defines report-screen field C as output power and explicitly includes PLX050E. On this panel heater, the live Trac response correlated
 repeatably with that field: selector 1 and selector 2 returned `010164` and
 `020164` at a forced 30 °C target, then `010000` after the target was restored to
-20 °C and the heater became idle. The integration exposes that byte as a
+20 °C and the panel heater became idle. The integration exposes that byte as a
 percentage diagnostic value and calculates estimated instantaneous watts as
 `rated_power_w × output_power_percent ÷ 100`; it does not claim a metered power
 or cumulative energy reading. The complete response remains available as an
@@ -126,7 +126,7 @@ attribute.
 Eco is exposed as the only climate preset. The Frost payload remains phase 2
 until the physical display state is confirmed. HVAC action is exposed only from
 the directly reported Trac active flag (`HEATING` or `IDLE`). ConfigR's named
-`HeatDemand` characteristic (`3/0x1024`) is absent from this heater and is not
+`HeatDemand` characteristic (`3/0x1024`) is absent from this panel heater and is not
 used; it is distinct from the Trac output-power byte. The integration does not
 expose Boost, Away, Manual, Timer, fan, swing,
 humidity, a semantic schedule/calendar, cumulative energy, charge, separate element
@@ -135,7 +135,7 @@ labelled **experimental raw hexadecimal controls** for fields whose characterist
 is present and whose bounded write path is available. These are test controls, not
 claims that the ConfigR names are the AM6532 semantics.
 
-The live GATT inventory confirmed that the heater exposes Dimplex service groups 0
+The live GATT inventory confirmed that the panel heater exposes Dimplex service groups 0
 through 3. Inventory presence is not capability proof: protected characteristics
 and unknown read-only values remain excluded from experimental writes.
 
@@ -153,7 +153,7 @@ On 19 November 2026, the current deployment completed a bounded live soak after
 a Home Assistant restart. Post-restart logs from 18:46:48 through 18:57:19 show
 successful snapshots every roughly 12–13 seconds, with individual polls taking
 about 2.2–3.3 seconds. Source-route interruptions were observed; each
-reconnected through the captured Bluetooth device without a radiator power cycle.
+reconnected through the captured Bluetooth device without a panel-heater power cycle.
 A separate 120-second entity soak observed zero `unavailable` or `unknown`
 climate/power states. This is direct evidence of recovery, not a claim that
 unbounded environmental Bluetooth failures are impossible.

@@ -2,25 +2,32 @@
   "config": {
     "step": {
       "user": {
-        "title": "Select a Dimplex heater",
-        "description": "Choose a nearby heater reachable through a passkey-enabled ESPHome Bluetooth proxy.",
+        "title": "Select a Dimplex panel heater",
+        "description": "Choose a nearby panel heater reachable through a passkey-enabled ESPHome Bluetooth proxy.",
         "data": {
-          "address": "Heater"
+          "address": "Panel heater"
         }
       },
       "pair": {
-        "title": "Retry heater pairing",
-        "description": "Retry connecting to {name}. If the request starts, watch the heater for its PIN. Home Assistant automatically tries a limited number of requests while this setup stays open."
+        "title": "Start panel heater pairing",
+        "description": "Start a pairing request to {name}, then watch the panel heater for its PIN. Home Assistant will not start pairing automatically while a repair is waiting, so one panel heater cannot block other proxies."
       },
       "passkey": {
-        "title": "Pair Dimplex heater",
-        "description": "Enter the six-digit PIN shown on {name}. The heater's PIN request expires about 30 seconds after it appears. Home Assistant automatically tries a limited number of requests while this setup stays open. The PIN is sent through the selected ESPHome proxy and is not saved.",
+        "title": "Pair Dimplex panel heater",
+        "description": "Enter the six-digit PIN shown on {name}. The panel heater's PIN request expires about 30 seconds after it appears. Home Assistant automatically tries a limited number of requests while this setup stays open. The PIN is sent through the selected ESPHome proxy and is not saved.",
         "data": {
           "passkey": "Bluetooth PIN"
         }
       },
       "reauth_confirm": {
-        "title": "Repair Dimplex heater authentication",
+        "title": "Repair Dimplex panel heater authentication",
+        "description": "Enter the six-digit PIN shown on {name} to restore the Bluetooth bond.",
+        "data": {
+          "passkey": "Bluetooth PIN"
+        }
+      },
+      "reconfigure": {
+        "title": "Repair Dimplex panel heater authentication",
         "description": "Enter the six-digit PIN shown on {name} to restore the Bluetooth bond.",
         "data": {
           "passkey": "Bluetooth PIN"
@@ -28,24 +35,24 @@
       }
     },
     "abort": {
-      "already_configured": "This heater is already configured.",
-      "no_heaters_found": "No Dimplex heaters were found. Enable Bluetooth on the heater and try again.",
-      "not_dimplex": "The advertisement does not identify a Dimplex heater.",
-      "proxy_passkey_support_missing": "This heater is visible, but no nearby ESPHome Bluetooth proxy has an encrypted API and the required passkey relay.",
+      "already_configured": "This panel heater is already configured.",
+      "no_heaters_found": "No Dimplex panel heaters were found. Enable Bluetooth on the panel heater and try again.",
+      "not_dimplex": "The advertisement does not identify a Dimplex panel heater.",
+      "proxy_passkey_support_missing": "This panel heater is visible, but no nearby ESPHome Bluetooth proxy has an encrypted API and the required passkey relay.",
       "proxy_unavailable": "The selected Bluetooth proxy is unavailable."
     },
     "error": {
-      "device_not_found": "That heater is no longer in the discovered-device list.",
+      "device_not_found": "That panel heater is no longer in the discovered-device list.",
       "invalid_passkey": "Enter exactly six digits.",
       "proxy_passkey_support_missing": "The selected proxy cannot accept a Bluetooth PIN.",
-      "pairing_failed": "Pairing failed or timed out. The heater's PIN request expires after about 30 seconds. Home Assistant automatically retries a limited number of times; submit the PIN again to start another bounded attempt. Check the heater display before entering a PIN.",
-      "pairing_in_progress": "This ESPHome proxy is pairing with another heater. Finish or cancel that setup, then try again."
+      "pairing_failed": "Pairing failed or timed out. The panel heater's PIN request expires after about 30 seconds. Home Assistant automatically retries a limited number of times; submit the PIN again to start another bounded attempt. Check the panel heater display before entering a PIN.",
+      "pairing_in_progress": "This ESPHome proxy is pairing with another panel heater. Finish or cancel that setup, then try again."
     }
   },
   "entity": {
     "climate": {
       "heater": {
-        "name": "Heater",
+        "name": "Panel Heater",
         "state": {
           "eco": "Eco"
         }
@@ -82,7 +89,7 @@
           "important_note": {
             "name": "Important note",
             "state": {
-              "continuously_learning_two_hour_limit_all_same_room_heaters_should_enable": "Learns continuously, enforces a two-hour calculation limit, and should be enabled on all heaters in the same room."
+              "continuously_learning_two_hour_limit_all_same_room_heaters_should_enable": "Learns continuously, enforces a two-hour calculation limit, and should be enabled on all panel heaters in the same room."
             }
           }
         }
@@ -93,7 +100,7 @@
           "what_it_does": {
             "name": "What it does",
             "state": {
-              "switches_heater_to_heating_off_when_open_window_detected": "Switches the heater to Heating Off when an open window is detected."
+              "switches_heater_to_heating_off_when_open_window_detected": "Switches the panel heater to Heating Off when an open window is detected."
             }
           },
           "how_it_works": {
@@ -111,7 +118,7 @@
           "important_note": {
             "name": "Important note",
             "state": {
-              "may_trigger_in_drafty_poorly_insulated_or_undersized_rooms": "May trigger incorrectly in drafty or poorly insulated rooms, or when the heater is undersized."
+              "may_trigger_in_drafty_poorly_insulated_or_undersized_rooms": "May trigger incorrectly in drafty or poorly insulated rooms, or when the panel heater is undersized."
             }
           }
         }
@@ -131,7 +138,7 @@
         "name": "Error code"
       },
       "operating_mode_raw": {
-        "name": "Operating mode (raw)"
+        "name": "Operating mode"
       },
       "rated_power": {
         "name": "Rated power"
@@ -190,7 +197,7 @@
     },
     "text": {
       "raw_0_0006": {
-        "name": "Experimental radiator clock"
+        "name": "Experimental panel heater clock"
       },
       "raw_0_1002": {
         "name": "Experimental schedule buffer"
@@ -242,8 +249,8 @@
       "description": "List discovered service and characteristic UUIDs and properties without reading values.",
       "fields": {
         "device_id": {
-          "name": "Heater",
-          "description": "The Dimplex heater to inspect."
+          "name": "Panel Heater",
+          "description": "The Dimplex panel heater to inspect."
         }
       }
     },
@@ -252,8 +259,8 @@
       "description": "Read a Dimplex characteristic and return its value as hexadecimal bytes.",
       "fields": {
         "device_id": {
-          "name": "Heater",
-          "description": "The Dimplex heater to read."
+          "name": "Panel Heater",
+          "description": "The Dimplex panel heater to read."
         },
         "service_group": {
           "name": "Service group",
@@ -270,8 +277,8 @@
       "description": "Write hexadecimal bytes to a Dimplex characteristic and return its readback when readable. Administrator only.",
       "fields": {
         "device_id": {
-          "name": "Heater",
-          "description": "The Dimplex heater to write."
+          "name": "Panel Heater",
+          "description": "The Dimplex panel heater to write."
         },
         "service_group": {
           "name": "Service group",
@@ -290,10 +297,10 @@
   },
   "exceptions": {
     "cannot_connect": {
-      "message": "Could not connect to the heater over Home Assistant Bluetooth. Check that a connectable Bluetooth adapter can reach it and that pairing is already established."
+      "message": "Could not connect to the panel heater over Home Assistant Bluetooth. Check that a connectable Bluetooth adapter can reach it and that pairing is already established."
     },
     "authentication_failed": {
-      "message": "The heater's Bluetooth authentication has expired or was lost. Re-enter the PIN to repair the connection."
+      "message": "The panel heater's Bluetooth authentication has expired or was lost. Re-enter the PIN to repair the connection."
     },
     "characteristic_unavailable": {
       "message": "The requested GATT characteristic is missing or does not support that operation."
@@ -311,13 +318,13 @@
       "message": "Enter exactly the required number of hexadecimal bytes for this experimental field."
     },
     "invalid_setpoint": {
-      "message": "The requested target must be a whole-degree Celsius value within the heater-reported range."
+      "message": "The requested target must be a whole-degree Celsius value within the panel heater-reported range."
     },
     "invalid_preset": {
-      "message": "The requested preset is not supported by this heater."
+      "message": "The requested preset is not supported by this panel heater."
     },
     "setpoint_unavailable": {
-      "message": "The heater has not reported a usable setpoint range yet."
+      "message": "The panel heater has not reported a usable setpoint range yet."
     },
     "invalid_temperature_unit": {
       "message": "Choose Celsius or Fahrenheit."

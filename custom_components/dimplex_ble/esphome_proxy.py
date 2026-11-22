@@ -28,7 +28,7 @@ class DimplexPairingError(Exception):
 
 
 class DimplexPairingInProgressError(DimplexPairingError):
-    """The selected proxy is already pairing with another heater."""
+    """The selected proxy is already pairing with another panel heater."""
 
 
 def normalize_address(address: str) -> str:
@@ -82,7 +82,7 @@ async def _async_call_proxy_action(
     action: str,
     data: dict[str, str],
 ) -> None:
-    """Call one encrypted action on the ESPHome proxy for this heater."""
+    """Call one encrypted action on the ESPHome proxy for this panel heater."""
     entry = find_proxy_entry(hass, source)
     if entry is None:
         raise DimplexPairingError("The selected ESPHome Bluetooth proxy is unavailable")

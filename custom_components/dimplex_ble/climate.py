@@ -1,4 +1,4 @@
-"""Native Home Assistant climate entity for a Dimplex heater."""
+"""Native Home Assistant climate entity for a Dimplex panel heater."""
 
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the native heater entity."""
+    """Set up the native panel heater entity."""
     async_add_entities([DimplexClimate(entry.runtime_data)])
 
 
 class DimplexClimate(DimplexEntity, ClimateEntity):
-    """Expose the heater's target and room temperature using HA's climate domain."""
+    """Expose the panel heater's target and room temperature using HA's climate domain."""
 
     _attr_translation_key = "heater"
     _attr_hvac_mode = HVACMode.HEAT
@@ -75,7 +75,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def native_target_temperature(self) -> float | None:
-        """Return the target read back from the heater."""
+        """Return the target read back from the panel heater."""
         data = self.coordinator.data
         return (
             float(data.setpoint_c)
@@ -98,7 +98,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def hvac_action(self) -> HVACAction | None:
-        """Return the heater's directly reported physical heating state."""
+        """Return the panel heater's directly reported physical heating state."""
         data = self.coordinator.data
         if data is None or data.heating_active is None:
             return None
@@ -106,7 +106,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def native_temperature_unit(self) -> str:
-        """Return the heater protocol's Celsius unit."""
+        """Return the panel heater protocol's Celsius unit."""
         return UnitOfTemperature.CELSIUS
 
     @property
@@ -130,7 +130,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Write a whole-degree Celsius target and wait for heater readback."""
+        """Write a whole-degree Celsius target and wait for panel heater readback."""
         requested = kwargs.get(ATTR_TEMPERATURE)
         if isinstance(requested, bool) or not isinstance(requested, (int, float)):
             raise ServiceValidationError(
@@ -168,7 +168,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             raise to_homeassistant_error(err) from err
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Write a verified operating preset and wait for heater readback."""
+        """Write a verified operating preset and wait for panel heater readback."""
         if self.preset_modes is None or preset_mode not in self.preset_modes:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,

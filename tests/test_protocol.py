@@ -17,6 +17,7 @@ from custom_components.dimplex_ble.protocol import (
     decode_known_raw_value,
     encode_preset_mode,
     encode_setpoint,
+    format_heating_mode,
     format_known_raw_value,
     format_readonly_raw_value,
     gatt_uuid_candidates,
@@ -300,6 +301,27 @@ def test_parse_snapshot_distinguishes_trac_active_flag_and_rejects_overrange_pow
     assert overrange.trac_output_power_percent is None
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (bytes.fromhex("010100000000"), "Timer Mode (Out All Day)"),
+        (bytes.fromhex("010300000000"), "Timer Mode (User Timer)"),
+        (bytes.fromhex("02"), "Manual"),
+        (bytes.fromhex("030000000000"), "Eco Mode"),
+        (bytes.fromhex("040000000000"), "Frost Protect"),
+    ],
+)
+def test_format_heating_mode_decodes_documented_modes(
+    payload: bytes, expected: str
+) -> None:
+    assert format_heating_mode(payload) == expected
+
+
+def test_format_heating_mode_returns_none_for_unknown_payload() -> None:
+    assert format_heating_mode(b"") is None
+    assert format_heating_mode(bytes.fromhex("fe0100000000")) is None
+
+
 @pytest.mark.parametrize(("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")])
 def test_encode_setpoint_encodes_whole_degrees(value: float, expected: bytes) -> None:
     assert encode_setpoint(value) == expected
@@ -309,7 +331,7 @@ def test_encode_setpoint_encodes_whole_degrees(value: float, expected: bytes) ->
 def test_encode_setpoint_rejects_fractional_or_nonfinite_values(value: float) -> None:
     with pytest.raises(DimplexProtocolError) as err:
         encode_setpoint(value)
-    assert str(err.value) == "The heater accepts whole-degree setpoints"
+    assert str(err.value) == "The panel heater accepts whole-degree setpoints"
 
 
 @pytest.mark.parametrize("value", [-1, 256])

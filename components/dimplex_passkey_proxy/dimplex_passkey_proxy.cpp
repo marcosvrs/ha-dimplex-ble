@@ -41,6 +41,61 @@ void DimplexPasskeyProxy::arm_pairing(const char *address_hex) {
   this->state_ = PairingState::WAITING_FOR_REQUEST;
   ESP_LOGI(TAG, "%s pairing armed", DEBUG_PREFIX);
 }
+void DimplexPasskeyProxy::clear_all_bonds() {
+  this->clear_pairing_();
+
+  int bond_count = esp_ble_get_bond_device_num();
+  if (bond_count <= 0) {
+    ESP_LOGI(TAG, "%s no BLE bonds to clear", DEBUG_PREFIX);
+    return;
+  }
+
+  constexpr int MAX_BONDS = 20;
+  std::array<esp_ble_bond_dev_t, MAX_BONDS> bonds{};
+  int list_count = bond_count < MAX_BONDS ? bond_count : MAX_BONDS;
+  const esp_err_t list_result =
+      esp_ble_get_bond_device_list(&list_count, bonds.data());
+  ESP_LOGI(TAG, "%s BLE bond list status=%d count=%d", DEBUG_PREFIX,
+           static_cast<int>(list_result), list_count);
+  if (list_result != ESP_OK) {
+    return;
+  }
+  for (int index = 0; index < list_count; ++index) {
+    const esp_err_t remove_result =
+        esp_ble_remove_bond_device(bonds[index].bd_addr);
+    ESP_LOGI(TAG, "%s BLE bond %d removal status=%d", DEBUG_PREFIX, index,
+             static_cast<int>(remove_result));
+  }
+}
+
+void DimplexPasskeyProxy::clear_bond(const char *address_hex) {
+  this->clear_pairing_();
+
+  std::array<uint8_t, 6> address{};
+  if (!parse_address_(address_hex, address)) {
+    ESP_LOGW(TAG, "%s bond clear rejected: invalid address", DEBUG_PREFIX);
+    return;
+  }
+
+  const esp_err_t direct_result = esp_ble_remove_bond_device(address.data());
+  ESP_LOGI(TAG, "%s bond clear address order status=%d", DEBUG_PREFIX,
+           static_cast<int>(direct_result));
+
+  std::array<uint8_t, 6> reversed_address = address;
+  for (std::size_t index = 0; index < reversed_address.size() / 2; ++index) {
+    const auto opposite = reversed_address.size() - 1 - index;
+    const auto value = reversed_address[index];
+    reversed_address[index] = reversed_address[opposite];
+    reversed_address[opposite] = value;
+  }
+  if (reversed_address != address) {
+    const esp_err_t reversed_result =
+        esp_ble_remove_bond_device(reversed_address.data());
+    ESP_LOGI(TAG, "%s bond clear reverse address order status=%d", DEBUG_PREFIX,
+             static_cast<int>(reversed_result));
+  }
+}
+
 
 void DimplexPasskeyProxy::set_pending_passkey(const char *address_hex,
                                               const char *passkey) {

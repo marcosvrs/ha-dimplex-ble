@@ -46,12 +46,15 @@ class DimplexPairingSession:
         source: str,
         address: str,
         pair: Callable[[], Awaitable[None]],
+        *,
+        timeout: float | None = None,
     ) -> None:
         """Initialize one address-scoped pairing attempt."""
         self._hass = hass
         self._source = source
         self._address = address
         self._pair = pair
+        self._timeout = esphome_proxy.PAIRING_TIMEOUT if timeout is None else timeout
         self._lock = proxy_pairing_lock(hass, source)
         self._task: asyncio.Task[None] | None = None
 
@@ -66,7 +69,7 @@ class DimplexPairingSession:
             return self._task
         if self._lock.locked():
             raise DimplexPairingInProgressError(
-                "The selected ESPHome proxy is already pairing with another heater"
+                "The selected ESPHome proxy is already pairing with another panel heater"
             )
 
         await self._lock.acquire()
@@ -94,15 +97,15 @@ class DimplexPairingSession:
     async def _async_run(self) -> None:
         """Run pairing with bounded wait and unconditional relay cleanup."""
         try:
-            await asyncio.wait_for(self._pair(), timeout=esphome_proxy.PAIRING_TIMEOUT)
+            await asyncio.wait_for(self._pair(), timeout=self._timeout)
         except asyncio.CancelledError:
             _LOGGER.warning("%s BLE pairing task cancelled", DEBUG_LOG_PREFIX)
             raise
         except TimeoutError:
             _LOGGER.warning(
-                "%s BLE pairing attempt timed out after %d seconds",
+                "%s BLE pairing attempt timed out after %.0f seconds",
                 DEBUG_LOG_PREFIX,
-                esphome_proxy.PAIRING_TIMEOUT,
+                self._timeout,
             )
             raise
         except Exception as err:
@@ -131,7 +134,40 @@ async def async_start_pairing(
     source: str,
     address: str,
     pair: Callable[[], Awaitable[None]],
+    *,
+    pairing_timeout: float | None = None,
 ) -> asyncio.Task[None]:
     """Start one managed pairing session and return its task interface."""
-    session = DimplexPairingSession(hass, source, address, pair)
+    session = DimplexPairingSession(
+        hass,
+        source,
+        address,
+        pair,
+        timeout=pairing_timeout,
+    )
     return await session.async_start()
+
+
+async def async_pair_with_passkey(
+    hass: HomeAssistant,
+    source: str,
+    address: str,
+    passkey: str,
+    pair: Callable[[], Awaitable[None]],
+    *,
+    repair_timeout: float,
+) -> None:
+    """Repair one lost bond with a stored passkey and a bounded timeout."""
+
+    async def pair_with_passkey() -> None:
+        await esphome_proxy.async_send_passkey(hass, source, address, passkey)
+        await pair()
+
+    task = await async_start_pairing(
+        hass,
+        source,
+        address,
+        pair_with_passkey,
+        pairing_timeout=repair_timeout,
+    )
+    await task

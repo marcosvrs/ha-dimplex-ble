@@ -51,7 +51,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     @callback
     def _get_entry(call: ServiceCall) -> DimplexConfigEntry:
-        """Resolve a selected heater device to its loaded config entry."""
+        """Resolve a selected panel-heater device to its loaded config entry."""
         _, entry = service.async_get_device_and_config_entry(
             hass, DOMAIN, call.data[_DEVICE_ID]
         )

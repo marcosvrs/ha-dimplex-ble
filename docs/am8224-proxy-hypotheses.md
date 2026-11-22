@@ -20,7 +20,7 @@ Disconnected, reason=0x100
 ```
 
 This was a test-harness failure, not an AM8224 radio, range, capacity, or
-two-radiator limitation.
+two-panel-heater limitation.
 
 ## Verified evidence
 
@@ -56,7 +56,7 @@ ESPHome tooling container was restarted before the clean verification.
   Keep the 5.5.5 workaround until the upstream fix is adopted and verified.
 - Erasing the proxy NVS partition clears API/BLE bond state. That is a
   diagnostic recovery operation, not a normal pairing step. It invalidates
-  existing heater bonds and causes HA entries such as AM6532 to require repair.
+  existing panel-heater bonds and causes HA entries such as AM6532 to require repair.
 - The Dimplex passkey relay is needed only for first pairing. The verified
   reconnect did not need a new PIN.
 
@@ -73,7 +73,7 @@ That callback came from a Bluetooth discovery snapshot containing only the
 host-adapter route. The ESPHome proxy route was present in Home Assistant's
 scanner registry but absent from that snapshot. The config flow therefore
 rejected AM8224 before pairing could start, even though the proxy could reach
-the heater.
+the panel heater.
 
 `pairing.select_proxy_source()` now falls back to the scanner registry when the
 current discovery snapshot has no eligible route. It still requires a loaded,
@@ -87,7 +87,7 @@ The fix was deployed and exercised end to end:
 3. PIN `577143` created the AM8224 config entry.
 4. AM6532 and AM8224 both reported successful coordinator refreshes through
    the same proxy.
-5. Restarting HA reconnected both bonded heaters without another PIN or
+5. Restarting HA reconnected both bonded panel heaters without another PIN or
    authentication-repair error.
 
 The earlier direct-probe root cause and the HA discovery-route race are

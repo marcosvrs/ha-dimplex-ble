@@ -25,7 +25,7 @@ DEBUG_LOG_PREFIX = "[DEBUG-DIMPLEX-PIN-20261117]"
 
 
 def _assigned_proxy_count(hass: HomeAssistant, source: str) -> int:
-    """Count configured heaters already assigned to an ESPHome proxy."""
+    """Count configured panel heaters already assigned to an ESPHome proxy."""
     normalized_source = source.casefold()
     return sum(
         entry.data.get(CONF_PROXY_SOURCE, "").casefold() == normalized_source
@@ -137,7 +137,7 @@ def select_proxy_source(
 def ble_device_from_source(
     hass: HomeAssistant, address: str, source: str
 ) -> BLEDevice | None:
-    """Return the device from the scanner that owns this heater's bond."""
+    """Return the device from the scanner that owns this panel heater's bond."""
     normalized_address = address.upper()
     normalized_source = source.casefold()
     scanner_devices = bluetooth.async_scanner_devices_by_address(

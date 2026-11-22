@@ -7,14 +7,22 @@ from unittest.mock import AsyncMock, Mock, call
 
 import homeassistant.config_entries as config_entries
 import pytest
-from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_REAUTH, SOURCE_USER
+from homeassistant.config_entries import (
+    SOURCE_BLUETOOTH,
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    SOURCE_USER,
+)
 from homeassistant.data_entry_flow import InvalidData
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import format_mac
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.dimplex_ble import config_flow
-from custom_components.dimplex_ble.client import DimplexConnectionError
+from custom_components.dimplex_ble.client import (
+    DimplexBluetoothClient,
+    DimplexConnectionError,
+)
 from custom_components.dimplex_ble.const import (
     CONF_ADDRESS,
     CONF_ADDRESS_TYPE,
@@ -40,6 +48,11 @@ def mock_flow_dependencies(hass, monkeypatch: pytest.MonkeyPatch) -> None:
         config_flow.bluetooth,
         "async_discovered_service_info",
         Mock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        config_flow.bluetooth,
+        "async_request_active_scan",
+        AsyncMock(),
     )
     monkeypatch.setattr(
         config_flow.bluetooth,
@@ -191,13 +204,13 @@ async def test_rule_auto_discovery_uses_advertised_name_for_flow_and_entry_title
     client_factory.assert_called_once_with(
         hass, address, "proxy-1", info.device
     )
-    assert configured["title"] == "Dimplex Heater sample-heater"
+    assert configured["title"] == "Dimplex Panel Heater sample-heater"
     assert configured["result"].unique_id == address
     assert configured["data"] == {
         CONF_ADDRESS: format_mac("aa:bb:cc:dd:ee:03"),
         CONF_PROXY_SOURCE: "proxy-1",
+        CONF_PASSKEY: "012345",
     }
-    assert "passkey" not in configured["data"]
 
 
 async def test_rule_bluetooth_discovery_uses_strongest_matching_proxy_route(
@@ -415,8 +428,8 @@ async def test_rule_bluetooth_discovery_keeps_multiple_heaters_as_entries(
         )
 
     assert [result["title"] for result in created_entries] == [
-        "Dimplex Heater sample-heater-1",
-        "Dimplex Heater sample-heater-2",
+        "Dimplex Panel Heater sample-heater-1",
+        "Dimplex Panel Heater sample-heater-2",
     ]
     assert len(hass.config_entries.async_entries(DOMAIN)) == 2
 
@@ -445,9 +458,9 @@ async def test_rule_bluetooth_without_display_name_uses_generic_title(
     created = await hass.config_entries.flow.async_configure(
         started["flow_id"], {CONF_PASSKEY: "012345"}
     )
-    assert created["title"] == "Dimplex Heater 1"
-    assert flow._next_device_title() == "Dimplex Heater 2"
-    assert reserved_titles == {"Dimplex Heater 1", "Dimplex Heater 2"}
+    assert created["title"] == "Dimplex Panel Heater 1"
+    assert flow._next_device_title() == "Dimplex Panel Heater 2"
+    assert reserved_titles == {"Dimplex Panel Heater 1", "Dimplex Panel Heater 2"}
 async def test_rule_bluetooth_duplicate_is_aborted_before_pairing(hass, monkeypatch):
     proxy_selection = Mock(return_value="proxy")
     monkeypatch.setattr(config_flow, "select_proxy_source", proxy_selection)
@@ -539,7 +552,7 @@ async def test_rule_manual_flow_skips_unsupported_heater_and_keeps_supported_one
     assert options == [
         {
             "value": format_mac("AA:BB:CC:DD:EE:17"),
-            "label": "Dimplex heater-proxy (-42 dBm)",
+            "label": "Dimplex Panel Heater heater-proxy (-42 dBm)",
         }
     ]
     discovered.assert_called_once_with(hass, connectable=True)
@@ -593,11 +606,11 @@ async def test_rule_manual_labels_show_advertised_names_for_multiple_heaters(
     assert options == [
         {
             "value": format_mac("AA:BB:CC:DD:EE:07"),
-            "label": "Dimplex sample-heater-1 (-31 dBm)",
+            "label": "Dimplex Panel Heater sample-heater-1 (-31 dBm)",
         },
         {
             "value": format_mac("AA:BB:CC:DD:EE:06"),
-            "label": "Dimplex sample-heater-2 (-73 dBm)",
+            "label": "Dimplex Panel Heater sample-heater-2 (-73 dBm)",
         },
     ]
     assert "AA:BB:CC:DD:EE:06" not in str(options)
@@ -634,11 +647,11 @@ async def test_rule_manual_route_name_prefers_selected_proxy_and_falls_back_safe
     assert options == [
         {
             "value": format_mac(east),
-            "label": "Dimplex sample-heater-2 (-30 dBm)",
+            "label": "Dimplex Panel Heater sample-heater-2 (-30 dBm)",
         },
         {
             "value": format_mac(south),
-            "label": "Dimplex sample-heater-3 (-45 dBm)",
+            "label": "Dimplex Panel Heater sample-heater-3 (-45 dBm)",
         },
     ]
 
@@ -704,8 +717,8 @@ async def test_rule_manual_labels_number_heaters_without_local_names(hass, monke
     options = next(iter(result["data_schema"].schema.values())).config["options"]
 
     assert [option["label"] for option in options] == [
-        "Dimplex heater 1 (-20 dBm)",
-        "Dimplex heater 2 (-40 dBm)",
+        "Dimplex Panel Heater 1 (-20 dBm)",
+        "Dimplex Panel Heater 2 (-40 dBm)",
     ]
 
 async def test_rule_manual_selection_rejects_unknown_address_without_identifier_entry(
@@ -732,8 +745,8 @@ async def test_rule_manual_selection_persists_route_and_advertised_nonconflictin
     hass, monkeypatch
 ):
     reserved_titles = {
-        "Dimplex Heater radiator-bedroom",
-        "Dimplex Heater radiator-bedroom (2)",
+        "Dimplex Panel Heater radiator-bedroom",
+        "Dimplex Panel Heater radiator-bedroom (2)",
     }
     hass.data.setdefault(DOMAIN, {})["reserved_device_titles"] = reserved_titles
     address = format_mac("AA:BB:CC:DD:EE:10")
@@ -765,12 +778,12 @@ async def test_rule_manual_selection_persists_route_and_advertised_nonconflictin
     created = await hass.config_entries.flow.async_configure(
         selected["flow_id"], pin_input
     )
-    assert created["title"] == "Dimplex Heater radiator-bedroom (3)"
+    assert created["title"] == "Dimplex Panel Heater radiator-bedroom (3)"
     assert created["result"].unique_id == address
     assert reserved_titles == {
-        "Dimplex Heater radiator-bedroom",
-        "Dimplex Heater radiator-bedroom (2)",
-        "Dimplex Heater radiator-bedroom (3)",
+        "Dimplex Panel Heater radiator-bedroom",
+        "Dimplex Panel Heater radiator-bedroom (2)",
+        "Dimplex Panel Heater radiator-bedroom (3)",
     }
     discovered.assert_called_once_with(hass, connectable=True)
     proxy_selection.assert_called_once_with(hass, address, infos)
@@ -780,6 +793,7 @@ async def test_rule_manual_selection_persists_route_and_advertised_nonconflictin
     assert created["data"] == {
         CONF_ADDRESS: address,
         CONF_PROXY_SOURCE: "proxy-bedroom",
+        CONF_PASSKEY: "654321",
     }
 
 async def test_rule_title_reservation_ignores_other_domains(hass, monkeypatch):
@@ -795,9 +809,9 @@ async def test_rule_title_reservation_ignores_other_domains(hass, monkeypatch):
     )
     unrelated_entry.add_to_hass(hass)
     hass.data.pop(DOMAIN, None)
-    assert flow._next_device_title() == "Dimplex Heater radiator-north"
+    assert flow._next_device_title() == "Dimplex Panel Heater radiator-north"
     assert hass.data[DOMAIN]["reserved_device_titles"] == {
-        "Dimplex Heater radiator-north"
+        "Dimplex Panel Heater radiator-north"
     }
 
 
@@ -858,6 +872,7 @@ async def test_rule_successful_direct_passkey_step_clears_value(hass, monkeypatc
         CONF_ADDRESS: address,
         CONF_PROXY_SOURCE: "proxy-1",
         CONF_ADDRESS_TYPE: 1,
+        CONF_PASSKEY: "999999",
     }
     client_factory.assert_called_once_with(hass, address, "proxy-1", info.device)
     assert hass.data[DOMAIN][config_flow.PENDING_DEVICES][address] is info.device
@@ -1140,6 +1155,7 @@ async def test_rule_title_allocator_uses_first_available_suffix(hass, monkeypatc
     reserved_titles = {
         "Dimplex Heater radiator-gap",
         "Dimplex Heater radiator-gap (3)",
+        "plain-title",
     }
     hass.data.setdefault(DOMAIN, {})["reserved_device_titles"] = reserved_titles
     discovered = await hass.config_entries.flow.async_init(
@@ -1149,8 +1165,8 @@ async def test_rule_title_allocator_uses_first_available_suffix(hass, monkeypatc
     )
     flow = hass.config_entries.flow._progress[discovered["flow_id"]]
 
-    assert flow._next_device_title() == "Dimplex Heater radiator-gap (2)"
-    assert "Dimplex Heater radiator-gap (2)" in reserved_titles
+    assert flow._next_device_title() == "Dimplex Panel Heater radiator-gap (2)"
+    assert "Dimplex Panel Heater radiator-gap (2)" in reserved_titles
     hass.config_entries.flow.async_abort(discovered["flow_id"])
 
 
@@ -1335,7 +1351,15 @@ async def test_pairing_retry_waits_for_task_created_by_retry_start(
     flow._address = "AA:BB:CC:DD:EE:74"
     flow._proxy_source = "proxy"
     awaited = False
+    class PairingAwaitable:
+        def __await__(self):
+            nonlocal awaited
+            awaited = True
 
+            async def finish():
+                return None
+
+            return finish().__await__()
     class PairingAwaitable:
         def __await__(self):
             nonlocal awaited
@@ -1421,7 +1445,7 @@ async def test_rule_pin_after_expired_attempt_is_sent_to_fresh_attempt(
     created = submission.result()
 
     assert created["type"] == "create_entry"
-    assert CONF_PASSKEY not in created["data"]
+    assert created["data"][CONF_PASSKEY] == "123456"
 
 
 async def test_pair_step_reprompts_and_aborts_when_proxy_route_disappears(
@@ -1777,7 +1801,10 @@ async def test_reauth_repairs_existing_entry(hass, monkeypatch):
         context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
         data=entry.data,
     )
-    assert started["step_id"] == "reauth_confirm"
+    assert started["step_id"] == "pair"
+
+    result = await hass.config_entries.flow.async_configure(started["flow_id"], {})
+    assert result["step_id"] == "reauth_confirm"
 
     result = await hass.config_entries.flow.async_configure(
         started["flow_id"], {CONF_PASSKEY: "764343"}
@@ -1788,7 +1815,7 @@ async def test_reauth_repairs_existing_entry(hass, monkeypatch):
 
 
 
-async def test_reauth_start_error_is_shown_on_initial_reauth_form(
+async def test_reauth_does_not_start_pairing_until_user_continues(
     hass, monkeypatch
 ) -> None:
     entry = MockConfigEntry(
@@ -1802,19 +1829,26 @@ async def test_reauth_start_error_is_shown_on_initial_reauth_form(
     flow = config_flow.DimplexBleConfigFlow()
     flow.hass = hass
     flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
-    start = AsyncMock(return_value="proxy_unavailable")
+    start = AsyncMock()
     monkeypatch.setattr(flow, "_async_start_pairing", start)
 
-    ensure_retry = Mock()
-    monkeypatch.setattr(flow, "_async_ensure_pairing_retry", ensure_retry)
     result = await flow.async_step_reauth(entry.data)
 
-    assert result["step_id"] == "reauth_confirm"
-    assert result["errors"] == {"base": "proxy_unavailable"}
-    start.assert_awaited_once_with(
-        entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
+    assert result["step_id"] == "pair"
+    start.assert_not_awaited()
+
+
+async def test_reauth_shows_preparation_error(hass, monkeypatch):
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._async_prepare_repair = AsyncMock(return_value="pairing_failed")
+
+    result = await flow.async_step_reauth(
+        {CONF_ADDRESS: "AA:BB:CC:DD:EE:20", CONF_PROXY_SOURCE: "proxy"}
     )
-    ensure_retry.assert_not_called()
+
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "pairing_failed"}
 
 async def test_reauth_rejects_invalid_pin(hass, monkeypatch):
     entry = MockConfigEntry(
@@ -1834,6 +1868,7 @@ async def test_reauth_rejects_invalid_pin(hass, monkeypatch):
         context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id},
         data=entry.data,
     )
+    await hass.config_entries.flow.async_configure(started["flow_id"], {})
     result = await hass.config_entries.flow.async_configure(
         started["flow_id"], {CONF_PASSKEY: "123"}
     )
@@ -1951,7 +1986,7 @@ def test_reauth_form_uses_generic_name_without_advertisement(hass) -> None:
 
     result = flow._show_reauth_form()
 
-    assert result["description_placeholders"] == {"name": "the selected heater"}
+    assert result["description_placeholders"] == {"name": "the selected panel heater"}
     assert result["errors"] == {}
 
 
@@ -1990,7 +2025,7 @@ async def test_reauth_uses_existing_route_and_entry_name(hass, monkeypatch) -> N
 
     result = await flow.async_step_reauth(entry.data)
 
-    assert result["step_id"] == "reauth_confirm"
+    assert result["step_id"] == "pair"
     assert flow._address == entry.data[CONF_ADDRESS]
     assert flow._proxy_source == entry.data[CONF_PROXY_SOURCE]
     assert flow._ble_device is device
@@ -1998,6 +2033,186 @@ async def test_reauth_uses_existing_route_and_entry_name(hass, monkeypatch) -> N
     find_device.assert_called_once_with(
         hass, entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
     )
+
+
+async def test_reconfigure_exposes_manual_repair_for_existing_entry(
+    hass, monkeypatch
+) -> None:
+    """Every configured heater can start its own repair flow."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM1382",
+        unique_id="AA:BB:CC:DD:EE:22",
+        data={
+            CONF_ADDRESS: "AA:BB:CC:DD:EE:22",
+            CONF_PROXY_SOURCE: "proxy",
+        },
+    )
+    entry.add_to_hass(hass)
+    device = object()
+    monkeypatch.setattr(
+        config_flow, "ble_device_from_source", Mock(return_value=device)
+    )
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    flow._async_start_pairing = AsyncMock(return_value="pairing_in_progress")
+    retry = Mock()
+    monkeypatch.setattr(flow, "_async_ensure_pairing_retry", retry)
+
+    result = await flow.async_step_reconfigure()
+
+    assert result["step_id"] == "reconfigure"
+    assert flow._ble_device is device
+    assert flow._advertised_name == "AM1382"
+    assert result["errors"] == {"base": "pairing_in_progress"}
+    retry.assert_called_once()
+
+
+async def test_reconfigure_reuses_loaded_entry_client_for_pairing(
+    hass, monkeypatch
+) -> None:
+    """Repairing a loaded entry must share its runtime BLE client."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM6532",
+        unique_id="AA:BB:CC:DD:EE:25",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:25", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    runtime_client = DimplexBluetoothClient(hass, entry.data[CONF_ADDRESS], "proxy")
+    runtime_client.async_pair = AsyncMock()
+    entry.runtime_data = SimpleNamespace(client=runtime_client)
+    start = AsyncMock(return_value=asyncio.get_running_loop().create_future())
+    monkeypatch.setattr(config_flow, "async_start_pairing", start)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    flow._ble_device = object()
+
+    result = await flow._async_start_pairing(
+        entry.data[CONF_ADDRESS], entry.data[CONF_PROXY_SOURCE]
+    )
+
+    assert result is None
+    start.assert_awaited_once_with(
+        hass, "proxy", entry.data[CONF_ADDRESS], runtime_client.async_pair
+    )
+
+
+async def test_reconfigure_shows_pin_form_when_pairing_starts(
+    hass, monkeypatch
+) -> None:
+    """A working manual repair attempt leaves the PIN form visible."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM1382",
+        unique_id="AA:BB:CC:DD:EE:23",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:23", CONF_PROXY_SOURCE: "proxy"},
+    )
+    entry.add_to_hass(hass)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    monkeypatch.setattr(flow, "_async_prepare_repair", AsyncMock(return_value=None))
+    monkeypatch.setattr(flow, "_async_ensure_pairing_retry", Mock())
+
+    result = await flow.async_step_reconfigure()
+
+    assert result["step_id"] == "reconfigure"
+
+
+async def test_reconfigure_rejects_missing_connection_data(hass) -> None:
+    """A malformed stored entry cannot start a manual repair."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM1382",
+        unique_id="AA:BB:CC:DD:EE:24",
+        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:24"},
+    )
+    entry.add_to_hass(hass)
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+
+    result = await flow.async_step_reconfigure()
+
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "proxy_unavailable"}
+
+
+async def test_reconfigure_validates_pin_in_manual_repair(hass) -> None:
+    """The manual repair flow uses the same PIN validation as reauth."""
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_RECONFIGURE}
+
+    result = await flow.async_step_reconfigure({CONF_PASSKEY: "bad"})
+
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "invalid_passkey"}
+
+
+async def test_reauth_synthesizes_device_when_heater_is_not_advertising(
+    hass, monkeypatch
+) -> None:
+    """Reauth must still reach the heater when it stopped advertising."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater AM2086",
+        unique_id="AA:BB:CC:DD:EE:21",
+        data={
+            CONF_ADDRESS: "AA:BB:CC:DD:EE:21",
+            CONF_ADDRESS_TYPE: "public",
+            CONF_PROXY_SOURCE: "proxy",
+        },
+    )
+    entry.add_to_hass(hass)
+    monkeypatch.setattr(config_flow, "ble_device_from_source", Mock(return_value=None))
+    start = AsyncMock(return_value="pairing_failed")
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+    flow._async_start_pairing = start
+
+    result = await flow.async_step_reauth(entry.data)
+
+    assert result["step_id"] == "pair"
+    assert flow._ble_device is not None
+    assert flow._ble_device.address == entry.data[CONF_ADDRESS]
+    assert flow._ble_device.details == {
+        "source": entry.data[CONF_PROXY_SOURCE],
+        "address_type": 0,
+    }
+    start.assert_not_awaited()
+
+
+async def test_reauth_confirm_starts_pairing_before_showing_pin(
+    hass, monkeypatch
+) -> None:
+    """Rendering the PIN form must arm the proxy even on a resumed flow."""
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+    flow._address = "AA:BB:CC:DD:EE:21"
+    flow._proxy_source = "proxy"
+    start = AsyncMock(return_value="pairing_failed")
+    monkeypatch.setattr(flow, "_async_start_pairing", start)
+
+    result = await flow.async_step_reauth_confirm()
+
+    assert result["step_id"] == "reauth_confirm"
+    start.assert_awaited_once_with(flow._address, flow._proxy_source)
+
+
+async def test_reauth_confirm_aborts_without_target_when_showing_pin(hass) -> None:
+    """A resumed flow without its stored target cannot arm pairing."""
+    flow = config_flow.DimplexBleConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_reauth_confirm()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "proxy_unavailable"
 
 
 async def test_reauth_confirm_sends_pin_waits_for_pairing_and_cancels_retry(

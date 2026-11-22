@@ -18,11 +18,11 @@ There are three different behaviors that are often called roaming:
    bond; the ESPHome protocol has no bond-replication or cross-proxy migration
    mechanism.
 
-For a Dimplex heater, advertisement aggregation is safe automatically. Runtime
-connection-path selection is safe only among currently advertised routes whose
-proxy-local bond has already been verified. The integration therefore keeps the
-configured proxy for commissioning and uses controlled failover/rebalancing only
-after a fresh encrypted connection can be established.
+For a Dimplex panel heater, advertisement aggregation is safe automatically.
+Runtime connection-path selection is safe only among currently advertised routes
+whose proxy-local bond has already been verified. The integration therefore keeps
+the configured proxy for commissioning and uses controlled failover/rebalancing
+only after a fresh encrypted connection can be established.
 
 ## ESPHome proxy capacity
 
@@ -112,7 +112,7 @@ Therefore:
   proxy is unavailable, because the new proxy may not be bonded.
 
 A safe proxy migration is an explicit commissioning operation: select the new
-proxy, ensure it can reach the heater, perform the device's supported pairing
+proxy, ensure it can reach the panel heater, perform the device's supported pairing
 flow, verify an authenticated read, and only then update the stored route.
 Automatic migration must not be used as a recovery retry.
 
@@ -170,23 +170,23 @@ three-slot configuration. The semaphore limits Dimplex's own connection
 attempts; ESPHome's allocation response remains authoritative because other
 Bluetooth integrations may consume slots.
 
-## Two-proxy, three-heater implications
+## Two-proxy, three-panel-heater implications
 
 The current layout is valid:
 
 - AM6532 and AM8224 share one proxy: two active GATT clients, below the default
   three-slot limit.
-- AM2086 uses the second proxy, subject to that heater being currently
+- AM2086 uses the second proxy, subject to that panel heater being currently
   discoverable and bonded.
 - Passive advertisements can be heard by either proxy without consuming slots.
 - Active reads and writes use a route that has a usable bond; a stronger RSSI
   alone does not create a bond.
 
-AM6532 and AM8224 were independently verified with authenticated protected
-reads through both ESPHome proxies. This proves that those heaters can fail
-over between the two routes without a new PIN after each route has been
-commissioned. AM2086 remains unverified when it is not advertised; the
-integration does not guess a route or invent a bond.
+AM6532 and AM8224 were independently verified with authenticated reads through
+both ESPHome proxies. This proves that those panel heaters can fail over between
+the two routes without a new PIN after each route has been commissioned. AM2086
+remains unverified when it is not advertised; the integration does not guess a
+route or invent a bond.
 
 ## Safe design boundaries
 
@@ -203,11 +203,12 @@ route is selected:
   is met;
 - respect reported slot capacity;
 - fall back to another candidate only after the first candidate fails; and
-- request existing-bond encryption without sending a PIN.
+- request existing-bond encryption on a configured route without sending a PIN;
+- permit one bounded stored-PIN bond repair on that same configured route;
+- never begin first-time pairing on an alternate path.
 
 If an alternate path has no usable bond, it fails cleanly and the next route is
-tried. The integration does not automatically begin first-time pairing on an
-alternate path.
+not tried automatically because ESPHome has no bond-transfer API.
 
 ### Explicit commissioning or migration
 
@@ -223,7 +224,7 @@ The integration does not:
 - change a proxy underneath an active GATT operation;
 - round-robin healthy persistent connections;
 - open GATT probes to every proxy periodically just to score RSSI;
-- send a PIN automatically during runtime failover; or
+- send a PIN automatically during runtime failover to another proxy; or
 - treat advertisement strength as proof of authentication.
 
 These restrictions avoid the previously observed failure mode where arbitrary
@@ -255,7 +256,7 @@ attach competing API subscribers to live proxies. The integration therefore
 uses only Home Assistant's already-managed scanner registry for route
 selection and monitoring.
 
-**Remaining limitation:** a heater must first be commissioned through every
+**Remaining limitation:** a panel heater must first be commissioned through every
 proxy that may be used for automatic failover. Runtime route selection cannot
 manufacture a missing bond.
 
@@ -283,7 +284,7 @@ pairing arm action. This prevents a stronger advertisement from silently
 redirecting a PIN exchange to a second proxy whose relay was not armed.
 
 The live two-proxy test also showed that arbitrary alternate-proxy GATT probes
-are unsafe as a health check: while the three heaters were actively connected
+are unsafe as a health check: while the three panel heaters were actively connected
 through their assigned proxies, probing the opposite proxies timed out and
 left the assigned connections unavailable until both proxies were rebooted.
 This is evidence against probing unbonded alternate paths during normal
@@ -291,15 +292,15 @@ polling. It is not evidence that the alternate proxies lack radio range.
 
 The last observed live allocation after recovery was:
 
-- Main Bedroom proxy: two allocated heater connections, one free slot.
-- Living Room proxy: one allocated heater connection, two free slots.
+- Main Bedroom proxy: two allocated panel-heater connections, one free slot.
+- Living Room proxy: one allocated panel-heater connection, two free slots.
 
 AM6532 and AM8224 have completed explicit commissioning and authenticated-read
 verification through both proxies. AM2086 still requires an observed,
 authenticated route before it can participate in automatic failover.
 The post-cooldown observation then recorded successful coordinator updates for
 AM6532 and AM8224 throughout the 15-minute window. No route-switch or
-authentication-failure log occurred for either bonded heater. The only failed
+authentication-failure log occurred for either bonded panel heater. The only failed
 entry was AM2086, whose configured address remains `c4:d8:d5:69:c0:86`.
 
 An active pairing flow was separately attempting address

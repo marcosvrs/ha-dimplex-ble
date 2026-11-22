@@ -1,4 +1,4 @@
-"""Diagnostic sensors that preserve heater-provided values."""
+"""Diagnostic sensors that preserve panel-heater-provided values."""
 
 from dataclasses import dataclass
 
@@ -16,12 +16,12 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .client import DimplexError
 from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .protocol import (
     GattAddress,
     decode_known_raw_value,
+    format_heating_mode,
     format_readonly_raw_value,
 )
 
@@ -59,15 +59,7 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up heater diagnostics."""
     del hass
-    client = entry.runtime_data.client
-    try:
-        values = await client.async_read_raw_fields(
-            tuple(field.address for field in EXPERIMENTAL_READ_ONLY_FIELDS)
-        )
-    except DimplexError:
-        values = {}
 
     async_add_entities(
         [
@@ -78,9 +70,7 @@ async def async_setup_entry(
             DimplexOutputPowerSensor(entry.runtime_data),
             DimplexCalculatedPowerSensor(entry.runtime_data),
             *(
-                DimplexExperimentalRawSensor(
-                    entry.runtime_data, field, values.get(field.address)
-                )
+                DimplexExperimentalRawSensor(entry.runtime_data, field, None)
                 for field in EXPERIMENTAL_READ_ONLY_FIELDS
             ),
         ]
@@ -95,7 +85,7 @@ class DimplexErrorCodeSensor(DimplexEntity, SensorEntity):
 
     @property
     def native_value(self) -> int | None:
-        """Return the exact numeric error status from the heater."""
+        """Return the exact numeric error status from the panel heater."""
         data = self.coordinator.data
         return data.error_code if data is not None else None
 
@@ -109,7 +99,7 @@ class DimplexErrorCodeSensor(DimplexEntity, SensorEntity):
 
 
 class DimplexOperatingModeSensor(DimplexEntity, SensorEntity):
-    """Expose operating-mode bytes without assigning unverified meanings."""
+    """Expose documented operating-mode names with a raw fallback."""
 
     _attr_translation_key = "operating_mode_raw"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -117,13 +107,16 @@ class DimplexOperatingModeSensor(DimplexEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return the exact mode payload as hexadecimal bytes."""
+        """Return a documented mode name or the exact raw payload."""
         data = self.coordinator.data
-        return data.operating_mode_hex if data is not None else None
+        if data is None or data.operating_mode_hex is None:
+            return None
+        payload = bytes.fromhex(data.operating_mode_hex)
+        return format_heating_mode(payload) or data.operating_mode_hex
 
 
 class DimplexRatedPowerSensor(DimplexEntity, SensorEntity):
-    """Expose the first PowerLoading word as the heater's rated power."""
+    """Expose the first PowerLoading word as the panel heater's rated power."""
 
     _attr_translation_key = "rated_power"
     _attr_device_class = SensorDeviceClass.POWER
@@ -230,9 +223,12 @@ class DimplexExperimentalRawSensor(DimplexEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         """Return a decoded value or the exact raw hexadecimal fallback."""
-        if self._value is None:
+        payload = self.coordinator.raw_fields.get(self._field.address)
+        if payload is None and self._value is not None:
+            payload = bytes.fromhex(self._value)
+        if payload is None:
             return None
-        payload = bytes.fromhex(self._value)
+        self._value = payload.hex()
         return format_readonly_raw_value(self._field.address, payload) or self._value
 
     @property

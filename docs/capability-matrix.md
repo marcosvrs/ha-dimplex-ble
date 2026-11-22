@@ -1,6 +1,6 @@
 # Dimplex capability matrix
 
-This matrix is the implementation boundary for the AM6532 heater currently
+This matrix is the implementation boundary for the AM6532 panel heater currently
 commissioned through the integration. ConfigR is the source of truth for product
 terminology and lifecycle behavior. A ConfigR label is not, by itself, proof that
 the AM6532 exposes a safe packet or command; those rows remain unknown until the
@@ -8,8 +8,8 @@ packet mapping and device behavior are verified.
 
 ## Evidence classes
 
-- **LIVE-AM6532**: read from the commissioned heater through the Home Assistant
-  raw-GATT action on 2026-11-19, then confirmed by the normal coordinator poll.
+- **LIVE-AM6532**: read from the commissioned panel heater through the Home
+  Assistant raw-GATT action on 2026-11-19, then confirmed by the normal coordinator poll.
 - **CONFIGR-PROFILE**: recovered from the official ConfigR Native AOT resource
   bundle. It describes product profiles and diagnostics supported by the app, not
   necessarily every model.
@@ -70,7 +70,7 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `3/0x000A` | 8 | RW | PowerLoading | yes | present | First LE16 rated power mapped; remaining bytes retained/unknown; writes blocked |
 | `1/0x000E` | 1 | R | OffpeakStatus | no | absent | Not available |
 | `0/0x0106` | 8 | W | SetRtcWithSeconds | no | absent | Not available |
-| `0/0x1001` | 6 | RW | HeatingMode | yes | present | Eco verified; Frost payload is bounded but physical-display confirmation remains phase 2; other codes not exposed |
+| `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm Eco Mode on AM2086 and Frost Protect on AM6532/AM8224. Direct admin writes on AM2086 accepted and read back for Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), and Timer Mode/User Timer (`01 03`). Characteristic readback proves payload acceptance; timer submode behavior and safe user-facing climate mapping remain unverified. AM1382 is currently unavailable. |
 | `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read buffer observed; schedule structure/write not verified on AM6532 |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
@@ -136,7 +136,7 @@ ESPHome project and Q-Rad notes, but they are not AM6532 verification:
 | Schedule read | Sunhouse writes `0/0x1002 = [0,timerMode,day]`, waits, then reads 31 bytes | Inferred protocol-family layout; AM6532 returned zero buffer only |
 | Schedule write | Sunhouse writes `[1,timerMode,day]` plus four periods of `[startH,startM,endH,endM,temp,0]` and four padding bytes | Not verified on AM6532; no calendar entity |
 | Clock keep-alive | Sunhouse writes current time to `0/0x0006` every 3 seconds; its byte order is `[seconds,minutes,hours,day-of-week,day,month,year-offset]` | Conflicts with Q-Rad/ConfigR clock layout; do not copy to AM6532 |
-| BLE security setup | Sunhouse uses keyboard-only I/O, MITM + bonding, and a passkey callback | Pairing architecture evidence only; no heater field |
+| BLE security setup | Sunhouse uses keyboard-only I/O, MITM + bonding, and a passkey callback | Pairing architecture evidence only; no panel-heater field |
 | One-central behavior | Q-Rad notes one central at a time; advertising and bond persistence were observed on QRAD100E | Device/profile behavior, not a GATT capability mapping |
 
 ## Quantum board-dump evidence
@@ -151,19 +151,19 @@ or command is inferred from the binary contents.
 
 | Capability | Evidence | Status | Integration decision |
 |---|---|---|---|
-| Stable product identity | LIVE-AM6532: `3/0x2005` returned `PLX050E;C;`; `3/0x200a` returned product code `EP4213`; Home Assistant registry identity is the configured Bluetooth address | REQUIRED | Use the configured heater identity and product code as model metadata; do not use the proxy address as the device identity |
-| Device topology | LIVE-AM6532: one heater per config entry; no hub/service topology observed | REQUIRED | One config entry and one device per heater |
+| Stable product identity | LIVE-AM6532: `3/0x2005` returned `PLX050E;C;`; `3/0x200a` returned product code `EP4213`; Home Assistant registry identity is the configured Bluetooth address | REQUIRED | Use the configured panel-heater identity and product code as model metadata; do not use the proxy address as the device identity |
+| Device topology | LIVE-AM6532: one panel heater per config entry; no hub/service topology observed | REQUIRED | One config entry and one device per panel heater |
 | Current room temperature | LIVE-AM6532: selector `1/0x0008` returned a Celsius room-temperature reading used by the coordinator | REQUIRED | `ClimateEntity.native_current_temperature` |
 | Native temperature unit | LIVE-AM6532: display-unit characteristic `0/0x1005` returned Celsius; ConfigR documents Celsius/Fahrenheit display selection | REQUIRED | Keep climate values in native Celsius; expose display-unit selection separately |
 | Target temperature | LIVE-AM6532: `0/0x1023` returned a whole-degree Celsius setpoint | REQUIRED | `ClimateEntity.native_target_temperature`; write only whole degrees |
-| Target limits | LIVE-AM6532: `0/0x1006` returned minimum and maximum bounds | REQUIRED | `min_temp` and `max_temp` come from the heater |
+| Target limits | LIVE-AM6532: `0/0x1006` returned minimum and maximum bounds | REQUIRED | `min_temp` and `max_temp` come from the panel heater |
 | Target step/precision | LIVE-AM6532: setpoint encoding and readback accept whole degrees only | REQUIRED | Step and precision are one Celsius degree |
 | Target range | No low/high pair observed; only one setpoint characteristic | NOT SUPPORTED | Do not advertise `TARGET_TEMPERATURE_RANGE` |
 | Current humidity | ConfigR has generic humidity resources for other product families; no AM6532 field was identified | NOT SUPPORTED | No humidity entity or climate humidity feature |
 | Target humidity and humidity limits | No AM6532 protocol field identified | NOT SUPPORTED | No humidity control |
 | Power/on/off control | No safe AM6532 power command identified; ConfigR's storage-heater profile describes heating modes rather than a generic power switch | UNKNOWN/NEEDS CONFIRMATION | Do not advertise `TURN_ON` or `TURN_OFF` |
-| HVAC operating modes | CONFIGR-PROFILE names Auto/Timer, Manual, Eco, Frost, Boost, and Away for supported storage-heater profiles. LIVE-AM6532 accepted mode `03` and selected 18 °C; the user confirmed the radiator displayed `Eco Mode / 18C`. LIVE-AM6532 mode `04` selected 7 °C, matching ConfigR's Frost profile; physical display confirmation remains pending | SUPPORTED-CONDITIONAL | Keep the single `HEAT` Home Assistant mode; expose only Eco. Keep Frost as phase-2 evidence until its display state is confirmed |
-| HVAC action | LIVE-AM6532: selector `1/0x0002` returned `010164` while the heater was actively heating and `010000` after it became idle; ConfigR and Q-Rad research define byte 1 as the Trac active flag | SUPPORTED-CONDITIONAL | Report `HEATING` or `IDLE` only from the Trac active flag; return no action when the response is unavailable or invalid |
+| HVAC operating modes | CONFIGR-PROFILE names Auto/Timer, Manual, Eco, Frost, Boost, and Away for supported storage-heater profiles. LIVE-AM6532 accepted mode `03` and selected 18 °C; the user confirmed the panel heater displayed `Eco Mode / 18C`. LIVE-AM6532 mode `04` selected 7 °C, matching ConfigR's Frost profile; physical display confirmation remains pending | SUPPORTED-CONDITIONAL | Keep the single `HEAT` Home Assistant mode; expose only Eco. Keep Frost as phase-2 evidence until its display state is confirmed |
+| HVAC action | LIVE-AM6532: selector `1/0x0002` returned `010164` while the panel heater was actively heating and `010000` after it became idle; ConfigR and Q-Rad research define byte 1 as the Trac active flag | SUPPORTED-CONDITIONAL | Report `HEATING` or `IDLE` only from the Trac active flag; return no action when the response is unavailable or invalid |
 | Presets | LIVE-AM6532 Eco command `03 00 00 00 00 00` was accepted and read back; the user confirmed Eco mode. LIVE-AM6532 Frost command `04 00 00 00 00 00` selected 7 °C, but the physical display confirmation remains pending | SUPPORTED-CONDITIONAL | Expose Eco as the only climate preset; retain Frost as phase-2 protocol evidence and do not expose it yet |
 | Fan modes | ConfigR fan resources are associated with ventilation product families; no AM6532 fan control/status was identified | NOT SUPPORTED | No fan feature |
 | Vertical swing | No AM6532 swing field identified | NOT SUPPORTED | No swing feature |
@@ -252,7 +252,7 @@ Protected values are intentionally not read.
 
 | Characteristic | Raw value | Evidence-bound interpretation |
 |---|---|---|
-| `0x0006` | `141a0b13130301` | ConfigR `SetRtc`; upstream layout decodes radiator clock `2026-11-19 19:03`, flag `01`; no clock mapping |
+| `0x0006` | `141a0b13130301` | ConfigR `SetRtc`; upstream layout decodes panel-heater clock `2026-11-19 19:03`, flag `01`; no clock mapping |
 | `0x1001` | `030000000000` | `HeatingMode`; `03` matched verified Eco |
 | `0x1002` | `00` × 31 | `ScheduleAndSetTemperature`; buffer present and empty in this read |
 | `0x1003` | `1200` | Effective/current-setpoint mirror; currently equals `0x1023` |
@@ -344,7 +344,7 @@ measurement.
 This section records a fresh read performed through the integration's authenticated
 `get_gatt_services`, `read_gatt`, and selector write/read actions. No ConfigR
 terminology or repository field mapping was used to obtain these observations.
-The selector writes only choose which value the heater returns; they are not
+The selector writes only choose which value the panel heater returns; they are not
 control commands.
 
 The device exposed 55 Dimplex characteristics across groups 0–3. Every
@@ -413,11 +413,11 @@ zero/placeholder payloads, not treated as additional capabilities.
 This probe confirms that the selector protocol is stateful and that the
 temperature selector currently supplies two distinct live readings. It does not
 prove that the `1/0x0002` selector values are independent element telemetry:
-all four returned zero activity bytes while the heater was idle.
+all four returned zero activity bytes while the panel heater was idle.
 
 ### Controlled target experiment
 
-The heater was temporarily changed from the live baseline of Eco/16°C to a
+The panel heater was temporarily changed from the live baseline of Eco/16°C to a
 30°C target through the Home Assistant climate action, then restored by writing
 the original target and Eco mode payloads. The comparison isolated these
 changes:
@@ -474,7 +474,7 @@ The following fields come from
 which reverse-engineers the Dimplex Control cloud API. They are included for
 completeness because they are part of the requested source set, but they are
 **CLOUD-ONLY** evidence. They do not prove a local BLE characteristic, do not
-apply to a heater without the Dimplex Hub/cloud path, and are not merged into
+apply to a panel heater without the Dimplex Hub/cloud path, and are not merged into
 the AM6532 entity mapping.
 
 ### Cloud topology and identity
@@ -626,7 +626,7 @@ ConfigR-derived hypotheses, not confirmed Home Assistant semantics:
 
 | Entity | Address | Length | Evidence and boundary |
 |---|---|---:|---|
-| Experimental radiator clock | `0/0x0006` | 7 bytes | ConfigR `SetRtc` format; write is available, but no semantic date validation is performed |
+| Experimental panel-heater clock | `0/0x0006` | 7 bytes | ConfigR `SetRtc` format; write is available, but no semantic date validation is performed |
 | Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout is inferred; AM6532 schedule behavior remains unverified |
 | Experimental display backlight color | `1/0x0001` | 4 bytes | Reversible color payload observed in the protocol family |
 | Existing experimental fields | `0/0x0006`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x0005`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |

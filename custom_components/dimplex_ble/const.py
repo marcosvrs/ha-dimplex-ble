@@ -12,7 +12,7 @@ CONF_ADDRESS = "address"
 CONF_ADDRESS_TYPE = "address_type"
 CONF_PROXY_SOURCE = "proxy_source"
 CONF_PASSKEY = "passkey"
-DEVICE_NAME = "Dimplex heater"
+DEVICE_NAME = "Dimplex panel heater"
 PENDING_DEVICES = "pending_devices"
 CLIENTS = "clients"
 

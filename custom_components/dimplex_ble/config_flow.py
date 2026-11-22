@@ -1,4 +1,4 @@
-"""Config flow for model-neutral Dimplex BLE discovery and pairing."""
+"""Config flow for model-neutral Dimplex BLE panel heater discovery and pairing."""
 
 from __future__ import annotations
 
@@ -11,7 +11,13 @@ import probatio
 from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
@@ -43,14 +49,14 @@ from .esphome_proxy import (
 from .pairing import ble_device_from_source, select_proxy_source
 
 _LOGGER = logging.getLogger(__name__)
-# ConfigR waits roughly ten seconds for the heater to enter standby before
+# ConfigR waits roughly ten seconds for the panel heater to enter standby before
 # retrying a later connection.
 PAIRING_RETRY_DELAY = 10.0
 PAIRING_MAX_AUTOMATIC_RETRIES = 3
 
 
 class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Discover a heater and complete first-time pairing through its proxy."""
+    """Discover a panel heater and complete first-time pairing through its proxy."""
 
     VERSION = 1
 
@@ -74,25 +80,78 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         proxy_source = entry_data.get(CONF_PROXY_SOURCE)
         if not isinstance(address, str) or not isinstance(proxy_source, str):
             return self.async_abort(reason="proxy_unavailable")
-        self._address = address
-        self._proxy_source = proxy_source
-        self._ble_device = ble_device_from_source(self.hass, address, proxy_source)
-        self._advertised_name = self._get_reauth_entry().title.removeprefix(
-            "Dimplex Heater "
-        )
-        async with self._pairing_lock:
-            error = await self._async_start_pairing(address, proxy_source)
-            if error is None:
-                self._async_ensure_pairing_retry()
+        error = await self._async_prepare_repair(entry_data, start_pairing=False)
         if error is not None:
             return self._show_reauth_form(error)
-        return await self.async_step_reauth_confirm()
+        # Do not occupy a proxy slot while an automatically-created reauth
+        # flow is waiting for the user. Pairing starts when the user opens the
+        # repair step and submits this transition.
+        return self._show_pair_start_form()
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle a user-requested authentication repair."""
+        if user_input is not None:
+            return await self.async_step_reauth_confirm(user_input)
+        entry = self._get_reconfigure_entry()
+        error = await self._async_prepare_repair(entry.data)
+        if error is not None:
+            return self._show_reauth_form(error)
+        return self._show_reauth_form()
+
+    async def _async_prepare_repair(
+        self, entry_data: Mapping[str, Any], *, start_pairing: bool = True
+    ) -> str | None:
+        """Prepare a repair flow from an existing entry identity."""
+        address = entry_data.get(CONF_ADDRESS)
+        proxy_source = entry_data.get(CONF_PROXY_SOURCE)
+        if not isinstance(address, str) or not isinstance(proxy_source, str):
+            return "proxy_unavailable"
+        self._address = address
+        self._proxy_source = proxy_source
+        entry = self._get_repair_entry()
+        self._advertised_name = entry.title
+        for prefix in ("Dimplex Panel Heater ", "Dimplex Heater "):
+            if entry.title.startswith(prefix):
+                self._advertised_name = entry.title.removeprefix(prefix)
+                break
+        self._ble_device = ble_device_from_source(self.hass, address, proxy_source)
+        if self._ble_device is None:
+            # A bonded panel heater can stop advertising after authentication is lost.
+            # Keep the configured proxy route usable from its stored identity so
+            # the connection attempt can trigger the panel heater's PIN display.
+            address_type = entry_data.get(CONF_ADDRESS_TYPE, 0)
+            if not isinstance(address_type, int):
+                address_type = 0
+            self._ble_device = BLEDevice(
+                address,
+                self._advertised_name,
+                {"source": proxy_source, "address_type": address_type},
+            )
+        if not start_pairing:
+            return None
+        async with self._pairing_lock:
+            error = await self._async_start_pairing(address, proxy_source)
+            if error is None or error == "pairing_in_progress":
+                self._async_ensure_pairing_retry()
+        return error
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Collect the heater PIN and restore its BLE authentication bond."""
+        """Collect the panel heater PIN and restore its BLE authentication bond."""
         if user_input is None:
+            address = self._address
+            proxy_source = self._proxy_source
+            if address is None or proxy_source is None:
+                return self.async_abort(reason="proxy_unavailable")
+            async with self._pairing_lock:
+                error = await self._async_start_pairing(address, proxy_source)
+                if error is None:
+                    self._async_ensure_pairing_retry()
+            if error is not None:
+                return self._show_reauth_form(error)
             return self._show_reauth_form()
 
         passkey = user_input.get(CONF_PASSKEY)
@@ -121,12 +180,15 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         if retry_task is not None and not retry_task.done():
             retry_task.cancel()
         self._pairing_retry_task = None
-        return self.async_update_reload_and_abort(self._get_reauth_entry())
+        return self.async_update_reload_and_abort(
+            self._get_repair_entry(),
+            data_updates={CONF_PASSKEY: passkey},
+        )
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
     ) -> ConfigFlowResult:
-        """Start setup for a heater found by Home Assistant Bluetooth."""
+        """Start setup for a panel heater found by Home Assistant Bluetooth."""
         name = discovery_info.name or discovery_info.device.name or ""
         if not is_dimplex_advertisement(name):
             _LOGGER.debug("Rejected a Bluetooth discovery that is not Dimplex")
@@ -177,17 +239,19 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Retry setup after a pairing request could not start."""
+        """Start pairing after the user explicitly continues."""
         if self._address is None or self._proxy_source is None:
             return self.async_abort(reason="proxy_unavailable")
         if user_input is None:
             return self._show_pair_start_form()
+        if self.context.get("source") == SOURCE_REAUTH:
+            return await self.async_step_reauth_confirm()
         return await self.async_step_passkey()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """List nearby heaters that a passkey-enabled ESPHome proxy can reach."""
+        """List nearby panel heaters that a passkey-enabled ESPHome proxy can reach."""
         if not self._devices:
             await bluetooth.async_request_active_scan(self.hass, duration=5.0)
             service_infos = list(
@@ -285,7 +349,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_passkey(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Start pairing on entry, then submit the PIN from the heater display."""
+        """Start pairing on entry, then submit the PIN from the panel-heater display."""
         address = self._address
         proxy_source = self._proxy_source
         if address is None or proxy_source is None:
@@ -360,6 +424,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_ADDRESS: address,
             CONF_PROXY_SOURCE: proxy_source,
         }
+        entry_data[CONF_PASSKEY] = passkey
         details = getattr(self._ble_device, "details", None)
         address_type = (
             details.get("address_type") if isinstance(details, dict) else None
@@ -372,13 +437,18 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _async_start_pairing(self, address: str, proxy_source: str) -> str | None:
-        """Start one managed pairing session for the selected heater."""
+        """Start one managed pairing session for the selected panel heater."""
         if self._pairing_task is not None and not self._pairing_task.done():
             return None
 
-        client = DimplexBluetoothClient(
-            self.hass, address, proxy_source, self._ble_device
-        )
+        client: DimplexBluetoothClient | None = None
+        if self.context.get("source") in (SOURCE_REAUTH, SOURCE_RECONFIGURE):
+            runtime_data = getattr(self._get_repair_entry(), "runtime_data", None)
+            client = getattr(runtime_data, "client", None)
+        if client is None:
+            client = DimplexBluetoothClient(
+                self.hass, address, proxy_source, self._ble_device
+            )
         try:
             self._pairing_task = await async_start_pairing(
                 self.hass, proxy_source, address, client.async_pair
@@ -476,13 +546,13 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="pair",
             data_schema=probatio.Schema({}),
             description_placeholders={
-                "name": self._advertised_name or "the selected heater",
+                "name": self._advertised_name or "the selected panel heater",
             },
             errors={"base": error} if error else {},
         )
 
     def _show_user_form(self, error: str | None = None) -> ConfigFlowResult:
-        """Show every eligible heater using its advertised local name."""
+        """Show every eligible panel heater using its advertised local name."""
         ordered_devices = sorted(
             self._devices.items(), key=lambda item: item[1][1], reverse=True
         )
@@ -490,11 +560,11 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         for index, (address, (_, rssi, advertised_name)) in enumerate(
             ordered_devices, start=1
         ):
-            label = advertised_name or f"heater {index}"
+            label = advertised_name or str(index)
             options.append(
                 {
                     "value": address,
-                    "label": f"Dimplex {label} ({rssi} dBm)",
+                    "label": f"Dimplex Panel Heater {label} ({rssi} dBm)",
                 }
             )
         return self.async_show_form(
@@ -509,10 +579,21 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             errors={"base": error} if error else {},
         )
 
+    def _get_repair_entry(self) -> ConfigEntry:
+        """Return the entry being repaired or manually reconfigured."""
+        if self.context.get("source") == SOURCE_RECONFIGURE:
+            return self._get_reconfigure_entry()
+        return self._get_reauth_entry()
+
     def _show_reauth_form(self, error: str | None = None) -> ConfigFlowResult:
-        """Show the heater PIN form for authentication repair."""
+        """Show the panel-heater PIN form for authentication repair."""
+        step_id = (
+            "reconfigure"
+            if self.context.get("source") == SOURCE_RECONFIGURE
+            else "reauth_confirm"
+        )
         return self.async_show_form(
-            step_id="reauth_confirm",
+            step_id=step_id,
             data_schema=probatio.Schema(
                 {
                     probatio.Required(CONF_PASSKEY): TextSelector(
@@ -524,7 +605,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             description_placeholders={
-                "name": self._advertised_name or "the selected heater",
+                "name": self._advertised_name or "the selected panel heater",
             },
             errors={"base": error} if error else {},
         )
@@ -544,7 +625,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             description_placeholders={
-                "name": self._advertised_name or "the selected heater",
+                "name": self._advertised_name or "the selected panel heater",
             },
             errors={"base": error} if error else {},
         )
@@ -559,21 +640,27 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             "reserved_device_titles", set()
         )
         titles.update(reserved_titles)
-        normalized_titles = {title.casefold() for title in titles}
+        def _normalize_title(title: str) -> str:
+            for prefix in ("Dimplex Panel Heater ", "Dimplex Heater "):
+                if title.startswith(prefix):
+                    return title.removeprefix(prefix).casefold()
+            return title.casefold()
+
+        normalized_titles = {_normalize_title(title) for title in titles}
 
         if self._advertised_name is not None:
-            base_title = f"Dimplex Heater {self._advertised_name}"
+            base_title = f"Dimplex Panel Heater {self._advertised_name}"
             title = base_title
             suffix = 2
-            while title.casefold() in normalized_titles:
+            while _normalize_title(title) in normalized_titles:
                 title = f"{base_title} ({suffix})"
                 suffix += 1
         else:
             index = 1
-            title = f"Dimplex Heater {index}"
-            while title.casefold() in normalized_titles:
+            title = f"Dimplex Panel Heater {index}"
+            while _normalize_title(title) in normalized_titles:
                 index += 1
-                title = f"Dimplex Heater {index}"
+                title = f"Dimplex Panel Heater {index}"
 
         reserved_titles.add(title)
         return title

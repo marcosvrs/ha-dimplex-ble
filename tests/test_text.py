@@ -28,12 +28,10 @@ def make_coordinator(hass, client):
     return DimplexCoordinator(hass, entry, client)
 
 
-async def test_setup_reads_and_exposes_experimental_fields(hass) -> None:
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_read_raw_fields=AsyncMock(return_value={(0, 0x100D): b"\x01"}),
-    )
+async def test_setup_exposes_coordinator_polled_experimental_fields(hass) -> None:
+    client = SimpleNamespace(address=ADDRESS)
     coordinator = make_coordinator(hass, client)
+    coordinator.raw_fields = {(0, 0x100D): b"\x01"}
     entry = SimpleNamespace(runtime_data=coordinator)
     entities = []
 
@@ -56,18 +54,10 @@ async def test_setup_reads_and_exposes_experimental_fields(hass) -> None:
         (1, 0x0001),
     }
     assert all(field.address != (0, 0x1007) for field in EXPERIMENTAL_FIELDS)
-    client.async_read_raw_fields.assert_awaited_once_with(
-        tuple(field.address for field in EXPERIMENTAL_FIELDS)
-    )
 
 
-async def test_setup_keeps_controls_when_initial_read_fails(hass) -> None:
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_read_raw_fields=AsyncMock(side_effect=DimplexConnectionError()),
-    )
+async def test_setup_keeps_controls_when_polled_values_are_missing(hass) -> None:
+    client = SimpleNamespace(address=ADDRESS)
     coordinator = make_coordinator(hass, client)
     entry = SimpleNamespace(runtime_data=coordinator)
     entities = []
@@ -75,6 +65,8 @@ async def test_setup_keeps_controls_when_initial_read_fails(hass) -> None:
     await async_setup_entry(hass, entry, entities.extend)
 
     assert len(entities) == len(EXPERIMENTAL_FIELDS)
+
+
 
 
 async def test_experimental_text_adds_established_decoded_attributes(hass) -> None:

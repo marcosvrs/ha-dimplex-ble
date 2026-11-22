@@ -1,4 +1,4 @@
-"""Diagnostics for one Dimplex heater, with Bluetooth addresses redacted."""
+"""Diagnostics for one Dimplex panel heater, with Bluetooth addresses redacted."""
 
 from __future__ import annotations
 

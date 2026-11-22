@@ -1,6 +1,6 @@
 # Dimplex BLE protocol-field research
 
-**Scope.** This is a field-by-field evidence matrix for the commissioned AM6532 heater identified as `PLX050E;C;` (PLX050E Series C). It separates repository facts, live observations already recorded in the repository, ConfigR labels, official Dimplex documentation, and unresolved questions. A ConfigR label is not a PLX050E packet mapping. No field is promoted to a control without repeatable device evidence and reversible readback.
+**Scope.** This is a field-by-field evidence matrix for the commissioned AM6532 panel heater identified as `PLX050E;C;` (PLX050E Series C). It separates repository facts, live observations already recorded in the repository, ConfigR labels, official Dimplex documentation, and unresolved questions. A ConfigR label is not a PLX050E packet mapping. No field is promoted to a control without repeatable device evidence and reversible readback.
 
 ## Evidence sources and limits
 
@@ -81,7 +81,7 @@ Writes to every protected candidate (`0/0x1012–0x1015`,
 `1/0x1010`, `1/0x1020`, `1/0x300e`, `2/0x100c`, `2/0x1030`,
 `2/0x1033`, `2/0x1034`, `2/0x700f`, `3/0x000a`, `3/0x1010`,
 `3/0x1037`, and `3/0x2002`, `3/0x2006–0x2008`, `3/0x200f`) were rejected
-by the integration validation layer before reaching the heater. No protected
+by the integration validation layer before reaching the panel heater. No protected
 payload was sent.
 
 ## Service and UUID groups
@@ -144,7 +144,7 @@ not automatic semantic mappings.
 
 | Address | Live payload | Classification | Evidence-bound conclusion |
 |---|---|---|---|
-| `0/0x0006` | `141a0b13130301` | LIVE OBSERVATION + upstream layout | ConfigR/Upstream layout decodes this as radiator clock `2026-11-19 19:03`, flag `01`; it was about three minutes behind the HA host clock. Read-only observation; no clock entity or write was added. |
+| `0/0x0006` | `141a0b13130301` | LIVE OBSERVATION + upstream layout | ConfigR/Upstream layout decodes this as panel-heater clock `2026-11-19 19:03`, flag `01`; it was about three minutes behind the HA host clock. Read-only observation; no clock entity or write was added. |
 | `0/0x1001` | `030000000000` | LIVE OBSERVATION + ConfigR label | Current mode payload is Eco; the user previously confirmed the display. No new mode command was issued. |
 | `0/0x1002` | 31 zero bytes | LIVE OBSERVATION + ConfigR label | Schedule buffer is present but empty/inactive in this read. No schedule structure or calendar mapping is claimed. |
 | `0/0x1003` and `0/0x1023` | `1200` / `1200` | LIVE OBSERVATION | Effective-setpoint mirror and target currently agree at 18°C; equality alone does not prove they are the same field semantically. |
@@ -216,7 +216,7 @@ Their names are **hypotheses from ConfigR terminology**, not confirmed device
 meanings:
 
 | --- | --- | ---: | --- |
-| Experimental radiator clock | `0/0x0006` | 7 bytes | ConfigR SetRtc format; live read and write-capable characteristic |
+| Experimental panel-heater clock | `0/0x0006` | 7 bytes | ConfigR SetRtc format; live read and write-capable characteristic |
 | Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout inferred; AM6532 schedule semantics unverified |
 | Experimental display backlight color | `1/0x0001` | 4 bytes | Reversible color payload observed in QRAD and present on AM6532 |
 | Experimental open-window detection | `0/0x1007` | 9 bytes | Reversible first-byte write/readback |
@@ -236,5 +236,5 @@ meanings:
 
 The controls accept hexadecimal payloads of exactly the advertised byte length. The
 integration does not claim semantic validation, and it refreshes the device after a
-write. Do not use them in automations until the displayed radiator behavior and
+write. Do not use them in automations until the displayed panel-heater behavior and
 multiple readback states establish a meaning.

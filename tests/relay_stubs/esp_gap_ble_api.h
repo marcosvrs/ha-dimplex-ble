@@ -41,8 +41,13 @@ struct esp_ble_gap_cb_param_t {
     } ble_req;
   } ble_security;
 };
+struct esp_ble_bond_dev_t {
+  uint8_t bd_addr[6];
+};
 int esp_ble_passkey_reply(uint8_t *address, bool accept, uint32_t passkey);
 int esp_ble_get_bond_device_num();
+esp_err_t esp_ble_get_bond_device_list(int *dev_num, esp_ble_bond_dev_t *dev_list);
+esp_err_t esp_ble_remove_bond_device(uint8_t *address);
 esp_err_t esp_ble_gap_set_security_param(int param, void *value,
                                          uint8_t length);
 esp_err_t esp_ble_set_encryption(uint8_t *address, int mode);

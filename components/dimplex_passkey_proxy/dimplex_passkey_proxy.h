@@ -11,12 +11,16 @@ namespace esphome::dimplex_passkey_proxy {
 
 class DimplexPasskeyProxy final : public Component {
  public:
-  /// Arm a short-lived passkey relay for one heater before pairing starts.
+  /// Arm a short-lived passkey relay for one panel heater before pairing starts.
   void arm_pairing(const char *address_hex);
-  /// Supply the PIN after the heater displays it.
+  /// Supply the PIN after the panel heater displays it.
   void set_pending_passkey(const char *address_hex, const char *passkey);
   /// Clear all pending passkey state for this proxy.
   void cancel_pairing();
+  /// Remove every stored BLE bond from this proxy before a clean repair.
+  void clear_all_bonds();
+  /// Remove the stored BLE bond for one panel heater before a fresh pairing.
+  void clear_bond(const char *address_hex);
   /// Called from ESPHome's shared GAP event dispatcher.
   void gap_event_handler(esp_gap_ble_cb_event_t event,
                          esp_ble_gap_cb_param_t *param);
