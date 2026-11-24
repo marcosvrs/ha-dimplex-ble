@@ -178,6 +178,11 @@ problem.
   more slowly. This option is an experiment; it changes the update interval
   together with the connection mode.
 - Otherwise, power-cycling a heater is a last resort, not a routine fix.
+- **Heater firmware updates are not handled.** The integration is fully local
+  and only shows the installed heater firmware version on the device page. To
+  check for or install an update, use the Dimplex ConfigR app next to the
+  heater (it needs a Dimplex account); Home Assistant cannot connect to the
+  heater while the app is connected.
 
 ## Upgrade notes
 

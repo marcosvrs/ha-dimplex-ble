@@ -46,6 +46,17 @@ while its proxy stayed online. On hardware (2026-11-24) heaters were silent to
 every receiver, including a phone scan, after such a drop until power-cycled;
 after a normal disconnect they always advertised again within seconds.
 
+## Checking for heater firmware updates
+
+The integration never contacts Dimplex's cloud. The installed version is on the
+heater's device page (**Firmware**). Dimplex publishes heater firmware only
+through the ConfigR app, per heater, after signing in with a Dimplex account
+(`docs/configr-firmware-analysis.md`). To update: open ConfigR next to the
+heater, let it check, and flash from there. Home Assistant cannot connect while
+the app is connected. Whether an update keeps the heater's pairings is
+untested: if the heater asks for a PIN afterwards, use **Reconfigure**. Whether
+a newer firmware fixes the "stopped responding" stall is also unknown.
+
 ## A heater is unavailable
 
 1. Are all heaters on the same proxy unavailable? Then check the proxy: is it

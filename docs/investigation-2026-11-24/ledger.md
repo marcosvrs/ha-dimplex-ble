@@ -280,3 +280,17 @@ In progress: "Show the PIN again" menu CTA; proxy selection with Recommended + p
 - Temperature offset (2/0x1019 signed tenths): +0.2, +1.0, +3.0, −3.0, 0.0 all read back → ±3.0 verified; PLXE manual's ±0.2 is not a device limit. PASS.
 - Setpoint limits (0/0x1006): 5 writes ACKed, never applied (read-back 7/30, climate limits unchanged) → effectively read-only over BLE → entities removed (pruning in progress); climate keeps reading the limits.
 - Boost not implemented (duration encoding inference only).
+
+## Final review, CI parity, push (19:00–19:40 UTC)
+- Codex final adversarial review: 7 findings, all fixed (shared-responder clear only by the lock-holding pairing; flow keeps/awaits pair task before close; arm inside try/finally; coordinator Away lock; reauth only on code 81; DEBUG-logging PIN warning + docs; climate Away attrs hidden when inactive). 507 tests.
+- Setpoint limit entities removed (writes ACKed, not applied).
+- CI parity on a clean worktree checkout of commit e3ff1a0: fresh uv venv (Python 3.14, requirements-test.txt), ruff format check, run_quality_gates.sh (pre-commit incl. check-yaml --unsafe for ESPHome tags — would have failed CI before, fixed), pytest 507 / 100%, functions 229/229, mutmut 2171 killed / 552 survived / 84 timeout of 2807 (advisory), hassfest 0 invalid. NOT verifiable locally: HACS validation (GitHub action).
+- Pushed branch refactor/stock-esphome-native-ble (e3ff1a0) after the repo pre-push hook passed. No PR opened.
+- Formal soak started 2026-11-24T19:24:06Z on final code + IDF 5.5.6 firmware on both proxies; AM8224 per-poll (A/B), others persistent. Measure with scripts/soak_report.py.
+
+## Soak interim (19:24:06–21:14 UTC, 1 h 50 min)
+- `scripts/soak_report.py` over HA logs: polls ok/failed AM1382 548/1, AM2086 466/1, AM6532 451/3, AM8224 (per-poll) 102/0. All 5 failures are `ROUTE_NOT_SEEN` at 19:24:16–19:24:30, i.e. the first polls after the HA restart before the first advertisement; from 19:24:31 on: 0 failed polls.
+- 0 pairing failures, 0 GATT failures, 0 abnormal link losses (`error=8`), 0 stall repairs, 0 settle waits.
+- Main-bedroom proxy capture (IDF 5.5.6), same window: 101 `auth success` (AM8224 per-poll re-encryptions), 0 auth failures, 0 `[E]`, 0 status 133 / 0x200d / reason 0x08 / 0x3e; 101 clean disconnects (reason 0x00, initiated by HA); `Conn param update failed, status=19` on every connect (upstream draft (b), no functional effect observed).
+- Baseline for comparison (12:20–13:36, old code): 963 failed polls, 41 failure episodes. 24 h checkpoint due 2026-11-25T19:24Z.
+- Docs: firmware updates stay out of the integration (fully local); README limitation + troubleshooting section point to the ConfigR app.
