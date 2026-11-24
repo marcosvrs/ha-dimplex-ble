@@ -113,11 +113,12 @@ Each heater becomes one device with:
 
 | Entity | Notes |
 | --- | --- |
-| Climate (named after the heater) | Room temperature (0.1 °C), target temperature in whole degrees, heating/idle action, presets **User Timer**, **Home All Day**, **Out All Day**, **Away**, **Manual**, **Eco**, **Frost Protect**. Heat only. |
+| Climate (named after the heater) | Room temperature (0.1 °C), heating/idle action and two modes. **Heat**: heats to a target you set (whole degrees); presets **Manual**, **Eco**, **Frost Protect**, **Away**. **Auto**: follows the heater's schedule, which sets the temperature; presets **User Timer**, **Home All Day**, **Out All Day**, **Away**. No Off. |
+| User Timer schedule (calendar) | Read-only heating periods of the User Timer programme, as stored on the heater (Home All Day and Out All Day calendars exist but are disabled by default). Read after setup and every 6 hours. Edit schedules on the heater or in the Dimplex app. |
 | Away return time | When Away ends. Setting it starts Away. Selecting the Away preset needs a future return time here first. |
 | Away temperature | What Away holds, 7–18 °C (default 7 °C). Changing it keeps Away on or off. |
 | Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
-| Setback | In timer presets, holds the heater's Setback temperature during Heating Off periods instead of letting the room cool. The Setback temperature itself is set on the heater. |
+| Setback | In Auto, holds the heater's Setback temperature during Heating Off periods instead of letting the room cool. The Setback temperature itself is set on the heater. |
 | Sound | Button sounds on the heater. |
 | Adaptive start | Dimplex "Adaptive Start": heats early so a timer period starts at its target. Only affects User Timer and Home All Day. Learns continuously, plans at most 2 hours ahead; turn it on or off for all heaters in a room together. |
 | Open window detection | Stops heating ("Heating Off") when the room temperature drops suddenly. Can trigger in drafty or poorly insulated rooms. |
@@ -165,7 +166,7 @@ problem.
 - The PIN is shown for about 30 seconds per pairing attempt.
 - While the Dimplex phone app is connected to a heater, Home Assistant cannot
   connect to it.
-- Schedules cannot be edited from Home Assistant; there is no on/off; Boost
+- Schedules are read-only in Home Assistant (shown as calendars); there is no on/off; Boost
   and the Setback temperature cannot be set.
 - **Heater stops responding (needs a power cycle).** Rarely, after its
   connection drops unexpectedly, a heater's Bluetooth stops completely: no
@@ -188,6 +189,14 @@ problem.
 
 Upgrading from an earlier version:
 
+- **Breaking:** the timer programmes moved to the new **Auto** mode. In Auto
+  the presets are User Timer, Home All Day and Out All Day, and there is no
+  target temperature (a setpoint written in a timer programme is dropped when
+  the programme is selected again). In Heat they are Manual, Eco and Frost
+  Protect. Away is in both. Home Assistant only accepts a preset of the current
+  mode, so in automations switch the mode first: `climate.set_hvac_mode` with
+  `auto` (resumes the last schedule) or `heat` (Manual), then
+  `climate.set_preset_mode`. `climate.set_temperature` is refused in Auto.
 - **Breaking:** the Home All Day preset is now `home_all_day` (was Home
   Assistant's `home`). Update automations and scripts that call
   `climate.set_preset_mode` with `preset_mode: home` or check

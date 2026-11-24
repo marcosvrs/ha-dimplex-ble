@@ -1,7 +1,7 @@
 """Dimplex BLE identifiers, byte decoding, and conservative raw-GATT policy."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from math import isfinite
 from typing import Final
 
@@ -17,6 +17,13 @@ ADVANCE_HEATING: Final[GattAddress] = (0, 0x100D)
 SETPOINT_RANGE: Final[GattAddress] = (0, 0x1006)
 SETBACK: Final[GattAddress] = (0, 0x1016)
 ROOM_TEMPERATURE_OFFSET: Final[GattAddress] = (2, 0x1019)
+# ConfigR ScheduleAndSetTemperature: one (programme, day) record per read,
+# selected by writing [0, programme, day] first; byte 0 = 1 would SAVE a day,
+# so this integration only ever writes the 0 form (docs/schedule-format.md).
+SCHEDULE: Final[GattAddress] = (0, 0x1002)
+SCHEDULE_RECORD_LENGTH: Final = 31
+SCHEDULE_PERIODS: Final = 4
+SCHEDULE_DAYS: Final = 7
 SOUND_PAYLOAD_LENGTH: Final = 3
 AWAY_MODE_PAYLOAD_LENGTH: Final = 7
 SETBACK_PAYLOAD_LENGTH: Final = 2
@@ -552,3 +559,57 @@ def parse_snapshot(
         away_target_temperature_c=away_target_temperature_c,
         advance_active=advance_active,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulePeriod:
+    """One heating period of a timer programme day (local heater time)."""
+
+    start: time
+    end: time
+    temperature_c: int
+
+
+def encode_schedule_request(programme: int, day: int) -> bytes:
+    """Select one programme day for reading (never the save form)."""
+    if programme not in (
+        TIMER_SUBMODE_OUT,
+        TIMER_SUBMODE_HOME,
+        TIMER_SUBMODE_USER_TIMER,
+    ):
+        raise DimplexProtocolError("Unsupported timer programme")
+    if not 0 <= day < SCHEDULE_DAYS:
+        raise DimplexProtocolError("Day must be 0 (Monday) to 6 (Sunday)")
+    return bytes((0, programme, day))
+
+
+def parse_schedule_day(
+    value: bytes | None, programme: int, day: int
+) -> tuple[SchedulePeriod, ...] | None:
+    """Decode one day record, or ``None`` when it is not the requested one.
+
+    Layout (ConfigR DayData): [flag, programme, day] then four 6-byte periods
+    [start h, start min, end h, end min, temperature degC, 0] and 4 pad bytes.
+    ConfigR drops a slot whose start equals its end (its unused-slot filler).
+    """
+    if (
+        value is None
+        or len(value) != SCHEDULE_RECORD_LENGTH
+        or value[1] != programme
+        or value[2] != day
+    ):
+        return None
+    periods: list[SchedulePeriod] = []
+    for slot in range(SCHEDULE_PERIODS):
+        start_h, start_m, end_h, end_m, temperature = value[3 + 6 * slot : 8 + 6 * slot]
+        if (start_h, start_m) == (end_h, end_m):
+            continue
+        try:
+            start = time(start_h, start_m)
+            end = time(end_h, end_m)
+        except ValueError:
+            return None
+        if end < start:
+            return None
+        periods.append(SchedulePeriod(start, end, temperature))
+    return tuple(sorted(periods, key=lambda period: period.start))

@@ -174,6 +174,12 @@ class FakeClient:
 
     async def write_gatt_char(self, char: FakeChar, data: bytes, response: bool):
         self.events.append(("write", char.uuid, bytes(data), response))
+        schedule = (0, 0x1002)
+        if schedule in self.proxy.values and self._address(char) == schedule:
+            # The heater returns the (programme, day) record a [0, p, d] write selects.
+            self.proxy.values[schedule] = self.proxy.schedule.get(
+                (data[1], data[2]), bytes(31)
+            )
 
 
 class FakeScanner:
@@ -222,6 +228,8 @@ class FakeProxy:
         self.clients: list[FakeClient] = []
         self.services = heater_services()
         self.values = dict(HEATER_VALUES)
+        # (programme, day) -> 31-byte schedule record, once 0/0x1002 is added.
+        self.schedule: dict[tuple[int, int], bytes] = {}
         self.connect_error: BaseException | None = None
         self.connect_gate: asyncio.Future[None] | None = None
         self.pair_errors: list[BaseException] = []

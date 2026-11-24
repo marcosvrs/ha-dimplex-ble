@@ -35,10 +35,15 @@ from .protocol import (
     AWAY_MODE,
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
+    SCHEDULE,
+    SCHEDULE_DAYS,
     SETPOINT_RANGE,
     GattAddress,
     HeaterSnapshot,
+    SchedulePeriod,
+    encode_schedule_request,
     gatt_uuid_candidates,
+    parse_schedule_day,
     parse_snapshot,
     validate_raw_access,
 )
@@ -161,7 +166,7 @@ async def _read_optional(client: BaseBleakClient, address: GattAddress) -> bytes
 
 
 async def _read_selector(
-    client: BaseBleakClient, address: GattAddress, selector: int
+    client: BaseBleakClient, address: GattAddress, selector: int | bytes
 ) -> bytes | None:
     """Write a read-only selector, then read the selected value."""
     characteristic = _find_characteristic(client, address)
@@ -170,10 +175,33 @@ async def _read_selector(
     properties = characteristic.properties
     if "write" not in properties and "write-without-response" not in properties:
         return None
+    payload = bytes((selector, 0, 0)) if isinstance(selector, int) else selector
     await client.write_gatt_char(
-        characteristic, bytes((selector, 0, 0)), response="write" in properties
+        characteristic, payload, response="write" in properties
     )
     return await _read_optional(client, address)
+
+
+type WeekSchedule = list[tuple[SchedulePeriod, ...] | None]
+
+
+async def _read_schedules(
+    client: BaseBleakClient, programmes: tuple[int, ...]
+) -> dict[int, WeekSchedule]:
+    """Read 7 days (Monday first) of each timer programme: select, then read."""
+    schedules: dict[int, WeekSchedule] = {}
+    for programme in programmes:
+        schedules[programme] = [
+            parse_schedule_day(
+                await _read_selector(
+                    client, SCHEDULE, encode_schedule_request(programme, day)
+                ),
+                programme,
+                day,
+            )
+            for day in range(SCHEDULE_DAYS)
+        ]
+    return schedules
 
 
 async def _read_snapshot(client: BaseBleakClient) -> HeaterSnapshot:
@@ -250,36 +278,47 @@ class HeaterLink:
         return snapshot
 
     async def async_snapshot_with_settings(
-        self, settings: tuple[GattAddress, ...]
-    ) -> tuple[HeaterSnapshot, dict[GattAddress, bytes | None]]:
+        self, settings: tuple[GattAddress, ...], programmes: tuple[int, ...] = ()
+    ) -> tuple[
+        HeaterSnapshot, dict[GattAddress, bytes | None], dict[int, WeekSchedule]
+    ]:
         """Read the snapshot and the slow settings inside one operation.
 
         Used by the per-poll mode so the slow settings share the poll's
         connection instead of opening a second one. A failed settings read does
-        not fail the snapshot; that setting and the rest are then omitted.
+        not fail the snapshot; that setting and the rest are then omitted, and
+        so are the schedules.
         """
         started = time.monotonic()
         values: dict[GattAddress, bytes | None] = {}
+        schedules: dict[int, WeekSchedule] = {}
         async with self._operation("snapshot") as client:
             snapshot = await _read_snapshot(client)
-            for address in settings:
-                try:
+            try:
+                for address in settings:
                     values[address] = await _read_optional(client, address)
-                except _GATT_ERRORS as err:
-                    _LOGGER.debug(
-                        "GATT %s settings read failed att=%s %s: %s",
-                        self.address,
-                        att_error_code(err),
-                        type(err).__name__,
-                        err,
-                    )
-                    break
+                schedules = await _read_schedules(client, programmes)
+            except _GATT_ERRORS as err:
+                _LOGGER.debug(
+                    "GATT %s settings read failed att=%s %s: %s",
+                    self.address,
+                    att_error_code(err),
+                    type(err).__name__,
+                    err,
+                )
         _LOGGER.debug(
             "GATT %s snapshot+settings ok %.2fs",
             self.address,
             time.monotonic() - started,
         )
-        return snapshot, values
+        return snapshot, values, schedules
+
+    async def async_read_schedules(
+        self, programmes: tuple[int, ...]
+    ) -> dict[int, WeekSchedule]:
+        """Read the timer programmes (read-only) in one operation."""
+        async with self._operation("schedules") as client:
+            return await _read_schedules(client, programmes)
 
     async def async_read(self, address: GattAddress) -> bytes | None:
         """Read one characteristic, or ``None`` when the heater lacks it."""

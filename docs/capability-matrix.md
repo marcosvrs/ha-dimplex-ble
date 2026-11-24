@@ -71,7 +71,7 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `1/0x000E` | 1 | R | OffpeakStatus | no | absent | Not available |
 | `0/0x0106` | 8 | W | SetRtcWithSeconds | no | absent | Not available |
 | `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm the timer family and continuous modes. Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), User Timer (`01 03`), and Home All Day (`01 02`) writes were accepted/read back; the climate uses heat-only `HVACMode.HEAT` and exposes verified modes as translated presets |
-| `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read buffer observed; schedule structure/write not verified on AM6532 |
+| `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read verified 2026-11-24 on 4 heaters via `[0, programme, day]` selection (docs/schedule-format.md); write not implemented |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
 | `0/0x1007` | 9 | RW | OpenWindowDetection | yes | present | Verified configuration switch; `00/01` in the first byte with eight zero bytes, read/write/readback verified on AM2086; behavior matches the official [PLXE Series C manual, Issue 7](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf) |
@@ -570,7 +570,7 @@ control.
 | Target temperature | `0/0x1023`, live whole-degree value; bounded write/readback behavior | `native_target_temperature`, `TARGET_TEMPERATURE` | **Verified / implemented** |
 | Target min/max | `0/0x1006`, live 7–30 °C | `min_temp`, `max_temp` | **Verified / implemented** |
 | Target step/precision | Live setpoint writes and protocol whole-degree representation | `target_temperature_step=1`, `precision=1` | **Verified / implemented** |
-| HVAC modes | Only direct heat behavior is verified on this PLX050E | `HVACMode.HEAT` | **Verified / implemented**; no OFF/COOL. No `AUTO`: hardware test 2026-11-24 (AM2086) showed a setpoint is accepted in User Timer and reads back, so HA's AUTO ("no temperature can be set") does not fit; timer profiles are presets |
+| HVAC modes | Continuous modes and timer programmes verified on PLX050E | `HVACMode.HEAT`, `HVACMode.AUTO` | **Verified / implemented** (2026-11-24); no OFF/COOL. Heat = Manual/Eco/Frost Protect/Away with a target. Auto = timer programmes, no target: AM2086 test showed a setpoint written in User Timer (22) is dropped when the programme is re-selected (back to 21), i.e. a temporary override, while HA docs define AUTO as schedule-driven with no settable temperature. Auto resumes the last seen programme (default User Timer) |
 | HVAC action | Trac selector `1/0x0002`, active flag, and PLX output correlation | `HEATING`/`IDLE` | **Verified / implemented**; no temperature-derived action |
 | Presets | `0/0x1001` writes read back on AM2086/AM6532: Manual `02`, Eco `03`, Frost Protect `04`, User Timer `01 03`, Home All Day `01 02`; Away via `0/0x102A` | `preset_mode`: `manual`, `eco`, `frost_protect`, `user_timer`, `home_all_day`, `away` | **Verified / implemented**. The old key `home` was renamed `home_all_day` (breaking for automations) |
 | Device-side mode quirks | Verified 2026-11-24 (n=2 for the first): in Manual, a setpoint <= 19 °C makes the heater report Eco (`0x1001=03`), 20-22 °C stays Manual (PLXE Eco default 19 °C, inference); Frost Protect + setpoint 20 switches the heater to Manual; User Timer + setpoint stays User Timer | None | Device behaviour, not an integration defect; the integration writes only `0/0x1023` |
@@ -608,7 +608,7 @@ enough to create a Home Assistant control or sensor.
 |---|---|---|
 | Setpoint `0/0x1023` | Native climate target | Verified and implemented |
 | User Timer `0/0x1001` | Climate preset `user_timer` | Verified and implemented |
-| Manual, Eco Mode, Frost Protect, Home All Day (`home_all_day`), Away Mode | Climate presets; Away return time is a separate datetime control (minute resolution, enabled by default, shown only while Away is active) | Verified mode/preset mapping; explicit Away deadline required. No `HVACMode.AUTO` |
+| Manual, Eco Mode, Frost Protect, Home All Day (`home_all_day`), Away Mode | Climate presets; Away return time is a separate datetime control (minute resolution, enabled by default, shown only while Away is active) | Verified mode/preset mapping; explicit Away deadline required. Timer programmes are the presets of `HVACMode.AUTO`; continuous modes the presets of `HVACMode.HEAT`; Away in both |
 | Sound `2/0x0005` | Independent configuration switch with slow refresh | Verified and implemented |
 | Adaptive Start `0/0x1008` (`PREEMPTIVE_HEATING`, `0`/`0x1008`) | Configuration switch | Device read/write and manual verified; read restored to the snapshot after a regression (2026-11-24), guarded by `test_snapshot_reads_every_verified_setting` |
 | Open Window Detection `0/0x1007` | Configuration switch | Device read/write and manual verified |
@@ -648,7 +648,7 @@ but HVAC action is never inferred from selected mode or temperature.
 
 | Home Assistant surface | Capability evidence | Status |
 |---|---|---|
-| Climate entity | Live current temperature (tenths), single target, native Celsius, real limits, whole-degree step, heat-only behavior (no AUTO), six presets (`manual`, `eco`, `frost_protect`, `user_timer`, `home_all_day`, `away`), and explicit Away return-time datetime | IMPLEMENTED |
+| Climate entity | Live current temperature (tenths), single target in Heat (none in Auto), native Celsius, real limits, whole-degree step, Heat and Auto modes with per-mode presets, seven presets (`manual`, `eco`, `frost_protect`, `user_timer`, `home_all_day`, `out_all_day`, `away`), and explicit Away return-time datetime | IMPLEMENTED |
 | Display-unit select | Live display-unit field and ConfigR Celsius/Fahrenheit terminology | IMPLEMENTED |
 | Error-code sensor | Live error field, ConfigR fault diagnostics and manual p.26 code table (translated states) | IMPLEMENTED |
 | Operating-mode diagnostic sensor | Live mode characteristic decoded as an ENUM; the climate exposes the same modes as presets | IMPLEMENTED; diagnostic and disabled by default |

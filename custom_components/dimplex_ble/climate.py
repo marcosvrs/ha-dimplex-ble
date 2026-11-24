@@ -17,7 +17,7 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -27,8 +27,6 @@ from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
 from .protocol import (
     HEATING_MODE,
-    HEATING_MODE_ECO,
-    HEATING_MODE_FROST_PROTECT,
     HEATING_MODE_MANUAL,
     HEATING_MODE_TIMER,
     PRESET_FROST_PROTECT,
@@ -44,22 +42,22 @@ from .protocol import (
     encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
-    parse_heating_mode_code,
     parse_preset_mode,
 )
 
 PARALLEL_UPDATES = 1
 SETPOINT: GattAddress = (0, 0x1023)
-# Each needs a text and an icon under state_attributes.preset_mode.
-PRESET_MODES = [
-    PRESET_AWAY,
-    PRESET_HOME_ALL_DAY,
-    PRESET_OUT_ALL_DAY,
-    PRESET_USER_TIMER,
-    PRESET_MANUAL,
-    PRESET_ECO,
-    PRESET_FROST_PROTECT,
-]
+# HA climate docs: AUTO "follows a schedule ... You cannot set a temperature in
+# this mode"; presets change how the active mode behaves. The heater's timer
+# programmes are schedules (a setpoint written in User Timer is dropped when the
+# programme is re-selected, AM2086 2026-11-24), so they are the presets of AUTO;
+# the continuous modes are the presets of HEAT. Away (a fixed temperature until a
+# return time) is continuous and is offered in both so it is one action away.
+# Each preset needs a text and an icon under state_attributes.preset_mode.
+HEAT_PRESETS = [PRESET_MANUAL, PRESET_ECO, PRESET_FROST_PROTECT, PRESET_AWAY]
+AUTO_PRESETS = [PRESET_USER_TIMER, PRESET_HOME_ALL_DAY, PRESET_OUT_ALL_DAY, PRESET_AWAY]
+PRESET_MODES = [*HEAT_PRESETS[:-1], *AUTO_PRESETS]
+SCHEDULE_PRESETS = frozenset(AUTO_PRESETS[:-1])
 
 
 async def async_setup_entry(
@@ -78,33 +76,46 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     _unique_suffix = "heater"
     # The main feature of the device: the entity is named after the heater.
     _attr_name = None
-    _attr_hvac_modes = [HVACMode.HEAT]
+    _attr_hvac_modes = [HVACMode.HEAT, HVACMode.AUTO]
     _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1
     _attr_precision = PRECISION_TENTHS
-    _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
-    )
-    _attr_preset_modes = PRESET_MODES
+    # The schedule Auto resumes; updated whenever the heater reports one.
+    _last_schedule = PRESET_USER_TIMER
 
     @property
     def hvac_mode(self) -> HVACMode | None:
-        """Return the Home Assistant mode represented by the device mode."""
-        data = self.coordinator.data
-        if data is None or data.operating_mode_hex is None:
+        """Return Auto for a timer programme and Heat for a continuous mode or Away."""
+        preset = self.preset_mode
+        if preset is None:
             return None
-        try:
-            mode_code = parse_heating_mode_code(bytes.fromhex(data.operating_mode_hex))
-        except ValueError:
-            return None
-        if mode_code in {
-            HEATING_MODE_TIMER,
-            HEATING_MODE_MANUAL,
-            HEATING_MODE_ECO,
-            HEATING_MODE_FROST_PROTECT,
-        }:
-            return HVACMode.HEAT
-        return None
+        return HVACMode.AUTO if preset in SCHEDULE_PRESETS else HVACMode.HEAT
+
+    @property
+    def preset_modes(self) -> list[str]:
+        """Return the presets of the active mode (all while the mode is unknown)."""
+        mode = self.hvac_mode
+        if mode == HVACMode.AUTO:
+            return AUTO_PRESETS
+        if mode == HVACMode.HEAT:
+            return HEAT_PRESETS
+        return PRESET_MODES
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        """Offer a target temperature except in Auto, where the schedule sets it."""
+        if self.hvac_mode == HVACMode.AUTO:
+            return ClimateEntityFeature.PRESET_MODE
+        return (
+            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Remember the last schedule so Auto resumes it."""
+        if (preset := self.preset_mode) in SCHEDULE_PRESETS:
+            self._last_schedule = preset
+        super()._handle_coordinator_update()
 
     @property
     def available(self) -> bool:
@@ -125,13 +136,11 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def native_target_temperature(self) -> float | None:
-        """Return the target read back from the panel heater."""
+        """Return the target read back from the panel heater (none in Auto)."""
         data = self.coordinator.data
-        return (
-            float(data.setpoint_c)
-            if data is not None and data.setpoint_c is not None
-            else None
-        )
+        if data is None or data.setpoint_c is None or self.hvac_mode == HVACMode.AUTO:
+            return None
+        return float(data.setpoint_c)
 
     @property
     def preset_mode(self) -> str | None:
@@ -157,8 +166,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
                         return PRESET_USER_TIMER
                 return PRESET_USER_TIMER
             preset = parse_preset_mode(payload)
-            presets = self.preset_modes
-            return preset if presets is not None and preset in presets else None
+            return preset if preset in PRESET_MODES else None
         except ValueError:
             return None
 
@@ -221,22 +229,27 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="invalid_hvac_mode",
             )
-        same_mode = self.hvac_mode == hvac_mode
-        if same_mode:
+        if self.hvac_mode == hvac_mode:
             return
+        payload = (
+            encode_preset_mode(self._last_schedule)
+            if hvac_mode == HVACMode.AUTO
+            else encode_heating_mode(HEATING_MODE_MANUAL)
+        )
         await self.coordinator.async_write_mode(
-            HEATING_MODE,
-            encode_heating_mode(HEATING_MODE_MANUAL),
-            leave_away=self._in_away,
+            HEATING_MODE, payload, leave_away=self._in_away
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Write a whole-degree Celsius target and wait for panel heater readback."""
         requested_mode = kwargs.get(ATTR_HVAC_MODE)
-        if requested_mode is not None and requested_mode != HVACMode.HEAT:
+        if self.hvac_mode == HVACMode.AUTO or requested_mode not in (
+            None,
+            HVACMode.HEAT,
+        ):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
-                translation_key="invalid_hvac_mode",
+                translation_key="temperature_needs_heat",
             )
 
         requested = kwargs.get(ATTR_TEMPERATURE)
@@ -277,7 +290,8 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Write a verified operating preset and wait for panel heater readback."""
-        if self.preset_modes is None or preset_mode not in self.preset_modes:
+        # HA checks the preset against the active mode's list before this call.
+        if preset_mode not in PRESET_MODES:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="invalid_preset",

@@ -1,5 +1,16 @@
 {
   "entity": {
+    "calendar": {
+      "schedule_user_timer": {
+        "default": "mdi:calendar-clock"
+      },
+      "schedule_home_all_day": {
+        "default": "mdi:calendar-clock"
+      },
+      "schedule_out_all_day": {
+        "default": "mdi:calendar-clock"
+      }
+    },
     "climate": {
       "heater": {
         "default": "mdi:radiator",

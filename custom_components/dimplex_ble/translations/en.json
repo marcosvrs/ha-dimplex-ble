@@ -109,6 +109,17 @@
     }
   },
   "entity": {
+    "calendar": {
+      "schedule_user_timer": {
+        "name": "User Timer schedule"
+      },
+      "schedule_home_all_day": {
+        "name": "Home All Day schedule"
+      },
+      "schedule_out_all_day": {
+        "name": "Out All Day schedule"
+      }
+    },
     "climate": {
       "heater": {
         "state_attributes": {
@@ -267,7 +278,10 @@
       "message": "The heater's Bluetooth proxy lacks the Dimplex PIN firmware. Install it (see README), then reload."
     },
     "invalid_hvac_mode": {
-      "message": "This heater only supports Heat."
+      "message": "This heater supports Heat and Auto only."
+    },
+    "temperature_needs_heat": {
+      "message": "In Auto the schedule sets the temperature. Switch to Heat first."
     },
     "away_until_required": {
       "message": "Set a future \"Away return time\" first (enable that entity on the heater's device page if hidden)."

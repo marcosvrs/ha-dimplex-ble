@@ -31,6 +31,17 @@ async def async_get_config_entry_diagnostics(
             "mode": "persistent" if link.keep_connected else "per_poll",
             "responder": has_responder(hass, link.source),
         },
+        "schedules": {
+            preset: [
+                None
+                if periods is None
+                else [
+                    f"{p.start:%H:%M}-{p.end:%H:%M} {p.temperature_c}C" for p in periods
+                ]
+                for periods in week
+            ]
+            for preset, week in coordinator.schedules.items()
+        },
         "coordinator": {
             "last_update_success": coordinator.last_update_success,
             "last_exception": type(coordinator.last_exception).__name__

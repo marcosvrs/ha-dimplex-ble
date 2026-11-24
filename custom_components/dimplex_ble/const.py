@@ -26,7 +26,9 @@ DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
 POLL_INTERVAL_PER_POLL = 60
 # Slow settings (Sound, Setback, offset) change only when someone changes them.
 SETTINGS_UPDATE_INTERVAL = timedelta(minutes=5)
+SCHEDULE_UPDATE_INTERVAL = timedelta(hours=6)
 PLATFORMS = (
+    Platform.CALENDAR,
     Platform.CLIMATE,
     Platform.DATETIME,
     Platform.NUMBER,
@@ -57,6 +59,9 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "setback",
         "away_temperature",
         "temperature_offset",
+        "schedule_user_timer",
+        "schedule_home_all_day",
+        "schedule_out_all_day",
     }
 )
 # Never created, never removed: no commit ever used this unique_id suffix, but

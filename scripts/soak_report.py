@@ -19,14 +19,20 @@ from collections import defaultdict
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MAC = r"([0-9A-F]{2}(?::[0-9A-F]{2}){5})"
 PATTERNS = {
-    "poll_ok": re.compile(r"Finished fetching Dimplex Heater (AM\d+) data .*success: True"),
-    "poll_fail": re.compile(r"Finished fetching Dimplex Heater (AM\d+) data .*success: False"),
+    "poll_ok": re.compile(
+        r"Finished fetching Dimplex Heater (AM\d+) data .*success: True"
+    ),
+    "poll_fail": re.compile(
+        r"Finished fetching Dimplex Heater (AM\d+) data .*success: False"
+    ),
     "connect_ok": re.compile(rf"CONNECT_RESULT {MAC} ok"),
     "connect_fail": re.compile(rf"CONNECT_RESULT {MAC} failed"),
     "pair_ok": re.compile(rf"PAIR_RESULT {MAC} ok ([0-9.]+)s"),
     "pair_fail": re.compile(rf"PAIR_RESULT {MAC} failed code=(\S+)"),
     "gatt_fail": re.compile(rf"GATT {MAC} \S+(?: \S+)? failed"),
-    "link_lost": re.compile(rf"{MAC}: Connection state changed to connected=False mtu=0 error=8"),
+    "link_lost": re.compile(
+        rf"{MAC}: Connection state changed to connected=False mtu=0 error=8"
+    ),
     "route_not_seen": re.compile(rf"ROUTE_NOT_SEEN {MAC}"),
     "settle": re.compile(rf"SETTLE {MAC} waiting"),
     "stall_repair": re.compile(rf"{MAC}.*stopped responding", re.IGNORECASE),

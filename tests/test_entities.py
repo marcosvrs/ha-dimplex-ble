@@ -167,7 +167,7 @@ def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(ha
     entity = DimplexClimate(coordinator)
     assert entity.available is True
     assert entity.hvac_mode == HVACMode.HEAT
-    assert entity.hvac_modes == [HVACMode.HEAT]
+    assert entity.hvac_modes == [HVACMode.HEAT, HVACMode.AUTO]
     assert entity.native_temperature_unit == UnitOfTemperature.CELSIUS
     assert entity.target_temperature_step == 1
     assert entity.precision == 0.1
@@ -175,15 +175,7 @@ def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(ha
     assert entity.supported_features == (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    assert entity.preset_modes == [
-        "away",
-        "home_all_day",
-        "out_all_day",
-        "user_timer",
-        "manual",
-        "eco",
-        "frost_protect",
-    ]
+    assert entity.preset_modes == ["manual", "eco", "frost_protect", "away"]
     assert entity.preset_mode == "manual"
     assert entity.native_current_temperature == 19.5
     assert entity.native_target_temperature == 21.0
@@ -237,32 +229,53 @@ def test_rule_diagnostic_sensors_expose_lcd_temperature_and_output_power(
     assert power_sensor.entity_category is None
 
 
+SCHEDULES = ["user_timer", "home_all_day", "out_all_day", "away"]
+CONTINUOUS = ["manual", "eco", "frost_protect", "away"]
+
+
 @pytest.mark.parametrize(
-    ("mode_hex", "expected", "expected_hvac_mode"),
+    ("mode_hex", "expected", "expected_hvac_mode", "presets"),
     [
-        ("010300000000", PRESET_USER_TIMER, HVACMode.HEAT),
-        ("010100000000", "out_all_day", HVACMode.HEAT),
-        ("020000000000", "manual", HVACMode.HEAT),
-        ("030000000000", "eco", HVACMode.HEAT),
-        ("040000000000", "frost_protect", HVACMode.HEAT),
+        ("010300000000", PRESET_USER_TIMER, HVACMode.AUTO, SCHEDULES),
+        ("010200000000", PRESET_HOME_ALL_DAY, HVACMode.AUTO, SCHEDULES),
+        ("010100000000", "out_all_day", HVACMode.AUTO, SCHEDULES),
+        ("020000000000", "manual", HVACMode.HEAT, CONTINUOUS),
+        ("030000000000", "eco", HVACMode.HEAT, CONTINUOUS),
+        ("040000000000", "frost_protect", HVACMode.HEAT, CONTINUOUS),
     ],
 )
 def test_rule_climate_reports_verified_modes(
-    hass, mode_hex, expected, expected_hvac_mode
+    hass, mode_hex, expected, expected_hvac_mode, presets
 ):
     _, coordinator = make_coordinator(hass, data=snapshot(mode_hex=mode_hex))
     entity = DimplexClimate(coordinator)
+    assert entity.preset_modes == presets
+    assert entity.hvac_mode == expected_hvac_mode
+    assert entity.preset_mode == expected
+    # HA climate docs: no temperature can be set in Auto (the schedule sets it).
+    has_target = expected_hvac_mode == HVACMode.HEAT
+    assert (
+        ClimateEntityFeature.TARGET_TEMPERATURE in entity.supported_features
+    ) is has_target
+    assert ClimateEntityFeature.PRESET_MODE in entity.supported_features
+    assert (entity.native_target_temperature is not None) is has_target
+
+
+def test_rule_climate_offers_every_preset_while_the_mode_is_unknown(hass):
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex=None, away_active=False)
+    )
+    entity = DimplexClimate(coordinator)
+    assert entity.hvac_mode is None
     assert entity.preset_modes == [
-        "away",
-        "home_all_day",
-        "out_all_day",
-        "user_timer",
         "manual",
         "eco",
         "frost_protect",
+        "user_timer",
+        "home_all_day",
+        "out_all_day",
+        "away",
     ]
-    assert entity.hvac_mode == expected_hvac_mode
-    assert entity.preset_mode == expected
 
 
 def test_rule_climate_returns_no_preset_without_mode_payload(hass):
@@ -342,7 +355,7 @@ def test_rule_climate_reports_home_all_day_preset(hass):
 
     entity = DimplexClimate(coordinator)
 
-    assert entity.hvac_mode == HVACMode.HEAT
+    assert entity.hvac_mode == HVACMode.AUTO
     assert entity.preset_mode == PRESET_HOME_ALL_DAY
 
 
@@ -350,6 +363,7 @@ async def test_rule_climate_writes_timer_preset(hass) -> None:
     client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01\x03"))
     _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
 
     await DimplexClimate(coordinator).async_set_preset_mode(PRESET_USER_TIMER)
 
@@ -358,7 +372,7 @@ async def test_rule_climate_writes_timer_preset(hass) -> None:
         0x1001,
         b"\x01\x03\x00\x00\x00\x00",
     )
-    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.async_refresh.assert_awaited_once()
 
 
 async def test_rule_climate_rejects_unsupported_hvac_mode(hass) -> None:
@@ -420,25 +434,68 @@ async def test_rule_climate_translates_timer_preset_write_failures(hass) -> None
     assert err.value.__cause__ is failure
 
 
-async def test_rule_climate_sets_temperature_while_timer_preset_is_active(
-    hass,
+@pytest.mark.parametrize(
+    ("mode_hex", "hvac_mode"),
+    [
+        ("010300000000", None),
+        ("010300000000", HVACMode.HEAT),
+        ("020000000000", HVACMode.COOL),
+        ("020000000000", HVACMode.AUTO),
+    ],
+)
+async def test_rule_climate_sets_temperature_only_in_heat(
+    hass, mode_hex, hvac_mode
 ) -> None:
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x16\x00"))
+    """AM2086 2026-11-24: a setpoint written in User Timer was dropped when the
+    programme was re-selected, so Auto does not take a temperature."""
+    client = SimpleNamespace(async_write_raw=AsyncMock())
     _, coordinator = make_coordinator(
-        hass, data=snapshot(mode_hex="010300000000"), client=client
+        hass, data=snapshot(mode_hex=mode_hex), client=client
     )
-    coordinator.async_request_refresh = AsyncMock()
-
-    await DimplexClimate(coordinator).async_set_temperature(temperature=22)
-
-    assert client.async_write_raw.await_args.args == (0, 0x1023, b"\x16\x00")
-    coordinator.async_request_refresh.assert_awaited_once()
+    kwargs = {"temperature": 22}
+    if hvac_mode is not None:
+        kwargs["hvac_mode"] = hvac_mode
 
     with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_temperature(
-            temperature=22, hvac_mode=HVACMode.COOL
-        )
-    assert err.value.translation_key == "invalid_hvac_mode"
+        await DimplexClimate(coordinator).async_set_temperature(**kwargs)
+
+    assert err.value.translation_key == "temperature_needs_heat"
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_rule_climate_auto_resumes_the_last_schedule(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010200000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexClimate(coordinator)
+    entity.async_write_ha_state = lambda: None
+    entity._handle_coordinator_update()  # sees Home All Day
+    coordinator.data = snapshot(mode_hex="020000000000")
+    entity._handle_coordinator_update()  # now Manual
+
+    await entity.async_set_hvac_mode(HVACMode.AUTO)
+
+    assert client.async_write_raw.await_args.args == (
+        0,
+        0x1001,
+        b"\x01\x02\x00\x00\x00\x00",
+    )
+
+
+async def test_rule_climate_auto_defaults_to_user_timer(hass) -> None:
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
+    coordinator.async_request_refresh = AsyncMock()
+
+    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.AUTO)
+
+    assert client.async_write_raw.await_args.args == (
+        0,
+        0x1001,
+        b"\x01\x03\x00\x00\x00\x00",
+    )
 
 
 def test_rule_climate_ignores_malformed_reported_modes(hass):
@@ -486,39 +543,42 @@ async def test_rule_climate_writes_verified_preset_mode(hass):
     client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x03"))
     _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
 
     await DimplexClimate(coordinator).async_set_preset_mode("eco")
 
     assert client.async_write_raw.await_args == (
         (0, 0x1001, b"\x03\x00\x00\x00\x00\x00"),
     )
-    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.async_refresh.assert_awaited_once()
 
 
 async def test_rule_climate_writes_home_all_day_preset(hass):
     client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01\x02"))
     _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
 
     await DimplexClimate(coordinator).async_set_preset_mode(PRESET_HOME_ALL_DAY)
 
     assert client.async_write_raw.await_args == (
         (0, 0x1001, b"\x01\x02\x00\x00\x00\x00"),
     )
-    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.async_refresh.assert_awaited_once()
 
 
 async def test_rule_climate_writes_out_all_day_preset(hass):
     client = SimpleNamespace(async_write_raw=AsyncMock())
     _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
 
     await DimplexClimate(coordinator).async_set_preset_mode("out_all_day")
 
     assert client.async_write_raw.await_args == (
         (0, 0x1001, b"\x01\x01\x00\x00\x00\x00"),
     )
-    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.async_refresh.assert_awaited_once()
 
 
 async def test_rule_climate_writes_and_clears_away_preset(hass):
@@ -539,6 +599,7 @@ async def test_rule_climate_writes_and_clears_away_preset(hass):
         client=client,
     )
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
     entity = DimplexClimate(coordinator)
 
     await entity.async_set_preset_mode(PRESET_AWAY)
@@ -559,7 +620,8 @@ async def test_rule_climate_writes_and_clears_away_preset(hass):
         0x1001,
         b"\x03\x00\x00\x00\x00\x00",
     )
-    assert coordinator.async_request_refresh.await_count == 2
+    assert coordinator.async_request_refresh.await_count == 1
+    coordinator.async_refresh.assert_awaited_once()
 
 
 async def test_rule_climate_rejects_unverified_preset_mode(hass):
@@ -773,11 +835,11 @@ def test_rule_calculated_power_requires_both_source_values(hass, data):
     assert DimplexCalculatedPowerSensor(coordinator).native_value is None
 
 
-async def test_given_unknown_hvac_state_when_heat_is_requested_then_away_is_cleared(
+async def test_given_away_when_auto_is_requested_then_away_is_cleared_first(
     hass,
 ) -> None:
-    """Given no reported HVAC mode, a heat request clears Away before Manual."""
-    client = SimpleNamespace(async_write_raw=AsyncMock(side_effect=[b"\x00", b"\x02"]))
+    """Away counts as Heat; Auto leaves Away, then resumes the schedule."""
+    client = SimpleNamespace(async_write_raw=AsyncMock(side_effect=[b"\x00", b"\x01"]))
     _, coordinator = make_coordinator(
         hass,
         data=snapshot(
@@ -789,16 +851,16 @@ async def test_given_unknown_hvac_state_when_heat_is_requested_then_away_is_clea
         client=client,
     )
     coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexClimate(coordinator)
+    assert entity.hvac_mode == HVACMode.HEAT
 
-    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.HEAT)
+    await entity.async_set_hvac_mode(HVACMode.AUTO)
 
-    assert client.async_write_raw.await_args_list[0].args[0:2] == (
-        0,
-        0x102A,
-    )
-    assert client.async_write_raw.await_args_list[1].args[0:2] == (
+    assert client.async_write_raw.await_args_list[0].args[0:2] == (0, 0x102A)
+    assert client.async_write_raw.await_args_list[1].args == (
         0,
         0x1001,
+        b"\x01\x03\x00\x00\x00\x00",
     )
 
 
