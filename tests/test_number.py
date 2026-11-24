@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from homeassistant.const import EntityCategory, UnitOfTemperature
+from homeassistant.exceptions import ServiceValidationError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from test_entities import snapshot
+
+from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE, DOMAIN
+from custom_components.dimplex_ble.coordinator import DimplexCoordinator
+from custom_components.dimplex_ble.number import (
+    DimplexAwayTemperatureNumber,
+    DimplexTemperatureOffsetNumber,
+    async_setup_entry,
+)
+
+ADDRESS = "AA:BB:CC:DD:EE:20"
+PROXY = "esphome-proxy"
+OFFSET = (2, 0x1019)
+
+
+def make_coordinator(hass, data, *, reads=()):
+    client = SimpleNamespace(
+        async_write_raw=AsyncMock(), async_read_raw=AsyncMock(side_effect=reads)
+    )
+
+    async def async_write(address, payload):
+        await client.async_write_raw(*address, payload)
+
+    async def async_read(address):
+        return await client.async_read_raw(*address)
+
+    link = SimpleNamespace(
+        address=ADDRESS,
+        source=PROXY,
+        keep_connected=True,
+        async_write=async_write,
+        async_read=async_read,
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Heater 1",
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+    coordinator = DimplexCoordinator(hass, entry, link)
+    coordinator.data = data
+    coordinator.async_request_refresh = AsyncMock()
+    return coordinator, client
+
+
+async def test_setup_adds_the_temperature_settings(hass) -> None:
+    coordinator, _ = make_coordinator(hass, snapshot())
+    entities = []
+
+    await async_setup_entry(
+        hass, SimpleNamespace(runtime_data=coordinator), entities.extend
+    )
+
+    assert [entity.unique_id.split("_", 1)[1] for entity in entities] == [
+        "away_temperature",
+        "temperature_offset",
+    ]
+    assert all(e.entity_category is EntityCategory.CONFIG for e in entities)
+    assert [e.entity_registry_enabled_default for e in entities] == [
+        True,
+        False,
+    ]
+    assert all(
+        e.native_unit_of_measurement == UnitOfTemperature.CELSIUS for e in entities
+    )
+    # The offset is a difference: never converted like an absolute temperature.
+    assert entities[1].device_class is None
+    assert entities[0].device_class == "temperature"
+    assert (entities[0].native_min_value, entities[0].native_max_value) == (7, 18)
+    assert (entities[1].native_min_value, entities[1].native_max_value) == (-3.0, 3.0)
+    assert entities[1].native_step == 0.1
+    assert all(entity.icon is None for entity in entities)
+
+
+def test_numbers_are_unavailable_without_device_values(hass) -> None:
+    coordinator, _ = make_coordinator(hass, None)
+    for cls in (
+        DimplexAwayTemperatureNumber,
+        DimplexTemperatureOffsetNumber,
+    ):
+        entity = cls(coordinator)
+        assert entity.native_value is None
+        assert entity.available is False
+
+
+def test_numbers_report_device_values(hass) -> None:
+    coordinator, _ = make_coordinator(
+        hass, snapshot(minimum=7, maximum=30, away_target_temperature_c=9)
+    )
+    coordinator.settings[OFFSET] = b"\xfe"
+
+    assert DimplexAwayTemperatureNumber(coordinator).native_value == 9
+    offset = DimplexTemperatureOffsetNumber(coordinator)
+    assert offset.native_value == pytest.approx(-0.2)
+    assert offset.available is True
+
+
+def test_away_is_unavailable_when_unreported(hass) -> None:
+    coordinator, _ = make_coordinator(hass, snapshot(away_target_temperature_c=None))
+    assert DimplexAwayTemperatureNumber(coordinator).available is False
+
+
+async def test_away_temperature_keeps_state_and_return_time(hass) -> None:
+    until = datetime(2026, 11, 26, 18, 30)
+    coordinator, client = make_coordinator(
+        hass,
+        snapshot(away_active=True, away_until=until, away_target_temperature_c=7),
+    )
+
+    await DimplexAwayTemperatureNumber(coordinator).async_set_native_value(12)
+
+    client.async_write_raw.assert_awaited_once_with(
+        0, 0x102A, bytes((1, 26, 11, 26, 30, 18, 12))
+    )
+    coordinator.async_request_refresh.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "until", [None, datetime(2026, 11, 25, 6, 28)], ids=["no_deadline", "stale_future"]
+)
+async def test_away_temperature_is_refused_while_away_is_off(hass, until) -> None:
+    """Hardware 2026-11-24 18:44/18:48: any write of the Away record makes the
+    heater enter Away, so the temperature can only change while Away is on."""
+    coordinator, client = make_coordinator(
+        hass, snapshot(away_active=False, away_until=until, away_target_temperature_c=7)
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexAwayTemperatureNumber(coordinator).async_set_native_value(8)
+
+    assert err.value.translation_key == "away_temperature_needs_away"
+    client.async_write_raw.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", [6, 19, 10.5])
+async def test_away_temperature_rejects_values_outside_the_range(hass, value) -> None:
+    coordinator, client = make_coordinator(hass, snapshot(away_active=False))
+
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_away_temperature(value)
+
+    assert err.value.translation_key == "invalid_setpoint"
+    assert err.value.translation_placeholders == {"min": "7", "max": "18"}
+    client.async_write_raw.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [None, snapshot(away_active=None), snapshot(away_active=True, away_until=None)],
+)
+async def test_away_temperature_needs_a_known_away_state(hass, data) -> None:
+    coordinator, client = make_coordinator(hass, data)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_away_temperature(10)
+
+    assert err.value.translation_key == "setting_unavailable"
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_temperature_offset_writes_signed_tenths_and_reads_back(hass) -> None:
+    coordinator, client = make_coordinator(hass, snapshot(), reads=[b"\xfd"])
+    coordinator.settings[OFFSET] = b"\x00"
+    entity = DimplexTemperatureOffsetNumber(coordinator)
+
+    await entity.async_set_native_value(-0.3)
+
+    client.async_write_raw.assert_awaited_once_with(2, 0x1019, b"\xfd")
+    client.async_read_raw.assert_awaited_once_with(2, 0x1019)
+    assert entity.native_value == pytest.approx(-0.3)
+    coordinator.async_request_refresh.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", [3.1, -3.5, 0.25])
+async def test_temperature_offset_rejects_values_outside_the_range(hass, value) -> None:
+    coordinator, client = make_coordinator(hass, snapshot())
+
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_temperature_offset(value)
+
+    assert err.value.translation_key == "invalid_temperature_offset"
+    assert err.value.translation_placeholders == {"min": "-3", "max": "3"}
+    client.async_write_raw.assert_not_awaited()

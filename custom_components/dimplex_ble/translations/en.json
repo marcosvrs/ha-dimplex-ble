@@ -1,65 +1,148 @@
 {
   "config": {
+    "flow_title": "{name}",
     "step": {
       "user": {
-        "title": "Select a Dimplex panel heater",
-        "description": "Choose a nearby panel heater reachable through a passkey-enabled ESPHome Bluetooth proxy.",
+        "title": "Choose a heater",
+        "description": "Pick the Dimplex panel heater to add.",
         "data": {
-          "address": "Panel heater"
+          "address": "Heater"
         }
       },
-      "pair": {
-        "title": "Start panel heater pairing",
-        "description": "Start a pairing request to {name}, then watch the panel heater for its PIN. Home Assistant will not start pairing automatically while a repair is waiting, so one panel heater cannot block other proxies."
-      },
-      "passkey": {
-        "title": "Pair Dimplex panel heater",
-        "description": "Enter the six-digit PIN shown on {name}. The panel heater's PIN request expires about 30 seconds after it appears. Home Assistant automatically tries a limited number of requests while this setup stays open. The PIN is sent through the selected ESPHome proxy and is not saved.",
+      "confirm": {
+        "title": "Choose a Bluetooth proxy",
+        "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "passkey": "Bluetooth PIN"
+          "proxy_source": "Bluetooth proxy"
+        },
+        "data_description": {
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
         }
       },
       "reauth_confirm": {
-        "title": "Repair Dimplex panel heater authentication",
-        "description": "Enter the six-digit PIN shown on {name} to restore the Bluetooth bond.",
+        "title": "Pair {name} again",
+        "description": "The heater rejected the saved PIN. Submit to pair it again."
+      },
+      "reauth_proxy": {
+        "title": "Choose a Bluetooth proxy",
+        "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "passkey": "Bluetooth PIN"
+          "proxy_source": "Bluetooth proxy"
+        },
+        "data_description": {
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
         }
       },
       "reconfigure": {
-        "title": "Repair Dimplex panel heater authentication",
-        "description": "Enter the six-digit PIN shown on {name} to restore the Bluetooth bond.",
+        "title": "Choose a Bluetooth proxy",
+        "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "passkey": "Bluetooth PIN"
+          "proxy_source": "Bluetooth proxy"
+        },
+        "data_description": {
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
         }
+      },
+      "pin_ready": {
+        "title": "PIN shown?",
+        "description": "{name} is showing a 6-digit PIN.",
+        "menu_options": {
+          "pin": "Enter PIN",
+          "show_pin": "Show PIN again"
+        }
+      },
+      "pin_still_shown": {
+        "title": "PIN shown?",
+        "description": "The PIN is still on the display.",
+        "menu_options": {
+          "pin": "Enter PIN",
+          "show_pin": "Show PIN again"
+        }
+      },
+      "pin": {
+        "title": "Enter PIN",
+        "description": "Type the 6-digit PIN shown on the heater.",
+        "data": {
+          "passkey": "PIN"
+        },
+        "data_description": {
+          "passkey": "Missed it? Leave empty to show it again."
+        }
+      },
+      "pairing_failed": {
+        "title": "Pairing didn't start",
+        "description": "Submit to try again on the same proxy."
       }
     },
+    "progress": {
+      "pairing": "Pairing… watch the heater's display."
+    },
     "abort": {
-      "already_configured": "This panel heater is already configured.",
-      "no_heaters_found": "No Dimplex panel heaters were found. Enable Bluetooth on the panel heater and try again.",
-      "not_dimplex": "The advertisement does not identify a Dimplex panel heater.",
-      "proxy_passkey_support_missing": "This panel heater is visible, but no nearby ESPHome Bluetooth proxy has an encrypted API and the required passkey relay.",
-      "proxy_unavailable": "The selected Bluetooth proxy is unavailable."
+      "already_configured": "Device is already configured",
+      "no_heaters_found": "No new Dimplex heater found. Close the Dimplex app and try again in a minute.",
+      "not_dimplex": "This is not a Dimplex heater.",
+      "no_proxy": "No Bluetooth proxy with the Dimplex firmware can reach this heater.{proxy_notes}",
+      "reauth_successful": "Re-authentication was successful",
+      "reconfigure_successful": "Re-configuration was successful"
     },
     "error": {
-      "device_not_found": "That panel heater is no longer in the discovered-device list.",
-      "invalid_passkey": "Enter exactly six digits.",
-      "proxy_passkey_support_missing": "The selected proxy cannot accept a Bluetooth PIN.",
-      "pairing_failed": "Pairing failed or timed out. The panel heater's PIN request expires after about 30 seconds. Home Assistant automatically retries a limited number of times; submit the PIN again to start another bounded attempt. Check the panel heater display before entering a PIN.",
-      "pairing_in_progress": "This ESPHome proxy is pairing with another panel heater. Finish or cancel that setup, then try again.",
-      "invalid_hvac_mode": "That HVAC mode is not supported by this panel heater.",
-      "temperature_not_allowed_in_auto": "The panel heater follows its timer in Auto mode; set the temperature in a non-scheduled mode."
+      "no_proxy": "No Bluetooth proxy can reach this heater. Move it closer or check the proxy, then submit.",
+      "invalid_passkey": "Enter exactly 6 digits.",
+      "pin_rejected": "Wrong PIN. Check the display and try again.",
+      "pairing_failed": "Pairing failed. Submit the PIN again.",
+      "cannot_connect": "Couldn't reach the heater. Submit to try again.",
+      "pairing_not_started": "Pairing didn't start. Submit to try again.",
+      "proxies_busy": "All proxies are busy — pairing will probably fail."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Connection",
+        "data": {
+          "keep_connected": "Keep the Bluetooth connection open"
+        },
+        "data_description": {
+          "keep_connected": "Turn off if this heater often stops responding. Each update then connects briefly (slower controls)."
+        }
+      }
     }
   },
   "entity": {
     "climate": {
       "heater": {
-        "name": "Panel Heater",
-        "state": {
-          "eco": "Eco",
-          "manual": "Manual",
-          "frost_protect": "Frost Protect"
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "user_timer": "User Timer",
+              "home_all_day": "Home All Day",
+              "out_all_day": "Out All Day",
+              "away": "Away",
+              "manual": "Manual",
+              "eco": "Eco",
+              "frost_protect": "Frost Protect"
+            }
+          },
+          "away_until": {
+            "name": "Away return time"
+          },
+          "away_target_temperature": {
+            "name": "Away target temperature"
+          }
         }
+      }
+    },
+    "datetime": {
+      "away_until": {
+        "name": "Away return time"
+      }
+    },
+    "number": {
+      "away_temperature": {
+        "name": "Away temperature"
+      },
+      "temperature_offset": {
+        "name": "Temperature offset"
       }
     },
     "switch": {
@@ -67,73 +150,21 @@
         "name": "Sound"
       },
       "preemptive_heating": {
-        "name": "Adaptive Start",
-        "state_attributes": {
-          "official_name": {
-            "name": "Official Dimplex name",
-            "state": {
-              "dimplex_calls_this_adaptive_start": "Adaptive Start"
-            }
-          },
-          "what_it_does": {
-            "name": "What it does",
-            "state": {
-              "preheats_room_to_target_before_timer_period": "Pre-heats the room so the target temperature is reached by the start of a timer period."
-            }
-          },
-          "how_it_works": {
-            "name": "How it works",
-            "state": {
-              "models_room_heating_characteristics_and_starting_temperature": "Models the room's heating characteristics and starting temperature."
-            }
-          },
-          "when_it_applies": {
-            "name": "When it applies",
-            "state": {
-              "timer_mode_only": "Only applies in Timer Mode."
-            }
-          },
-          "important_note": {
-            "name": "Important note",
-            "state": {
-              "continuously_learning_two_hour_limit_all_same_room_heaters_should_enable": "Learns continuously, enforces a two-hour calculation limit, and should be enabled on all panel heaters in the same room."
-            }
-          }
-        }
+        "name": "Adaptive start"
       },
       "open_window_detection": {
-        "name": "Open Window Detection",
-        "state_attributes": {
-          "what_it_does": {
-            "name": "What it does",
-            "state": {
-              "switches_heater_to_heating_off_when_open_window_detected": "Switches the panel heater to Heating Off when an open window is detected."
-            }
-          },
-          "how_it_works": {
-            "name": "How it works",
-            "state": {
-              "detects_sudden_decrease_in_room_temperature": "Looks for a sudden decrease in room temperature."
-            }
-          },
-          "when_it_applies": {
-            "name": "When it applies",
-            "state": {
-              "can_interrupt_any_active_mode": "Can interrupt any active mode."
-            }
-          },
-          "important_note": {
-            "name": "Important note",
-            "state": {
-              "may_trigger_in_drafty_poorly_insulated_or_undersized_rooms": "May trigger incorrectly in drafty or poorly insulated rooms, or when the panel heater is undersized."
-            }
-          }
-        }
+        "name": "Open window detection"
+      },
+      "setback": {
+        "name": "Setback"
+      },
+      "advance": {
+        "name": "Advance"
       }
     },
     "select": {
       "temperature_unit": {
-        "name": "Temperature Units",
+        "name": "Display temperature unit",
         "state": {
           "celsius": "Celsius",
           "fahrenheit": "Fahrenheit"
@@ -142,196 +173,125 @@
     },
     "sensor": {
       "error_code": {
-        "name": "Error code"
+        "name": "Error",
+        "state": {
+          "no_error": "No error",
+          "code_20": "Thermistor fault (20)",
+          "code_21": "Thermistor fault (21)",
+          "code_22": "Thermistor fault (22)",
+          "code_23": "Thermistor fault (23)",
+          "code_24": "Thermistor fault (24)",
+          "code_30": "Overheat (30)",
+          "code_32": "Overheat (32)",
+          "code_33": "Overheat (33)",
+          "code_34": "Overheat (34)",
+          "code_40": "Internal communication fault (40)",
+          "code_41": "Heating element fault (41)",
+          "code_50": "Open window detected (50)",
+          "code_52": "Heat output disabled (52)",
+          "code_53": "Time lost (53)",
+          "code_54": "Occupancy sensor not detected (54)",
+          "code_55": "Unknown fault (55)",
+          "code_60": "Wireless module fault (60)",
+          "code_61": "Hub connection fault (61)"
+        }
       },
-      "operating_mode_raw": {
-        "name": "Operating mode"
+      "operating_mode": {
+        "name": "Operating mode",
+        "state": {
+          "user_timer": "User Timer",
+          "home_all_day": "Home All Day",
+          "out_all_day": "Out All Day",
+          "away": "Away",
+          "timer": "Timer",
+          "manual": "Manual",
+          "eco": "Eco",
+          "frost_protect": "Frost Protect"
+        }
       },
       "rated_power": {
         "name": "Rated power"
       },
       "lcd_temperature": {
-        "name": "LCD temperature"
+        "name": "Controller temperature"
       },
       "output_power": {
         "name": "Output power"
       },
       "calculated_power_consumption": {
-        "name": "Calculated power consumption"
-      },
-      "raw_readonly_1_0007": {
-        "name": "Experimental last key press (raw)"
-      },
-      "raw_readonly_3_000b": {
-        "name": "Experimental calibration value 0x000B (raw)"
-      },
-      "raw_readonly_3_000c": {
-        "name": "Experimental calibration value 0x000C (raw)"
-      },
-      "raw_readonly_3_1022": {
-        "name": "Experimental device value 0x1022 (raw)"
-      },
-      "raw_readonly_3_1029": {
-        "name": "Experimental device value 0x1029 (raw)"
-      },
-      "raw_readonly_1_1010": {
-        "name": "Experimental test status 0x1010 (raw)"
-      },
-      "raw_readonly_1_1020": {
-        "name": "Experimental test status 0x1020 (raw)"
-      },
-      "raw_readonly_1_300e": {
-        "name": "Experimental OTA status 0x300E (raw)"
-      },
-      "raw_readonly_2_100c": {
-        "name": "Experimental RF communications status (raw)"
-      },
-      "raw_readonly_2_700f": {
-        "name": "Experimental disconnect status (raw)"
-      },
-      "raw_readonly_3_2003": {
-        "name": "Experimental device value 0x2003 (raw)"
-      },
-      "raw_readonly_3_200b": {
-        "name": "Experimental device value 0x200B (raw)"
-      },
-      "raw_readonly_3_200c": {
-        "name": "Experimental device value 0x200C (raw)"
-      },
-      "raw_readonly_3_200f": {
-        "name": "Experimental device value 0x200F (raw)"
-      }
-    },
-    "text": {
-      "raw_0_0006": {
-        "name": "Experimental panel heater clock"
-      },
-      "raw_0_1002": {
-        "name": "Experimental schedule buffer"
-      },
-      "raw_1_0001": {
-        "name": "Experimental display backlight color"
-      },
-      "raw_0_100d": {
-        "name": "Experimental advance heating"
-      },
-      "raw_0_1016": {
-        "name": "Experimental setback"
-      },
-      "raw_0_1017": {
-        "name": "Experimental runback"
-      },
-      "raw_0_1027": {
-        "name": "Experimental runback countdown"
-      },
-      "raw_0_1028": {
-        "name": "Experimental runback setpoint"
-      },
-      "raw_0_102a": {
-        "name": "Experimental away mode"
-      },
-      "raw_2_100a": {
-        "name": "Experimental setting 0x100A"
-      },
-      "raw_2_100b": {
-        "name": "Experimental setting 0x100B"
-      },
-      "raw_2_100f": {
-        "name": "Experimental setting 0x100F"
-      },
-      "raw_2_1018": {
-        "name": "Experimental setting 0x1018"
-      },
-      "raw_2_1019": {
-        "name": "Experimental SP configuration"
+        "name": "Estimated power"
       }
     }
   },
   "services": {
     "get_gatt_services": {
-      "name": "Get GATT services",
-      "description": "List discovered service and characteristic UUIDs and properties without reading values.",
+      "name": "List Bluetooth services (developer)",
+      "description": "Developer diagnostic: lists the heater's Bluetooth services without reading values.",
       "fields": {
         "device_id": {
-          "name": "Panel Heater",
+          "name": "Heater",
           "description": "The Dimplex panel heater to inspect."
-        }
-      }
-    },
-    "read_gatt": {
-      "name": "Read GATT characteristic",
-      "description": "Read a Dimplex characteristic and return its value as hexadecimal bytes.",
-      "fields": {
-        "device_id": {
-          "name": "Panel Heater",
-          "description": "The Dimplex panel heater to read."
-        },
-        "service_group": {
-          "name": "Service group",
-          "description": "The Dimplex service group, from 0 through 3."
-        },
-        "characteristic": {
-          "name": "Characteristic ID",
-          "description": "The 16-bit characteristic ID, entered as a decimal number."
-        }
-      }
-    },
-    "write_gatt": {
-      "name": "Write GATT characteristic",
-      "description": "Write hexadecimal bytes to a Dimplex characteristic and return its readback when readable. Administrator only.",
-      "fields": {
-        "device_id": {
-          "name": "Panel Heater",
-          "description": "The Dimplex panel heater to write."
-        },
-        "service_group": {
-          "name": "Service group",
-          "description": "The Dimplex service group, from 0 through 3."
-        },
-        "characteristic": {
-          "name": "Characteristic ID",
-          "description": "The 16-bit characteristic ID, entered as a decimal number."
-        },
-        "payload": {
-          "name": "Payload (hex)",
-          "description": "Non-empty hexadecimal bytes; spaces are optional."
         }
       }
     }
   },
   "exceptions": {
     "cannot_connect": {
-      "message": "Could not connect to the panel heater over Home Assistant Bluetooth. Check that a connectable Bluetooth adapter can reach it and that pairing is already established."
-    },
-    "authentication_failed": {
-      "message": "The panel heater's Bluetooth authentication has expired or was lost. Re-enter the PIN to repair the connection."
+      "message": "Couldn't reach the heater. Check that its Bluetooth proxy is online and in range."
     },
     "characteristic_unavailable": {
-      "message": "The requested GATT characteristic is missing or does not support that operation."
+      "message": "The heater doesn't support this operation."
     },
     "protected_characteristic": {
-      "message": "This characteristic is blocked because reading or writing it is unsafe or exposes device credentials."
+      "message": "This heater setting is blocked because changing it is unsafe."
     },
     "invalid_gatt_request": {
-      "message": "The GATT group, characteristic, or hexadecimal payload is invalid."
-    },
-    "invalid_experimental_payload": {
-      "message": "Enter hexadecimal bytes for this experimental field."
-    },
-    "invalid_experimental_payload_length": {
-      "message": "Enter exactly the required number of hexadecimal bytes for this experimental field."
+      "message": "Invalid value for this heater setting."
     },
     "invalid_setpoint": {
-      "message": "The requested target must be a whole-degree Celsius value within the panel heater-reported range."
+      "message": "Choose a whole number between {min} and {max} °C."
     },
     "invalid_preset": {
-      "message": "The requested preset is not supported by this panel heater."
+      "message": "This heater doesn't support that preset."
     },
     "setpoint_unavailable": {
-      "message": "The panel heater has not reported a usable setpoint range yet."
+      "message": "The heater hasn't reported its temperature range yet. Try again shortly."
     },
     "invalid_temperature_unit": {
       "message": "Choose Celsius or Fahrenheit."
+    },
+    "reauth_required": {
+      "message": "The heater rejected the saved PIN. Open the repair to pair it again."
+    },
+    "responder_missing": {
+      "message": "The heater's Bluetooth proxy lacks the Dimplex PIN firmware. Install it (see README), then reload."
+    },
+    "invalid_hvac_mode": {
+      "message": "This heater only supports Heat."
+    },
+    "away_until_required": {
+      "message": "Set a future \"Away return time\" first (enable that entity on the heater's device page if hidden)."
+    },
+    "invalid_away_until": {
+      "message": "The Away return time must be in the future."
+    },
+    "setting_unavailable": {
+      "message": "The heater hasn't reported this setting yet. Try again shortly."
+    },
+    "invalid_temperature_offset": {
+      "message": "Choose an offset between {min} and {max} °C in steps of 0.1 °C."
+    },
+    "advance_requires_timer": {
+      "message": "Advance works only in User Timer, Home All Day or Out All Day."
+    },
+    "away_temperature_needs_away": {
+      "message": "Turn on Away first by setting an Away return time, then change the Away temperature."
+    }
+  },
+  "issues": {
+    "heater_stalled": {
+      "title": "{name} stopped responding",
+      "description": "The heater's Bluetooth has stopped. Switch the heater off and on at the wall; Home Assistant reconnects automatically."
     }
   }
 }

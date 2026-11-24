@@ -4,7 +4,7 @@ This report inventories field/value evidence available from the requested first-
 
 ## Sources inspected
 
-* ConfigR extraction: `/tmp/configr-apk/native/configr-utf16-l.txt`, `/tmp/configr-apk/native/all-strings.txt`, `/tmp/configr-apk/native/ConfigR-candidate.dll`; repository interpretation [`docs/configr.md`](configr.md) and [`docs/protocol-field-research.md`](protocol-field-research.md). Native-AOT strings/classes provide names, lengths and profile terminology, but no independently proven AM6532 packet trace.
+* ConfigR extraction: `/tmp/configr-apk/native/configr-utf16-l.txt`, `/tmp/configr-apk/native/all-strings.txt`, `/tmp/configr-apk/native/ConfigR-candidate.dll`; repository interpretation [`docs/configr.md`](configr.md). Native-AOT strings/classes provide names, lengths and profile terminology, but no independently proven AM6532 packet trace.
 * Q-Rad Smart Bridge: [repository](https://github.com/philcluff/dimplex-qrad-smart-bridge), especially [raw `docs/ble-protocol.md`](https://raw.githubusercontent.com/philcluff/dimplex-qrad-smart-bridge/main/docs/ble-protocol.md), [raw `docs/research.md`](https://raw.githubusercontent.com/philcluff/dimplex-qrad-smart-bridge/main/docs/research.md), and [raw `docs/backlog.md`](https://raw.githubusercontent.com/philcluff/dimplex-qrad-smart-bridge/main/docs/backlog.md). Its protocol notes are live observations on QRAD100E Series D, with Sunhouse-derived rows explicitly marked inferred.
 * Sunhouse ESPHome: [repository](https://github.com/JYewman/Sunhouse-Dimplex-Storage-Heater-ESPHome-Home-Assistant), [raw YAML](https://raw.githubusercontent.com/JYewman/Sunhouse-Dimplex-Storage-Heater-ESPHome-Home-Assistant/main/sunhouse-heater.yaml), [raw README](https://raw.githubusercontent.com/JYewman/Sunhouse-Dimplex-Storage-Heater-ESPHome-Home-Assistant/main/README.md). This is an SSHE/Sunhouse implementation; its writes are not AM6532 proof.
 * Quantum dump: [repository](https://github.com/bobthecooldad/Dimplex-Quantum-Storage-Heater-Dump), [tree](https://github.com/bobthecooldad/Dimplex-Quantum-Storage-Heater-Dump/tree/main). The repository contains PCB photographs plus `Raw Dump.bin` and `Smart MX25L16066 .bin` (2 MiB each), with no protocol documentation or decoded field table. It therefore contributes no safe GATT field/value mapping.
@@ -28,7 +28,7 @@ All four main service groups use Bluetooth SIG base `00000000-0000-1000-8000-008
 | Address | Exact name and layout/value evidence | Scope and classification | Safety / recommendation |
 |---|---|---|---|
 | `0/0x0006` | `SetRtc`, write-only 7 bytes; QRAD live value `[20,YY,MM,DD,hh,mm,flag]`, e.g. `14 1a 09 0b 09 0f 01`; newer `0x0106` is `SetRtcWithSeconds`, 8 bytes. | QRAD100E D live for clock shape; ConfigR documented. | Write confirmed by ConfigR but not safe for AM6532 without exact model test; retain as unknown/write boundary. |
-| `0/0x1001` | `HeatingMode`, 6 bytes `[mode, submode, b2,b3,b4,b5]`. QRAD live: mode `1 Timer`, `2 Manual`, `3 Eco`, `4 Frost Protect`; submode for Timer: `1 Out All Day`, `2 Home All Day`, `3 User Timer`, `5 Away`; byte 3 `01` while Boost runs. QRAD writes `[mode,sub,0,0,0,0]`; mode 2/3 behavior and readback confirmed. | QRAD100E D verified live; ConfigR/other implementation documents same family. AM6532 project separately verified Eco `03 00 00 00 00 00`; Frost `04 00 00 00 00 00` selected 7°C but display confirmation remains phase 2. | Only AM6532 Eco is currently exposed as a climate write. Manual/Timer/Boost/Away and Frost display semantics remain phase 2. |
+| `0/0x1001` | `HeatingMode`, 6 bytes `[mode, submode,b2,b3,b4,b5]`. QRAD live: mode `1 Timer`, `2 Manual`, `3 Eco`, `4 Frost Protect`; submode for Timer: `1 Out All Day`, `2 Home All Day`, `3 User Timer`, `5 Away`; byte 3 `01` while Boost runs. QRAD writes `[mode,sub,0,0,0,0]`; AM6532 writes/readback are verified for Manual, Eco, Frost Protect, and Timer/Away; AM2086 accepted/read back Home All Day `01 02 00 00 00 00`. | QRAD100E D verified live; ConfigR/other implementation documents same family. AM2086 controlled Home All Day readback confirmed the exact timer submode. | Use heat-only `HVACMode.HEAT` with translated User Timer, Home All Day, Away, Manual, Eco, and Frost Protect presets; expose Away's explicit return deadline separately. |
 | `0/0x1002` | `ScheduleAndSetTemperature`, 31 bytes. QRAD inferred layout: bytes 0–2 header `[response/timerMode/day]`; four 6-byte periods at offsets 3, 9, 15, 21, each `[startH,startM,endH,endM,temp,0]`; four tail bytes. Sunhouse reads by writing `[0,timerMode,day]`; writes `[1,timerMode,day,...]`. | QRAD marks inferred from Sunhouse; Sunhouse implementation parses 4 periods. AM6532 live inventory shows 31 zero bytes only. | Unknown/unsafe schedule write for AM6532; do not expose calendar from this alone. |
 | `0/0x1003` | Effective/current setpoint mirror, LE16 whole °C. QRAD live mirrors `0x1023`, with one transient mismatch; AM6532 live `1400`/`1200` observations. | Verified live on QRAD and AM6532 as readable values; semantic independence unknown. | Read-only diagnostic/raw evidence; no second target entity. |
 | `0/0x1005` | `TemperatureUnit`, 1 byte; AM6532/QRAD read `00` interpreted Celsius in project. ConfigR documents Celsius/Fahrenheit. | AM6532 read/write/readback verified; native climate values remain Celsius. | Expose only the separate display-unit select; do not change climate native-unit semantics. |
@@ -43,10 +43,10 @@ All four main service groups use Bluetooth SIG base `00000000-0000-1000-8000-008
 | `0/0x1016` | `Setback`, 2 bytes; QRAD `00 07`, AM6532 `00 08`/`0008`; units unknown. | ConfigR label + live raw values on QRAD/AM6532. | Read only; no writes. |
 | `0/0x1017` | `Runback`, 2 bytes; AM6532 `01 7c`; QRAD `01 7c`; encoding unknown. | ConfigR label + live raw values. | Read only; no writes. |
 | `0/0x1023` | `CurrentSetTemperature`, 2-byte LE16 whole °C, write `[temp,0]`; AM6532 and QRAD writes/readback confirmed. | Verified live on QRAD and AM6532. | Safe AM6532 target write only as bounded whole-degree command. |
-| `0/0x1024` | ConfigR `HeatDemand`, 4 bytes `[band,temperature]` per QRAD notes. Not present on QRAD D and absent from AM6532 inventory. | ConfigR-only; absent on observed profiles. | Do not probe merely because named by ConfigR; distinct from Trac/output byte. |
+| `3/0x1024` | ConfigR `HeatDemand` (UUID `00001024-...`; ConfigR's own label string says "0124", a ConfigR typo), 4 bytes `[band,temperature]` per QRAD notes. Not present on QRAD D and absent from AM6532 inventory. | ConfigR-only; absent on observed profiles. | Do not probe merely because named by ConfigR; distinct from Trac/output byte. |
 | `0/0x1027` | `RunbackTime` / boost countdown, 2 bytes; QRAD observed 0→30 (`0x1e`)→0, likely minutes; AM6532 `0000`. | QRAD live, ConfigR label; AM6532 raw only. | No AM6532 write. |
 | `0/0x1028` | `RunbackSetpoint`, 2-byte LE16; QRAD `1500` = 21 °C, AM6532 `1500`. | QRAD live and AM6532 raw. | No separate target or write without model test. |
-| `0/0x102A` | `AwayMode`, 8 bytes `[active,YY,MM,DD,mm,hh,temp]` (QRAD docs show 7 meaningful bytes despite ConfigR table length 8); QRAD active-until example and 7 °C; AM6532 raw `00 1a 0b 11 30 06 07`. | QRAD live; AM6532 raw/inactive. | No AM6532 command; calendar/time semantics need exact model verification. |
+| `0/0x102A` | `AwayMode`, 8 bytes `[active,YY,MM,DD,mm,hh,temp]` (QRAD docs show 7 meaningful bytes despite ConfigR table length 8); QRAD active-until example and 7 °C; AM6532 active payload `01 1a 0b 16 35 12 07` read back after a controlled write. | QRAD and AM6532 live; active/inactive AM6532 write/readback verified. | Local PLX050E Away control is verified; the climate maps the reported Timer/Away state to the friendly Away preset and requires an explicit future deadline through the separate datetime entity. |
 | `1/0x0001` | Undocumented on ConfigR Q-Rad table; observed backlight `[selector,R,G,B]`, e.g. `02 b9 ff 96`, with colors including `ff7878`, `00ff00`, `87ceeb`, `00008c`. | QRAD live and AM6532 raw `02 9e ff 96`; model behavior not established. | No HA control. |
 | `1/0x0002` | ConfigR `Trac`, selector write `[n,0,0]`; read `[n,active]` (QRAD) / 3-byte AM6532 reads. QRAD elements 1/2 active flags; QRAD debug page C is demand percent and D element flags, but source says not exposed directly in BLE. AM6532 live `010164`/`020164` active and `010000`/`020000` idle, third-byte percent correlation is model-specific. | Selector protocol source-documented; QRAD live; AM6532 live correlation. | Same-connection selector exchange only; do not call third byte universal HeatDemand. |
 | `1/0x0007` | `LastKeyPressValue`, 1 byte; QRAD `03`, AM6532 `06`; transient last-button event. | Verified live QRAD/AM6532. | Read diagnostic only; no normal entity/write. |
@@ -84,16 +84,34 @@ Cloud telemetry is also separate: `POST /Reports/GetTsiEnergyReportDataForHub` r
 
 1. **QRAD vs AM6532 Trac:** QRAD docs say `Trac` reads `[n,active]`; AM6532 returns three bytes and its third byte correlates with PLX report-screen output percentage. This is a model-specific live correlation, not universal ConfigR `HeatDemand`.
 2. **PowerLoading:** QRAD first/second LE16 words are 1000/2200 W and shown on its debug screen as G/H. AM6532 is 500/2200; only first word is corroborated by PLX050E rating. The second word's meaning is unknown for AM6532.
-3. **Mode writes:** QRAD confirms six-byte mode writes and Sunhouse uses mode 5/6 for Boost/Standby, but QRAD says 5/6 were not observed and labels Sunhouse rows inferred. AM6532 only has bounded Eco/Frost confirmation.
-4. **Temperature sensor selector 3:** ConfigR names selector 3 core temperature; QRAD source documents the selector, but AM6532 returns zero/unavailable. Do not expose core temperature.
-5. **Ambient temperature:** QRAD debug screen displays ambient but protocol notes state it was not exposed in any readable characteristic; the selector-1 temperature is the safe sensor path.
-6. **Quantum dump:** raw flash binaries/photos contain no decoded packet specification in the repository; no fields should be inferred from binary artifacts here.
-7. **ConfigR model universe:** the 61-parameter ConfigR table says 33 exist on QRAD D. Presence of a class/name is not proof of availability on PLX050E/AM6532.
+3. **Mode writes:** QRAD confirms six-byte mode writes and Sunhouse uses mode
+   5/6 for Boost/Standby, but QRAD says 5/6 were not observed and labels the
+   Sunhouse rows inferred. The local integration exposes only the bounded
+   Manual, Eco, Frost Protect, Timer/Home All Day, and Away mappings verified
+   on the supported PLX050E profile.
+4. **Temperature sensor selector 3:** ConfigR names selector 3 core
+   temperature; QRAD source documents the selector, but AM6532 returns
+   zero/unavailable. Do not expose core temperature.
+5. **Ambient temperature:** QRAD debug screen displays ambient but protocol
+   notes state it was not exposed in any readable characteristic; selector 1 is
+   the safe sensor path.
+6. **Quantum dump:** raw flash binaries/photos contain no decoded packet
+   specification in the repository; no fields should be inferred from binary
+   artifacts here.
+7. **ConfigR model universe:** the 61-parameter ConfigR table says 33 exist on
+   QRAD D. Presence of a class/name is not proof of availability on
+   PLX050E/AM6532.
 
 ## Recommendations for capability-matrix update
 
-* Keep current AM6532 verified rows limited to identity (`3/0x2005`, product/UI/RF metadata), target (`0/0x1023`), limits (`0/0x1006`), unit (`0/0x1005`), error (`0/0x1011`), room/LCD selector reads (`1/0x0008`), Eco mode (`0/0x1001`; Frost remains phase 2), rated first word (`3/0x000A`), and model-specific Trac active/output correlation (`1/0x0002`).
-* Add explicit evidence labels distinguishing `verified live`, `source-documented`, `ConfigR-only`, `unknown`, `protected/unsafe`, and `absent`; record model/profile beside every value.
-* Preserve raw payloads as diagnostics only where they are repeatable and non-sensitive. Do not convert `0x1007`, `0x1008`, `0x100D`, `0x1016`, `0x1017`, `0x1027`, `0x1028`, `0x102A`, unknown `0x100A/0x100B/0x100F`, or undecoded metadata into controls.
-* Do not add schedules, Away/Boost/Manual/Timer, generic on/off, element status, charge, cumulative energy, firmware update, security, factory reset, OTA, or notifications from ConfigR/cloud/Sunhouse labels alone.
+* Keep current AM6532 verified rows limited to identity, target, limits, unit,
+  error, room/LCD selector reads, verified mode/preset values, rated first
+  word, Sound, Adaptive Start, Open Window Detection, and model-specific Trac
+  active/output correlation.
+* Add explicit evidence labels distinguishing `verified live`,
+  `source-documented`, `ConfigR-only`, `unknown`, `protected/unsafe`, and
+  `absent`; record model/profile beside every value.
+* Do not convert clock, schedule, backlight, advance, setback, runback,
+  unnamed, OTA, test, security, or cloud-only values into controls without
+  model-specific evidence.
 * Any future command needs exact AM6532 payload identification, repeated state observations, a bounded reversible write/readback, an unambiguous semantic mapping, and a regression fixture. Keep selector operations write-then-read on one authenticated connection.

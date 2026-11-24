@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from custom_components.dimplex_ble.protocol import (
     BLOCKED_READS,
     BLOCKED_WRITES,
     DIMPLEX_GROUPS,
-    MAX_GATT_VALUE_BYTES,
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
     DimplexProtocolError,
@@ -14,19 +15,25 @@ from custom_components.dimplex_ble.protocol import (
     ProtectedCharacteristicError,
     _parse_selected_version,
     characteristic_uuid,
-    decode_known_raw_value,
+    encode_advance,
+    encode_away_mode,
     encode_heating_mode,
     encode_preset_mode,
+    encode_setback,
     encode_setpoint,
     encode_sound,
-    format_heating_mode,
-    format_known_raw_value,
-    format_readonly_raw_value,
+    encode_temperature_offset,
+    error_code_state,
     gatt_uuid_candidates,
-    parse_hex_payload,
+    heating_mode_key,
+    parse_advance,
+    parse_away_mode,
+    parse_model,
     parse_preset_mode,
+    parse_setback,
     parse_snapshot,
     parse_sound_enabled,
+    parse_temperature_offset,
     service_uuid,
     validate_raw_access,
 )
@@ -40,9 +47,8 @@ def test_parse_selected_version_requires_selector_and_complete_payload() -> None
 
 @pytest.mark.parametrize("group", sorted(DIMPLEX_GROUPS))
 def test_service_uuid_formats_each_supported_group(group: int) -> None:
-    assert service_uuid(group) == (
-        f"00000000-000{group}-1000-8000-00805f9b34fb"
-    )
+    assert service_uuid(group) == (f"00000000-000{group}-1000-8000-00805f9b34fb")
+
 
 @pytest.mark.parametrize("group", [-1, 4, 255])
 def test_service_uuid_rejects_groups_outside_dimplex_services(group: int) -> None:
@@ -53,7 +59,11 @@ def test_service_uuid_rejects_groups_outside_dimplex_services(group: int) -> Non
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(0, "00000000-0000-1000-8000-00805f9b34fb"), (0x1023, "00001023-0000-1000-8000-00805f9b34fb"), (65535, "0000ffff-0000-1000-8000-00805f9b34fb")],
+    [
+        (0, "00000000-0000-1000-8000-00805f9b34fb"),
+        (0x1023, "00001023-0000-1000-8000-00805f9b34fb"),
+        (65535, "0000ffff-0000-1000-8000-00805f9b34fb"),
+    ],
 )
 def test_characteristic_uuid_formats_16_bit_ids(value: int, expected: str) -> None:
     assert characteristic_uuid(value) == expected
@@ -87,215 +97,57 @@ def test_validate_raw_access_allows_safe_reads_and_writes() -> None:
 
 
 @pytest.mark.parametrize("address", sorted(BLOCKED_READS))
-def test_validate_raw_access_blocks_every_protected_read(address: tuple[int, int]) -> None:
+def test_validate_raw_access_blocks_every_protected_read(
+    address: tuple[int, int],
+) -> None:
     with pytest.raises(ProtectedCharacteristicError) as err:
         validate_raw_access(*address, write=False)
     assert str(err.value) == "This characteristic is blocked for reads"
 
 
 @pytest.mark.parametrize("address", sorted(BLOCKED_WRITES))
-def test_validate_raw_access_blocks_every_protected_write(address: tuple[int, int]) -> None:
+def test_validate_raw_access_blocks_every_protected_write(
+    address: tuple[int, int],
+) -> None:
     with pytest.raises(ProtectedCharacteristicError) as err:
         validate_raw_access(*address, write=True)
     assert str(err.value) == "This characteristic is blocked for writes"
 
 
 @pytest.mark.parametrize("address", sorted(BLOCKED_READS))
-def test_read_protection_does_not_implicitly_block_writes(address: tuple[int, int]) -> None:
+def test_read_protection_does_not_implicitly_block_writes(
+    address: tuple[int, int],
+) -> None:
     if address not in BLOCKED_WRITES:
         validate_raw_access(*address, write=True)
 
 
 @pytest.mark.parametrize("address", sorted(BLOCKED_WRITES - BLOCKED_READS))
-def test_write_protection_does_not_implicitly_block_reads(address: tuple[int, int]) -> None:
+def test_write_protection_does_not_implicitly_block_reads(
+    address: tuple[int, int],
+) -> None:
     validate_raw_access(*address, write=False)
 
 
-@pytest.mark.parametrize(("value", "expected"), [("01", b"\x01"), ("00 ff", b"\x00\xff"), ("aB" * MAX_GATT_VALUE_BYTES, bytes([0xAB]) * MAX_GATT_VALUE_BYTES)])
-def test_parse_hex_payload_decodes_valid_values(value: str, expected: bytes) -> None:
-    assert parse_hex_payload(value) == expected
+def test_away_mode_round_trips_verified_payload() -> None:
+    until = datetime(2026, 11, 22, 18, 53)
+    payload = encode_away_mode(True, until)
 
-
-@pytest.mark.parametrize("value", ["gg", "0", "zz 00"])
-def test_parse_hex_payload_rejects_invalid_hex(value: str) -> None:
-    with pytest.raises(DimplexProtocolError) as err:
-        parse_hex_payload(value)
-    assert str(err.value) == "Payload must contain hexadecimal bytes"
-
-
-def test_parse_hex_payload_rejects_empty_and_oversized_payloads() -> None:
-    with pytest.raises(DimplexProtocolError) as err:
-        parse_hex_payload("")
-    assert str(err.value) == "Payload must not be empty"
-
-    with pytest.raises(DimplexProtocolError) as err:
-        parse_hex_payload("00" * (MAX_GATT_VALUE_BYTES + 1))
-    assert str(err.value) == "Payload exceeds the 512-byte GATT value limit"
-
-
-
-@pytest.mark.parametrize(
-    ("address", "value", "expected"),
-    [
-        (
-            (0, 0x0006),
-            bytes.fromhex("141a0b11133001"),
-            {"clock": "2026-11-17T19:48", "clock_flag": 1},
-        ),
-        (
-            (1, 0x0001),
-            bytes.fromhex("029eff96"),
-            {"backlight_selector": 2, "backlight_rgb": "#9eff96"},
-        ),
-        ((1, 0x0007), b"\x06", {"last_key_code": 6}),
-        ((0, 0x100D), b"\x01", {"advance_active": True}),
-        ((0, 0x1028), bytes.fromhex("1500"), {"runback_setpoint_c": 21}),
-        (
-            (0, 0x102A),
-            bytes.fromhex("001a0b11300607"),
-            {
-                "away_active": False,
-                "away_target_temperature_c": 7,
-                "away_until": "2026-11-17T06:48",
-            },
-        ),
-    ],
-)
-def test_decode_known_raw_value_preserves_only_established_meanings(
-    address: tuple[int, int],
-    value: bytes,
-    expected: dict[str, str | int | bool],
-) -> None:
-    assert decode_known_raw_value(address, value) == expected
-    assert decode_known_raw_value((3, 0x200B), b"\x7f\x9d") == {}
-
-
-def test_decode_known_raw_value_keeps_invalid_dates_raw() -> None:
-    assert decode_known_raw_value((0, 0x0006), bytes.fromhex("141a0d140d3701")) == {
-        "clock_flag": 1
-    }
-    assert decode_known_raw_value((0, 0x102A), bytes.fromhex("001a0d11300607")) == {
-        "away_active": False,
-        "away_target_temperature_c": 7,
-    }
-
-
-@pytest.mark.parametrize(
-    ("address", "value"),
-    [
-        ((3, 0x9999), b"\x00\x00\x00\x00"),
-        ((3, 0x9998), b"\x00"),
-        ((3, 0x9997), b"\x00\x00\x00\x00\x00\x00\x00"),
-    ],
-)
-def test_decode_known_raw_value_requires_matching_address(
-    address: tuple[int, int], value: bytes
-) -> None:
-    assert decode_known_raw_value(address, value) == {}
-
-
-@pytest.mark.parametrize(
-    ("address", "value", "expected"),
-    [
-        ((0, 0x0006), bytes.fromhex("141a0b140d3701"), "2026-11-20T13:55 (flag 1)"),
-        ((1, 0x0001), bytes.fromhex("029eff96"), "#9eff96 (selector 2)"),
-        ((1, 0x0007), b"\x06", "key code 6"),
-        ((0, 0x100D), b"\x00", "off"),
-        ((0, 0x1028), bytes.fromhex("1500"), "21 °C"),
-        (
-            (0, 0x102A),
-            bytes.fromhex("001a0b11300607"),
-            "off, target 7 °C, until 2026-11-17T06:48",
-        ),
-    ],
-)
-def test_format_known_raw_value(
-    address: tuple[int, int], value: bytes, expected: str
-) -> None:
-    assert format_known_raw_value(address, value) == expected
-
-
-def test_format_known_raw_value_keeps_unknown_values_raw() -> None:
-    assert format_known_raw_value((3, 0x200B), b"\x7f\x9d") is None
-
-
-def test_format_known_raw_value_defensively_handles_unexpected_decoder_output(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from custom_components.dimplex_ble import protocol
-
-    monkeypatch.setattr(
-        protocol, "decode_known_raw_value", lambda *_: {"unexpected": 1}
-    )
-    assert protocol.format_known_raw_value((3, 0x200F), b"\x00") is None
-
-
-def test_format_known_raw_value_covers_away_on_and_missing_date() -> None:
-    value = bytes.fromhex("011a0d11300607")
-    assert decode_known_raw_value((0, 0x102A), value)["away_active"] is True
-    assert format_known_raw_value((0, 0x102A), value) == "on, target 7 °C"
-    invalid_date = bytes.fromhex("141aff140d3701")
-    assert format_known_raw_value((0, 0x0006), invalid_date) == "flag 1"
-
-
-@pytest.mark.parametrize(
-    ("address", "value", "expected"),
-    [
-        ((3, 0x1029), bytes.fromhex("9eff96"), "#9eff96"),
-        ((1, 0x1010), b"\x47", "EOL test code 71"),
-        ((1, 0x1020), b"\x00", "off"),
-        ((1, 0x300E), b"\x01", "on"),
-        ((2, 0x100C), b"\x01", "on"),
-        (
-            (3, 0x200C),
-            bytes.fromhex("1416050d0e00"),
-            "2022-05-13T14:00 (possible build timestamp)",
-        ),
-    ],
-)
-def test_format_readonly_raw_value_uses_conservative_guesses(
-    address: tuple[int, int], value: bytes, expected: str
-) -> None:
-    assert format_readonly_raw_value(address, value) == expected
-
-
-def test_format_readonly_raw_value_falls_back_for_unresolved_payload() -> None:
-    assert format_readonly_raw_value((3, 0x200F), bytes.fromhex("04e90f0000")) is None
-    assert format_readonly_raw_value((3, 0x200C), bytes.fromhex("14160d0d0e00")) is None
-
-
-def test_format_readonly_raw_value_requires_matching_address_and_length() -> None:
-    assert format_readonly_raw_value((3, 0x9999), b"\x00\x01\x02") is None
-    assert format_readonly_raw_value((3, 0x9998), b"\x00") is None
-    assert (
-        format_readonly_raw_value((3, 0x9997), bytes.fromhex("1401050d0e2a"))
-        is None
-    )
-
-
-def test_format_readonly_raw_value_preserves_timestamp_minute() -> None:
-    assert (
-        format_readonly_raw_value((3, 0x200C), bytes.fromhex("1416050d0e2a"))
-        == "2022-05-13T14:42 (possible build timestamp)"
-    )
+    assert payload == bytes.fromhex("011a0b16351207")
+    assert parse_away_mode(payload) == (True, until, 7)
 
 
 def test_parse_snapshot_preserves_product_text_and_exact_power_length() -> None:
     assert parse_snapshot({(3, 0x200A): b"\xff"}).product_code == "\ufffd"
-    assert (
-        parse_snapshot({(3, 0x200A): b"  EP4213  "}).product_code
-        == "EP4213"
-    )
+    assert parse_snapshot({(3, 0x200A): b"  EP4213  "}).product_code == "EP4213"
     assert parse_snapshot({(3, 0x200A): b"XEP4213X"}).product_code == "XEP4213X"
     assert parse_snapshot({(3, 0x200A): b"\xc3\xa9"}).product_code == "\ufffd\ufffd"
-    assert (
-        parse_snapshot({(3, 0x000A): bytes.fromhex("f401")}).rated_power_w
-        == 500
-    )
+    assert parse_snapshot({(3, 0x000A): bytes.fromhex("f401")}).rated_power_w == 500
 
 
-def test_parse_snapshot_distinguishes_trac_active_flag_and_rejects_overrange_power(
-) -> None:
+def test_parse_snapshot_distinguishes_trac_active_flag_and_rejects_overrange_power() -> (
+    None
+):
     idle = parse_snapshot({}, trac=bytes.fromhex("010064"))
     assert idle.heating_active is False
     assert idle.trac_output_power_percent == 100
@@ -307,25 +159,67 @@ def test_parse_snapshot_distinguishes_trac_active_flag_and_rejects_overrange_pow
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        (bytes.fromhex("010100000000"), "Timer Mode (Out All Day)"),
-        (bytes.fromhex("010300000000"), "Timer Mode (User Timer)"),
-        (bytes.fromhex("02"), "Manual"),
-        (bytes.fromhex("030000000000"), "Eco Mode"),
-        (bytes.fromhex("040000000000"), "Frost Protect"),
+        (bytes.fromhex("010100000000"), "out_all_day"),
+        (bytes.fromhex("010200000000"), "home_all_day"),
+        (bytes.fromhex("010300000000"), "user_timer"),
+        (bytes.fromhex("010500000000"), "away"),
+        (bytes.fromhex("01"), "timer"),
+        (bytes.fromhex("01fe00000000"), "timer"),
+        (bytes.fromhex("02"), "manual"),
+        (bytes.fromhex("030000000000"), "eco"),
+        (bytes.fromhex("040000000000"), "frost_protect"),
     ],
 )
-def test_format_heating_mode_decodes_documented_modes(
+def test_heating_mode_key_decodes_documented_modes(
     payload: bytes, expected: str
 ) -> None:
-    assert format_heating_mode(payload) == expected
+    assert heating_mode_key(payload) == expected
 
 
-def test_format_heating_mode_returns_none_for_unknown_payload() -> None:
-    assert format_heating_mode(b"") is None
-    assert format_heating_mode(bytes.fromhex("fe0100000000")) is None
+def test_heating_mode_key_returns_none_for_unknown_payload() -> None:
+    assert heating_mode_key(None) is None
+    assert heating_mode_key(b"") is None
+    assert heating_mode_key(bytes.fromhex("fe0100000000")) is None
 
 
-@pytest.mark.parametrize(("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("PLX050E;C;", "PLX050E Series C"),
+        ("QRAD100E;d", "QRAD100E Series D"),
+        ("QRAD100E", "QRAD100E"),
+        ("PLX050E;CC;", "PLX050E CC"),
+        ("PLX050E;1;", "PLX050E 1"),
+        ("A;B;C", "A B C"),
+        (";;", None),
+        (None, None),
+    ],
+)
+def test_parse_model_names_the_series(raw: str | None, expected: str | None) -> None:
+    assert parse_model(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (None, None),
+        (0, "no_error"),
+        (41, "code_41"),
+        (50, "code_50"),
+        (61, "code_61"),
+        (31, "Code 31"),
+        (99, "Code 99"),
+    ],
+)
+def test_error_code_state_names_only_documented_codes(
+    code: int | None, expected: str | None
+) -> None:
+    assert error_code_state(code) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(0, b"\x00\x00"), (19.0, b"\x13\x00"), (255, b"\xff\x00")]
+)
 def test_encode_setpoint_encodes_whole_degrees(value: float, expected: bytes) -> None:
     assert encode_setpoint(value) == expected
 
@@ -357,6 +251,12 @@ def test_preset_mode_encoding_matches_verified_commands(
 ) -> None:
     assert encode_preset_mode(preset) == payload
     assert parse_preset_mode(payload) == preset
+
+
+def test_home_all_day_preset_encoding() -> None:
+    with pytest.raises(DimplexProtocolError):
+        encode_preset_mode("home")
+    assert encode_preset_mode("home_all_day") == b"\x01\x02\x00\x00\x00\x00"
 
 
 def test_preset_mode_parser_ignores_unknown_and_scheduled_values() -> None:
@@ -404,14 +304,21 @@ def test_parse_snapshot_decodes_preemptive_heating_only_for_boolean_payloads() -
 def test_parse_snapshot_decodes_open_window_only_for_boolean_payloads() -> None:
     enabled = b"\x01" + b"\x00" * 8
     disabled = b"\x00" + b"\x00" * 8
-    assert parse_snapshot({OPEN_WINDOW_DETECTION: enabled}).open_window_detection is True
-    assert parse_snapshot({OPEN_WINDOW_DETECTION: disabled}).open_window_detection is False
     assert (
-        parse_snapshot({OPEN_WINDOW_DETECTION: b"\x02" + b"\x00" * 8})
-        .open_window_detection
+        parse_snapshot({OPEN_WINDOW_DETECTION: enabled}).open_window_detection is True
+    )
+    assert (
+        parse_snapshot({OPEN_WINDOW_DETECTION: disabled}).open_window_detection is False
+    )
+    assert (
+        parse_snapshot(
+            {OPEN_WINDOW_DETECTION: b"\x02" + b"\x00" * 8}
+        ).open_window_detection
         is None
     )
-    assert parse_snapshot({OPEN_WINDOW_DETECTION: b"\x01"}).open_window_detection is None
+    assert (
+        parse_snapshot({OPEN_WINDOW_DETECTION: b"\x01"}).open_window_detection is None
+    )
 
 
 def test_parse_snapshot_decodes_all_available_fields() -> None:
@@ -468,22 +375,198 @@ def test_parse_snapshot_decodes_idle_trac_and_rejects_untrusted_values() -> None
 
 @pytest.mark.parametrize(
     ("values", "expected"),
-    [({}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(3, 0x2005): b"\x00 \xff"}, HeaterSnapshot("\ufffd", None, None, None, None, None, None, None, None)),
-     ({(3, 0x2005): b"\xc3\xa9"}, HeaterSnapshot("\ufffd\ufffd", None, None, None, None, None, None, None, None)),
-     ({(0, 0x1023): b"\x00\x00"}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(0, 0x1023): b"\x14"}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(0, 0x1006): bytes((31, 0, 10, 0))}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(0, 0x1006): b"\x01\x00\x02"}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(1, 0x0008): bytes((0, 20, 3))}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(1, 0x0008): bytes((1, 20, 10))}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
-     ({(0, 0x1011): b"\x00\x00"}, HeaterSnapshot(None, None, None, None, None, 0, "0000", None, None)),
-     ({(3, 0x2005): b"XXheaterXX"}, HeaterSnapshot("XXheaterXX", None, None, None, None, None, None, None, None)),
-     ({(0, 0x1023): b"\x15\x00\x01"}, HeaterSnapshot(None, 21, None, None, None, None, None, None, None)),
-     ({(0, 0x1006): bytes((5, 0, 5, 0))}, HeaterSnapshot(None, None, 5, 5, None, None, None, None, None)),
-     ({(1, 0x0008): bytes((1, 20, 0))}, HeaterSnapshot(None, None, None, None, 20.0, None, None, None, None)),
-     ({(1, 0x0008): bytes((1, 20, 9))}, HeaterSnapshot(None, None, None, None, 20.9, None, None, None, None)),
-     ({(0, 0x1005): b"\x00"}, HeaterSnapshot(None, None, None, None, None, None, None, None, 0))],
+    [
+        ({}, HeaterSnapshot(None, None, None, None, None, None, None, None, None)),
+        (
+            {(3, 0x2005): b"\x00 \xff"},
+            HeaterSnapshot("\ufffd", None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(3, 0x2005): b"\xc3\xa9"},
+            HeaterSnapshot(
+                "\ufffd\ufffd", None, None, None, None, None, None, None, None
+            ),
+        ),
+        (
+            {(0, 0x1023): b"\x00\x00"},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(0, 0x1023): b"\x14"},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(0, 0x1006): bytes((31, 0, 10, 0))},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(0, 0x1006): b"\x01\x00\x02"},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(1, 0x0008): bytes((0, 20, 3))},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(1, 0x0008): bytes((1, 20, 10))},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, None),
+        ),
+        (
+            {(0, 0x1011): b"\x00\x00"},
+            HeaterSnapshot(None, None, None, None, None, 0, "0000", None, None),
+        ),
+        (
+            {(3, 0x2005): b"XXheaterXX"},
+            HeaterSnapshot(
+                "XXheaterXX", None, None, None, None, None, None, None, None
+            ),
+        ),
+        (
+            {(0, 0x1023): b"\x15\x00\x01"},
+            HeaterSnapshot(None, 21, None, None, None, None, None, None, None),
+        ),
+        (
+            {(0, 0x1006): bytes((5, 0, 5, 0))},
+            HeaterSnapshot(None, None, 5, 5, None, None, None, None, None),
+        ),
+        (
+            {(1, 0x0008): bytes((1, 20, 0))},
+            HeaterSnapshot(None, None, None, None, 20.0, None, None, None, None),
+        ),
+        (
+            {(1, 0x0008): bytes((1, 20, 9))},
+            HeaterSnapshot(None, None, None, None, 20.9, None, None, None, None),
+        ),
+        (
+            {(0, 0x1005): b"\x00"},
+            HeaterSnapshot(None, None, None, None, None, None, None, None, 0),
+        ),
+    ],
 )
-def test_parse_snapshot_handles_missing_malformed_and_zero_fields(values: dict[tuple[int, int], bytes], expected: HeaterSnapshot) -> None:
+def test_parse_snapshot_handles_missing_malformed_and_zero_fields(
+    values: dict[tuple[int, int], bytes], expected: HeaterSnapshot
+) -> None:
     assert parse_snapshot(values) == expected
+
+
+def test_given_invalid_away_payload_or_encodable_limits_then_protocol_errors_are_clear() -> (
+    None
+):
+    """Given invalid Away values, parsing and encoding reject them safely."""
+    assert parse_away_mode(b"\x01") is None
+    assert parse_away_mode(bytes.fromhex("01000000000007"))[1] is None
+
+    with pytest.raises(DimplexProtocolError, match="year"):
+        encode_away_mode(True, datetime(1999, 1, 1))
+    with pytest.raises(DimplexProtocolError, match="target"):
+        encode_away_mode(True, datetime(2026, 1, 1), 256)
+
+
+def test_given_an_unknown_timer_submode_then_encoding_rejects_it() -> None:
+    """Given an unsupported timer submode, no unsafe command is encoded."""
+    from custom_components.dimplex_ble.protocol import encode_timer_mode
+
+    with pytest.raises(DimplexProtocolError, match="timer"):
+        encode_timer_mode(255)
+
+
+def test_out_all_day_preset_round_trips_the_timer_submode() -> None:
+    payload = encode_preset_mode("out_all_day")
+    assert payload == b"\x01\x01\x00\x00\x00\x00"
+    assert heating_mode_key(payload) == "out_all_day"
+    # A timer profile, not a continuous preset.
+    assert parse_preset_mode(payload) is None
+
+
+@pytest.mark.parametrize(("payload", "active"), [(b"\x00", False), (b"\x01", True)])
+def test_advance_round_trips_off_and_on(payload: bytes, active: bool) -> None:
+    assert parse_advance(payload) is active
+    assert encode_advance(active) == payload
+
+
+@pytest.mark.parametrize("payload", [None, b"", b"\x02", b"\x06", b"\x81", b"\x00\x00"])
+def test_advance_leaves_boost_variants_and_bad_lengths_unknown(
+    payload: bytes | None,
+) -> None:
+    assert parse_advance(payload) is None
+
+
+def test_parse_snapshot_decodes_advance() -> None:
+    assert parse_snapshot({(0, 0x100D): b"\x01"}).advance_active is True
+    assert parse_snapshot({(0, 0x100D): b"\x05"}).advance_active is None
+    assert parse_snapshot({}).advance_active is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "active"), [(b"\x00\x08", False), (b"\x01\x08", True)]
+)
+def test_setback_round_trips_and_keeps_the_temperature_byte(
+    payload: bytes, active: bool
+) -> None:
+    assert parse_setback(payload) is active
+    assert encode_setback(active, payload) == payload
+    assert encode_setback(not active, payload)[1:] == b"\x08"
+
+
+@pytest.mark.parametrize("payload", [None, b"", b"\x01", b"\x02\x08", b"\x01\x08\x00"])
+def test_setback_rejects_unknown_payloads(payload: bytes | None) -> None:
+    assert parse_setback(payload) is None
+    with pytest.raises(DimplexProtocolError):
+        encode_setback(True, payload)
+
+
+@pytest.mark.parametrize(
+    ("raw", "offset"),
+    [
+        (0, 0.0),
+        (2, 0.2),
+        (30, 3.0),
+        (100, 10.0),
+        (101, -15.5),
+        (226, -3.0),
+        (254, -0.2),
+        (255, -0.1),
+    ],
+)
+def test_temperature_offset_decodes_configr_signed_tenths(
+    raw: int, offset: float
+) -> None:
+    assert parse_temperature_offset(bytes((raw,))) == pytest.approx(offset)
+
+
+@pytest.mark.parametrize("offset", [-3.0, -2.9, -0.2, -0.1, 0.0, 0.1, 0.2, 1.5, 3.0])
+def test_temperature_offset_round_trips_within_the_limit(offset: float) -> None:
+    assert parse_temperature_offset(encode_temperature_offset(offset)) == (
+        pytest.approx(offset)
+    )
+
+
+@pytest.mark.parametrize("offset", [-3.1, 3.1, 0.05, 1.25, float("nan"), float("inf")])
+def test_temperature_offset_rejects_unsafe_or_unencodable_values(
+    offset: float,
+) -> None:
+    with pytest.raises(DimplexProtocolError):
+        encode_temperature_offset(offset)
+
+
+@pytest.mark.parametrize("payload", [None, b"", b"\x00\x00"])
+def test_temperature_offset_rejects_bad_lengths(payload: bytes | None) -> None:
+    assert parse_temperature_offset(payload) is None
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "payload"),
+    [
+        (7, 30, b"\x07\x00\x1e\x00"),
+        (7, 8, b"\x07\x00\x08\x00"),
+        (16, 22, b"\x10\x00\x16\x00"),
+    ],
+)
+def test_setpoint_range_is_read_from_the_snapshot(
+    low: int, high: int, payload: bytes
+) -> None:
+    snapshot = parse_snapshot({(0, 0x1006): payload})
+    assert (snapshot.minimum_temperature_c, snapshot.maximum_temperature_c) == (
+        low,
+        high,
+    )

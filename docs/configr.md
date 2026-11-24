@@ -71,16 +71,11 @@ not expose a supported panel-heater bond-reset operation.
 - When a fresh connection is required, open the selected route without
   first-time pairing, then request native encryption from its existing bond;
   a valid bond does not require a new PIN.
-- Runtime route selection may choose another currently advertised, registered
-  ESPHome proxy only after the current connection is gone and only when that
-  route has capacity. The alternate route must already own a usable bond.
-- At operation boundaries, a stable connection is re-evaluated after a
-  five-minute cooldown; controlled handoff requires a materially stronger
-  alternative (at least 10 dBm) or an unusable current route. A route that
-  fails is excluded from proactive RSSI handoff for five minutes while the
-  current route remains usable.
-- If no eligible route can re-establish the bond, mark the entry unavailable
-  instead of looping or silently starting a new pairing flow.
+- Runtime route selection stays with the configured ESPHome proxy. The
+  integration does not implement RSSI roaming or a second load-balancer; bonds
+  are proxy-local and route changes require explicit reconfiguration.
+- If no eligible route can re-establish the existing bond, mark the entry
+  unavailable instead of looping or silently starting a new pairing flow.
 - Explicit commissioning/reconfiguration remains the operation that creates or
   verifies a bond on a selected proxy.
 
@@ -123,31 +118,33 @@ percentage diagnostic value and calculates estimated instantaneous watts as
 or cumulative energy reading. The complete response remains available as an
 attribute.
 
-Eco is exposed as the only climate preset. The Frost payload remains phase 2
-until the physical display state is confirmed. HVAC action is exposed only from
-the directly reported Trac active flag (`HEATING` or `IDLE`). ConfigR's named
-`HeatDemand` characteristic (`3/0x1024`) is absent from this panel heater and is not
-used; it is distinct from the Trac output-power byte. The integration does not
-expose Boost, Away, Manual, Timer, fan, swing,
-humidity, a semantic schedule/calendar, cumulative energy, charge, separate element
-status, or firmware updates. The integration does expose a small set of clearly
-labelled **experimental raw hexadecimal controls** for fields whose characteristic
-is present and whose bounded write path is available. These are test controls, not
-claims that the ConfigR names are the AM6532 semantics.
+Home All Day, Away Mode, Manual, Eco Mode, Frost Protect, and User Timer are exposed as
+climate presets; the climate uses the single heat-only `HVACMode.HEAT` because
+the panel heater needs a target temperature in User Timer. `HVACMode.AUTO` is
+not used because Home Assistant intentionally hides target-temperature control
+in that mode. Away activation now requires an explicit future deadline through
+the separate Away return-time datetime entity; the verified `0/0x102A` payload
+still uses the device's 7 °C target unless a future device target is reported.
+The integration does not expose Boost, fan, swing, humidity, a semantic
+schedule/calendar, cumulative energy, charge, separate element status, or
+firmware updates. The integration does not expose arbitrary raw GATT read/write
+controls: unknown and protected characteristics remain outside the Home
+Assistant surface.
 
 The live GATT inventory confirmed that the panel heater exposes Dimplex service groups 0
 through 3. Inventory presence is not capability proof: protected characteristics
-and unknown read-only values remain excluded from experimental writes.
+and unknown read-only values remain excluded from unverified writes and Home
+Assistant entities.
 
 ## Reliability evidence
 
 The connection lifecycle follows the ConfigR-derived boundary: arm the proxy's
-short-lived passkey relay, establish an encrypted connection through the selected
-proxy, verify a complete snapshot, then clear the relay. Runtime polling reuses
-one authenticated client per config entry; operation failures close that client,
-and the next poll establishes a fresh connection. A per-proxy semaphore limits
-concurrent GATT connections to three, matching the proxy capacity used by this
-integration.
+short-lived passkey relay, establish an encrypted connection through the
+selected proxy, verify a complete snapshot, then clear the relay. Runtime
+polling reuses one authenticated client per config entry; operation failures
+close that client, and the next poll establishes a fresh connection. ESPHome's
+native connector owns proxy connection-slot management; the integration does not
+duplicate that capacity policy.
 
 On 19 November 2026, the current deployment completed a bounded live soak after
 a Home Assistant restart. Post-restart logs from 18:46:48 through 18:57:19 show

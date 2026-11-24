@@ -14,3 +14,8 @@ __pycache__/
 /captures/
 **/secrets.yaml
 
+
+# Local ESPHome probes and build output (deliverable firmware lives in /firmware)
+/esphome/
+/.esphome/
+secrets.yaml

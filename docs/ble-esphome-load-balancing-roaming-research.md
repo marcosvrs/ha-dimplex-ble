@@ -3,6 +3,16 @@
 Reviewed against current upstream ESPHome, Home Assistant, `habluetooth`, and
 `bleak-retry-connector` sources.
 
+> **Superseded in part (2026-11-24).** The integration no longer implements any
+> runtime roaming, failover, rebalancing or route ranking: each heater is pinned
+> to the one proxy that holds its bond, and moving a heater is an explicit
+> reconfigure (see `docs/esphome-ble-findings.md` and
+> `docs/investigation-2026-11-24/ledger.md`). The custom passkey relay and its
+> arm/MITM actions were removed; commissioning uses the stock-ESPHome PIN
+> responder package. Statements below about controlled failover, a pairing
+> "relay", `pair=True`-only commissioning code paths or the earlier three-heater
+> live test describe the pre-refactor code and are kept as historical research.
+
 ## Executive result
 
 There are three different behaviors that are often called roaming:
@@ -21,8 +31,8 @@ There are three different behaviors that are often called roaming:
 For a Dimplex panel heater, advertisement aggregation is safe automatically.
 Runtime connection-path selection is safe only among currently advertised routes
 whose proxy-local bond has already been verified. The integration therefore keeps
-the configured proxy for commissioning and uses controlled failover/rebalancing
-only after a fresh encrypted connection can be established.
+the configured proxy for commissioning and runtime (no automatic failover or
+rebalancing; the earlier failover design was dropped).
 
 ## ESPHome proxy capacity
 
@@ -273,15 +283,15 @@ requested a new pairing operation instead of only reconnecting with the
 existing bond. This was a concrete integration defect, not a limitation of
 ESPHome roaming.
 
-The client now uses `pair=True` only for the intentional commissioning or
-reauthentication operation. Runtime reads, writes, and the post-pair bond
-verification use `pair=False`, followed immediately by the native
-`client.pair()` encryption request. This keeps the proxy-local bond in use
-without repeatedly starting the PIN exchange.
+The client now uses `pair=True` only for intentional commissioning. Runtime
+reads and writes use `pair=False` and reuse the proxy-local bond. When an
+authenticated read fails, the bounded recovery path explicitly invokes the
+native `client.pair()` operation once before falling back to the normal repair
+boundary. This avoids repeatedly starting the PIN exchange.
 During commissioning, route selection is intentionally narrower than runtime
 roaming: the client may use only the proxy that received the address-scoped
-pairing arm action. This prevents a stronger advertisement from silently
-redirecting a PIN exchange to a second proxy whose relay was not armed.
+`dimplex_pin_arm` action. This prevents a stronger advertisement from silently
+redirecting a PIN exchange to a second proxy whose PIN responder was not armed.
 
 The live two-proxy test also showed that arbitrary alternate-proxy GATT probes
 are unsafe as a health check: while the three panel heaters were actively connected

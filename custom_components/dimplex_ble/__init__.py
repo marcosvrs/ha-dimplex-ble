@@ -1,245 +1,173 @@
 """Home Assistant integration for Dimplex Bluetooth panel heaters."""
 
-import asyncio
+from __future__ import annotations
+
 import logging
 
-from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
-from homeassistant.components.bluetooth import (
-    BluetoothScanningMode,
-    BluetoothServiceInfoBleak,
-)
-from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import DeviceEntry, format_mac
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import DeviceEntry
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .client import DimplexBluetoothClient
 from .const import (
-    CLIENTS,
     CONF_ADDRESS,
-    CONF_ADDRESS_TYPE,
+    CONF_PASSKEY,
     CONF_PROXY_SOURCE,
     DOMAIN,
-    PENDING_DEVICES,
     PLATFORMS,
+    SETTINGS_UPDATE_INTERVAL,
+    UNIQUE_ID_SUFFIXES,
+    UNVERIFIED_LEGACY_SUFFIXES,
 )
-from .coordinator import DimplexConfigEntry, DimplexCoordinator
-from .discovery import is_dimplex_advertisement, is_manifest_discovery_name
-from .entity import device_info_for_coordinator
-from .pairing import ble_device_from_source
+from .coordinator import DimplexConfigEntry, DimplexCoordinator, keep_connected
+from .entity import device_info_for_coordinator, unique_id
+from .link import HeaterLink
 from .services import async_setup_services
+from .stall import stall_issue_id
 
 _LOGGER = logging.getLogger(__name__)
-
-_PENDING_DISCOVERY = "pending_discovery"
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-def _discovery_flow_in_progress(hass: HomeAssistant, address: str) -> bool:
-    """Return whether a flow already owns this Bluetooth address."""
-    return any(
-        isinstance(context := result.get("context"), dict)
-        and isinstance(unique_id := context.get("unique_id"), str)
-        and unique_id.casefold() == address.casefold()
-        for result in hass.config_entries.flow.async_progress_by_handler(
-            DOMAIN, include_uninitialized=True
-        )
-    )
-
-
-def _any_discovery_flow_in_progress(hass: HomeAssistant) -> bool:
-    """Return whether any Dimplex setup flow is already active."""
-    return bool(
-        hass.config_entries.flow.async_progress_by_handler(
-            DOMAIN, include_uninitialized=True
-        )
-    )
-
-
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register actions and observe matching Dimplex advertisements."""
+    """Register the integration's actions."""
     del config
     async_setup_services(hass)
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    pending: set[str] = domain_data.setdefault(_PENDING_DISCOVERY, set())
-    clients: list[DimplexBluetoothClient] = domain_data.setdefault(CLIENTS, [])
-
-    async def _async_shutdown_clients(event: object) -> None:
-        """Close persistent panel heater connections before Home Assistant stops."""
-        del event
-        await asyncio.gather(
-            *(client.async_shutdown() for client in tuple(clients)),
-            return_exceptions=True,
-        )
-
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown_clients)
-
-    async def _async_start_discovery_flow(
-        service_info: BluetoothServiceInfoBleak, address: str
-    ) -> None:
-        """Start one discovery flow and release the callback de-duplication key."""
-        try:
-            await hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": SOURCE_BLUETOOTH},
-                data=service_info,
-            )
-        finally:
-            pending.discard(address)
-
-    @callback
-    def _async_discovered_device(
-        service_info: BluetoothServiceInfoBleak,
-        change: bluetooth.BluetoothChange,
-    ) -> None:
-        """Start a setup flow for a matching Dimplex advertisement."""
-        del change
-        name = service_info.name or service_info.device.name or ""
-        if not is_dimplex_advertisement(name):
-            return
-        if is_manifest_discovery_name(name):
-            return
-        address = format_mac(service_info.device.address)
-        existing_entry = next(
-            (
-                existing
-                for existing in hass.config_entries.async_entries(DOMAIN)
-                if existing.unique_id
-                and existing.unique_id.casefold() == address.casefold()
-            ),
-            None,
-        )
-        if existing_entry is not None:
-            if existing_entry.state is ConfigEntryState.SETUP_RETRY:
-                hass.config_entries.async_schedule_reload(existing_entry.entry_id)
-            return
-        if (
-            address in pending
-            or _discovery_flow_in_progress(hass, address)
-            or _any_discovery_flow_in_progress(hass)
-        ):
-            return
-
-        pending.add(address)
-        hass.async_create_task(_async_start_discovery_flow(service_info, address))
-
-    cancel_discovery = bluetooth.async_register_callback(
-        hass,
-        _async_discovered_device,
-        {"connectable": True},
-        BluetoothScanningMode.PASSIVE,
-    )
-    domain_data["cancel_discovery"] = cancel_discovery
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
-    """Set up one panel heater and its native entities."""
-    address = entry.data[CONF_ADDRESS]
-    proxy_source = entry.data[CONF_PROXY_SOURCE]
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    pending_devices = domain_data.setdefault(PENDING_DEVICES, {})
-    device = pending_devices.pop(address, None)
-    if device is None:
-        device = ble_device_from_source(hass, address, proxy_source)
-    if device is None:
-        await bluetooth.async_request_active_scan(hass, duration=5.0)
-        device = ble_device_from_source(hass, address, proxy_source)
-    if device is None:
-        address_type = entry.data.get(CONF_ADDRESS_TYPE, 0)
-        if type(address_type) is int:
-            device = BLEDevice(
-                address,
-                None,
-                {"source": proxy_source, "address_type": address_type},
-            )
-    client = DimplexBluetoothClient(hass, address, proxy_source, device)
+# aioesphomeapi logs every executed action with its arguments at DEBUG, which
+# includes the PIN sent to the responder; the integration cannot redact it.
+_ESPHOME_CONNECTION_LOGGER = "aioesphomeapi.connection"
 
-    clients: list[DimplexBluetoothClient] = domain_data.setdefault(CLIENTS, [])
-    clients.append(client)
-    coordinator = DimplexCoordinator(hass, entry, client)
-    entry.runtime_data = coordinator
-    # Register the device before the first refresh. Config-entry setup can be
-    # retried after a transient BLE outage, but the frontend must still be able
-    # to offer its standard name and area step immediately after creation.
-    if hass.config_entries.async_get_entry(entry.entry_id) is not None:
-        device_info = device_info_for_coordinator(coordinator)
-        dr.async_get(hass).async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers=device_info["identifiers"],
-            connections=device_info["connections"],
-            manufacturer=device_info["manufacturer"],
-            model=device_info["model"],
-            model_id=device_info["model_id"],
-            name=device_info["name"],
-            sw_version=device_info["sw_version"],
+
+def _warn_if_pin_may_be_logged(hass: HomeAssistant) -> None:
+    """Warn once per run when library debug logging could record the PIN."""
+    flags: dict[str, object] = hass.data.setdefault(DOMAIN, {})
+    if flags.get("pin_log_warned"):
+        return
+    if logging.getLogger(_ESPHOME_CONNECTION_LOGGER).isEnabledFor(logging.DEBUG):
+        flags["pin_log_warned"] = True
+        _LOGGER.warning(
+            "Debug logging is enabled for %s: the heater PIN sent to the proxy "
+            "may appear in the Home Assistant log. Set it back to info "
+            "(see the README, Privacy and logging)",
+            _ESPHOME_CONNECTION_LOGGER,
         )
-    # Forward platforms even when the first BLE refresh is unavailable. This
-    # keeps entities and repair/reconfigure flows usable while the coordinator
-    # continues reporting the device as unavailable and retries in the
-    # background. Authentication failures still propagate to HA reauth.
-    try:
-        cancel_advertisement = bluetooth.async_register_callback(
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:
+    """Set up one panel heater on its pinned proxy."""
+    _warn_if_pin_may_be_logged(hass)
+    link = HeaterLink(
+        hass,
+        entry.data[CONF_ADDRESS],
+        entry.data[CONF_PROXY_SOURCE],
+        entry.data.get(CONF_PASSKEY),
+        keep_connected=keep_connected(entry),
+    )
+    _LOGGER.debug(
+        "MODE %s %s", "persistent" if link.keep_connected else "per_poll", link.address
+    )
+    coordinator = DimplexCoordinator(hass, entry, link)
+    entry.runtime_data = coordinator
+
+    async def _async_close_on_stop(event: Event) -> None:
+        """Close the link cleanly so the proxy does not keep it (core#187087)."""
+        del event
+        await link.async_close()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_close_on_stop)
+    )
+    entry.async_on_unload(
+        bluetooth.async_register_advertisement_callback(
+            # habluetooth keys addresses upper-case, as HeaterLink stores it.
             hass,
             coordinator.async_handle_advertisement,
-            {"address": format_mac(address), "connectable": True},
-            BluetoothScanningMode.ACTIVE,
+            link.address,
         )
-        coordinator.set_advertisement_callback_canceller(cancel_advertisement)
-        try:
-            await coordinator.async_config_entry_first_refresh()
-        except (ConfigEntryNotReady, UpdateFailed) as err:
-            _LOGGER.info(
-                "Config entry %r is unavailable during setup (%s); "
-                "forwarding entities for background recovery",
-                entry.title,
-                type(err).__name__,
-            )
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    except Exception:
-        clients.remove(client)
-        await coordinator.async_shutdown()
-        raise
+    )
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, coordinator.async_refresh_settings, SETTINGS_UPDATE_INTERVAL
+        )
+    )
+    # Register the device before the first refresh, so a setup retry after a
+    # transient BLE outage still offers the device's name and area step.
+    device_info = device_info_for_coordinator(coordinator)
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers=device_info["identifiers"],
+        connections=device_info["connections"],
+        manufacturer=device_info["manufacturer"],
+        name=device_info["name"],
+    )
+    _async_remove_orphaned_entities(hass, entry)
+    await coordinator.async_config_entry_first_refresh()
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    if link.keep_connected:
+        # Per-poll mode reads the settings inside its first poll's connection.
+        entry.async_create_background_task(
+            hass,
+            coordinator.async_refresh_settings(),
+            "dimplex_ble initial settings read",
+        )
+    return True
+
+
+def _async_remove_orphaned_entities(
+    hass: HomeAssistant, entry: DimplexConfigEntry
+) -> None:
+    """Remove this entry's registry entities that the integration no longer creates.
+
+    Earlier versions created raw GATT sensors, text controls and entities whose
+    unique_id followed a since-renamed translation key; they would otherwise
+    stay "unavailable" forever.
+    """
+    registry = er.async_get(hass)
+    address = entry.data[CONF_ADDRESS]
+    current = {
+        unique_id(address, suffix)
+        for suffix in UNIQUE_ID_SUFFIXES | UNVERIFIED_LEGACY_SUFFIXES
+    }
+    orphans = [
+        entity.entity_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if entity.unique_id not in current
+    ]
+    for entity_id in orphans:
+        registry.async_remove(entity_id)
+    _LOGGER.debug("Removed %d orphaned entities of %s", len(orphans), entry.title)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:
-    """Unload all platforms and release the panel heater connection."""
+    """Stop polling, wait for in-flight work, then close the link once."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    client = getattr(entry.runtime_data, "client", None)
-    clients: list[DimplexBluetoothClient] = hass.data.setdefault(DOMAIN, {}).setdefault(
-        CLIENTS, []
-    )
-    if client is not None and client in clients:
-        clients.remove(client)
-    await entry.runtime_data.async_shutdown()
+    if unloaded:
+        coordinator = entry.runtime_data
+        await coordinator.async_shutdown()
+        await coordinator.link.async_close()
     return unloaded
 
 
-async def async_unload(hass: HomeAssistant) -> bool:
-    """Stop the integration-wide Bluetooth discovery callback."""
-    domain_data = hass.data.get(DOMAIN)
-    if domain_data is not None:
-        cancel_discovery = domain_data.pop("cancel_discovery", None)
-        if cancel_discovery is not None:
-            cancel_discovery()
-        domain_data.pop(_PENDING_DISCOVERY, None)
-    return True
+async def async_remove_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
+    """Drop the entry's stalled-heater repair together with the entry."""
+    ir.async_delete_issue(hass, DOMAIN, stall_issue_id(entry.entry_id))
 
 
 async def async_remove_config_entry_device(
-    hass: HomeAssistant,
-    entry: DimplexConfigEntry,
-    device_entry: DeviceEntry,
+    hass: HomeAssistant, entry: DimplexConfigEntry, device_entry: DeviceEntry
 ) -> bool:
     """Allow removing a panel heater device that no longer advertises."""
     del device_entry
     return not bluetooth.async_address_present(
-        hass, entry.data[CONF_ADDRESS], connectable=True
+        hass, str(entry.data[CONF_ADDRESS]).upper(), connectable=True
     )

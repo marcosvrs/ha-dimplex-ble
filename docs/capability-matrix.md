@@ -8,8 +8,8 @@ packet mapping and device behavior are verified.
 
 ## Evidence classes
 
-- **LIVE-AM6532**: read from the commissioned panel heater through the Home
-  Assistant raw-GATT action on 2026-11-19, then confirmed by the normal coordinator poll.
+- **LIVE-AM6532**: read during the authenticated protocol audit on 2026-11-19,
+  then confirmed by the normal coordinator poll.
 - **CONFIGR-PROFILE**: recovered from the official ConfigR Native AOT resource
   bundle. It describes product profiles and diagnostics supported by the app, not
   necessarily every model.
@@ -70,7 +70,7 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `3/0x000A` | 8 | RW | PowerLoading | yes | present | First LE16 rated power mapped; remaining bytes retained/unknown; writes blocked |
 | `1/0x000E` | 1 | R | OffpeakStatus | no | absent | Not available |
 | `0/0x0106` | 8 | W | SetRtcWithSeconds | no | absent | Not available |
-| `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm all four PLX modes. Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), and Timer Mode/User Timer (`01 03`) writes were accepted and read back; climate maps Timer Mode to `AUTO` and the other verified modes to `HEAT` with presets |
+| `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm the timer family and continuous modes. Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), User Timer (`01 03`), and Home All Day (`01 02`) writes were accepted/read back; the climate uses heat-only `HVACMode.HEAT` and exposes verified modes as translated presets |
 | `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read buffer observed; schedule structure/write not verified on AM6532 |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
@@ -90,10 +90,10 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `2/0x101E` | 1 | RW | AdditionalCharge | no | absent | Not available |
 | `1/0x1020` | 1 | RW | TestMode | yes | present | Read-only diagnostic sensor; writes blocked |
 | `0/0x1023` | 2 | RW | CurrentSetTemperature | yes | present | Native target mapped; whole-degree writes verified |
-| `3/0x1024` | 4 | RW | HeatDemand | no | absent | No read or entity; distinct from Trac byte |
+| `3/0x1024` | 4 | RW | HeatDemand | no | absent | No read or entity; distinct from Trac byte. UUID is `00001024-...`; ConfigR's own 16-bit label string reads `"0124"` (a typo in ConfigR, see `configr-firmware-analysis.md`) |
 | `0/0x1027` | 2 | RW | RunbackTime | yes | present | Raw countdown only |
 | `0/0x1028` | 2 | RW | RunbackSetpoint | yes | present | Raw read only; not a second HA target |
-| `0/0x102A` | 8 | RW | AwayMode | yes | present | Raw inactive payload; no AM6532 command |
+| `0/0x102A` | 8 | RW | AwayMode | yes | present | Active/inactive write and readback verified on AM6532; climate exposes the friendly Away preset and a separate Away return-time datetime control; activation requires an explicit future deadline |
 | `2/0x1030` | 1 | W | FactoryReset | no | absent | Blocked/not available; never probe |
 | `2/0x1033` | 33 | RW | Security | no | absent | Protected; never expose |
 | `2/0x1034` | 74 | RW | SlaveInfo | no | absent | Protected/not available |
@@ -105,7 +105,7 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `3/0x2006` | 5 | RW | Btpk | yes | present | Protected credential material; blocked |
 | `3/0x2007` | 16 | RW | EncKey | yes | present | Protected credential material; blocked |
 | `3/0x2008` | 16 | RW | AuthKey | yes | present | Protected credential material; blocked |
-| `3/0x200A` | 6 | RW | EpIdentifier | yes | present | `EP4213` observed; `DeviceInfo.model_id` |
+| `3/0x200A` | 6 | RW | EpIdentifier | yes | present | `EP4213` observed; diagnostics only |
 | `3/0x2012` | 5 | RW | FirmwareVersion | no | absent | Not available |
 | `1/0x300E` | 1 | RW | Esp32OtaEnable | no | present | Raw `00`; writes blocked; not an update capability |
 | `0/0x4012` | 1 | R | HeatSetting | no | absent | Not available |
@@ -162,9 +162,9 @@ or command is inferred from the binary contents.
 | Current humidity | ConfigR has generic humidity resources for other product families; no AM6532 field was identified | NOT SUPPORTED | No humidity entity or climate humidity feature |
 | Target humidity and humidity limits | No AM6532 protocol field identified | NOT SUPPORTED | No humidity control |
 | Power/on/off control | No safe AM6532 power command identified; ConfigR's storage-heater profile describes heating modes rather than a generic power switch | UNKNOWN/NEEDS CONFIRMATION | Do not advertise `TURN_ON` or `TURN_OFF` |
-| HVAC operating modes | LIVE-AM6532 and controlled AM2086 reads/writes identify Timer Mode, Manual, Eco Mode, and Frost Protect. ConfigR documents Timer as weekly schedule control; the safe Timer/User Timer payload is `01 03`, while arbitrary schedule-buffer writes remain out of scope | SUPPORTED-CONDITIONAL | Map Timer Mode to `HVACMode.AUTO`; map Manual, Eco Mode, and Frost Protect to `HVACMode.HEAT` with translated presets |
+| HVAC operating modes | LIVE-AM6532 and controlled AM2086 reads/writes identify User Timer, Home All Day, Manual, Eco Mode, and Frost Protect. ConfigR and the official PLXE Series C manual document these as timer/continuous profiles; the safe User Timer payload is `01 03`, Home All Day is `01 02`, and arbitrary schedule-buffer writes remain out of scope | SUPPORTED-CONDITIONAL | Use heat-only `HVACMode.HEAT`; expose User Timer, Home All Day, Manual, Eco Mode, Frost Protect, and Away Mode as presets |
 | HVAC action | LIVE-AM6532: selector `1/0x0002` returned `010164` while the panel heater was actively heating and `010000` after it became idle; ConfigR and Q-Rad research define byte 1 as the Trac active flag | SUPPORTED-CONDITIONAL | Report `HEATING` or `IDLE` only from the Trac active flag; return no action when the response is unavailable or invalid |
-| Presets | LIVE-AM6532/AM2086 verified Manual, Eco Mode, and Frost Protect payloads; Eco and Frost were display-confirmed and all writes were read back | SUPPORTED-CONDITIONAL | Expose translated Manual, Eco, and Frost Protect presets; Timer is represented by `HVACMode.AUTO` |
+| Presets | LIVE-AM6532/AM2086 verified User Timer, Manual, Eco Mode, Frost Protect, and Home All Day payloads; Home All Day `01 02 00 00 00 00` was accepted/read back on AM2086 | SUPPORTED-CONDITIONAL | Expose translated User Timer, Home All Day, Manual, Eco Mode, Frost Protect, and Away Mode presets; expose Away return time separately; do not represent timer profiles as `HVACMode.AUTO` |
 | Fan modes | ConfigR fan resources are associated with ventilation product families; no AM6532 fan control/status was identified | NOT SUPPORTED | No fan feature |
 | Vertical swing | No AM6532 swing field identified | NOT SUPPORTED | No swing feature |
 | Horizontal swing | No AM6532 swing field identified | NOT SUPPORTED | No horizontal-swing feature |
@@ -183,62 +183,44 @@ or command is inferred from the binary contents.
 | Firmware update | No safe local update command is identified | OUT OF SCOPE | Never expose a guessed firmware-write operation |
 | Push/subscription | LIVE-AM6532 GATT inventory exposed read/write characteristics but no verified notification stream for the mapped fields | UNKNOWN/NEEDS CONFIRMATION | Poll through one coordinator |
 | Polling | LIVE-AM6532 coordinator polls successfully at the integration interval | SUPPORTED-CONDITIONAL | Use the integration-controlled coordinator interval; do not expose it as a user option |
-| Command concurrency | The protocol exposes one connected GATT client per heater; the integration serializes each client and shares proxy capacity | SUPPORTED-CONDITIONAL | Serialize per heater and bound shared-proxy slots |
+| Command concurrency | The protocol exposes one connected GATT client per heater; the integration serializes each heater session | SUPPORTED-CONDITIONAL | Serialize each heater session and rely on the native ESPHome connector for proxy capacity |
 | Runtime device addition/removal | No hub or account device list observed | OUT OF SCOPE | Do not manufacture dynamic-device behavior |
 | Authentication expiry | BLE bond/passkey commissioning is required; no expiring account credential exists in the local path | SUPPORTED-CONDITIONAL | Pair once, reuse the bond, and report connection failure without repinning loops |
 | Privacy-sensitive fields | Device identifiers and passkeys are sensitive; raw service responses can contain undocumented values | REQUIRED | Redact diagnostics and block known security-sensitive characteristics |
 
-## Additional safe reads verified live
+## Additional read observations (not Home Assistant entities)
 
-These values were read from the commissioned PLX050E on 2026-11-19 through the
-administrator-only raw-GATT action. They are documented here so raw observations
-remain separate from implemented Home Assistant semantics.
+These values were captured from the commissioned PLX050E on 2026-11-19 during
+the protocol audit. They remain evidence for future work, not a runtime raw-GATT
+surface. The integration deliberately does not create generic entities for
+unknown or transient values.
 
-| Address | ConfigR name/evidence | Live value | Decision |
+| Address | ConfigR name/evidence | Historical value | Current decision |
 |---|---|---|---|
 | `0/0x1003` | Effective/current setpoint mirror | `1400` at a 20 °C target | Duplicate of the climate target; no second target entity |
-| `0/0x1007` | OpenWindowDetection | `010000000000000000` | Configuration switch; disabled-to-enabled readback verified on AM2086; manual confirms global interruption of active modes and Heating Off behavior |
-| `0/0x1008` | PreEmptiveHeating | `01` | Configuration switch; disabled-to-enabled readback verified on AM2086; manual confirms Adaptive Start behavior in Timer Mode |
-| `0/0x100D` | AdvanceHeating | `00` | Readable status; reversible command not tested on this model |
-| `0/0x1016` | Setback | `0008` | Configuration value; unit/meaning not verified |
-| `0/0x1017` | Runback | `017c` | Configuration value; encoding not verified |
-| `0/0x1027` | Runback/boost countdown | `0000` | No active runback/boost observed |
-| `0/0x1028` | Runback/boost setpoint | `1500` | Readable default; not exposed as a duplicate target |
-| `0/0x102A` | AwayMode | inactive payload | No Away command or calendar entity without a bounded model-specific test |
-| `1/0x0007` | LastKeyPressValue | `06` | UI event diagnostic; too transient for a normal entity |
-| `2/0x100C` | RfComms | `01` | Readable configuration flag; control semantics not verified |
-| `3/0x2001` selector 1 | SwVersion UI | `010107` | UI revision `1.7` observed; selector 0/2 returned unavailable/placeholder values |
-| `3/0x2009` | RF firmware revision | `05` | RF revision `5` observed and combined with UI revision in `DeviceInfo.sw_version` |
-| `3/0x200A` | EpIdentifier/product code | `EP4213` | Product code observed; not a user control |
-| `3/0x200D` | Board/firmware code | `PGLHS600` | Board code observed; not interpreted as a semantic firmware version |
-| `3/0x000B`, `3/0x000C` | Calibration-like fields; exact semantics unknown | Value not retained in the audit capture | Disabled-by-default read-only raw sensors; no write path |
-| `1/0x1010` | Unnamed/test-adjacent field | `47` | Disabled-by-default read-only raw sensor; writes blocked |
-| `1/0x1020` | `TestMode` | `00` | Disabled-by-default read-only raw sensor; writes blocked |
-| `1/0x300E` | `Esp32OtaEnable` | `00` | Disabled-by-default read-only raw sensor; not an update entity |
-| `2/0x100C` | `RfComms` | `01` | Disabled-by-default read-only raw sensor; writes blocked |
-| `2/0x700F` | Disconnect-address/status candidate | `00` | Disabled-by-default read-only raw sensor; writes blocked |
-| `3/0x1022`, `3/0x1029`, `3/0x2003`, `3/0x200B`, `3/0x200C`, `3/0x200F` | Unnamed device values | See complete inventory below | Disabled-by-default read-only raw sensors |
+| `0/0x1007` | OpenWindowDetection | `010000000000000000` | Implemented as the verified configuration switch |
+| `0/0x1008` | PreEmptiveHeating | `01` | Implemented as the verified Adaptive Start configuration switch |
+| `0/0x100D` | AdvanceHeating | `00` | Read observation only; command semantics remain unverified |
+| `0/0x1016` | Setback | `0008` | Unit and meaning unverified; not exposed |
+| `0/0x1017` | Runback | `017c` | Encoding unverified; not exposed |
+| `0/0x1027` | Runback/boost countdown | `0000` | No active runback/boost observed; not exposed |
+| `0/0x1028` | Runback/boost setpoint | `1500` | Not a second target; not exposed |
+| `0/0x102A` | AwayMode | Active payload with future expiry | Implemented as the climate Away preset; raw bytes are not exposed |
+| `1/0x0007` | LastKeyPressValue | `06` | Transient UI event; not exposed |
+| `2/0x100C` | RfComms | `01` | Semantics and safe control contract unverified; not exposed |
+| `3/0x2001` selector 1 | SwVersion UI | `010107` | UI revision `1.7`; mapped into `DeviceInfo.sw_version` |
+| `3/0x2009` | RF firmware revision | `05` | Combined with the UI revision in `DeviceInfo.sw_version` |
+| `3/0x200A` | EpIdentifier/product code | `EP4213` | Shown in diagnostics; not a user control |
+| `3/0x200D` | Board/firmware code | `PGLHS600` | Metadata observation only; not interpreted as a semantic version |
+| `3/0x000B`, `3/0x000C` | Calibration-like fields | Not retained in the audit capture | Meaning unverified; not exposed |
+| `1/0x1010` | Unnamed/test-adjacent field | `47` | Meaning unverified; not exposed |
+| `1/0x1020` | TestMode | `00` | Test control boundary; writes blocked and no entity |
+| `1/0x300E` | Esp32OtaEnable | `00` | Not an update capability; no entity |
+| `2/0x700F` | Disconnect-address/status candidate | `00` | Meaning unverified; not exposed |
+| `3/0x1022`, `3/0x1029`, `3/0x2003`, `3/0x200B`, `3/0x200C`, `3/0x200F` | Unnamed device values | See inventory below | Historical observations only; not exposed |
 
-The read-only raw diagnostics above are available as disabled-by-default
-sensors. They preserve the hexadecimal payload and GATT address without
-assigning units or semantic meaning. They are intentionally snapshots from
-platform setup, not live measurements. Protected credential/security fields
-remain blocked and are never exposed.
-
-Where the packet layout is established, the same diagnostic entity also adds
-decoded attributes while retaining the raw hexadecimal value:
-
-| Address | Decoded attributes |
-|---|---|
-| `0/0x0006` | `clock` and numeric `clock_flag` |
-| `1/0x0001` | `backlight_selector` and `backlight_rgb` |
-| `1/0x0007` | numeric `last_key_code` |
-| `0/0x100D` | boolean `advance_active` |
-| `0/0x1028` | numeric `runback_setpoint_c` |
-| `0/0x102A` | `away_active`, `away_until`, and `away_target_temperature_c` |
-
-All other experimental values remain raw because their value mapping is not
-established.
+Protected credential/security fields remain blocked and are never copied into
+state, recorder data, diagnostics, or logs.
 
 ## Complete live AM6532 GATT inventory
 
@@ -309,35 +291,32 @@ Protected values are intentionally not read.
 | `0x2005` | `PLX050E;C;` plus padding | ConfigR `HeaterType`; model/series identity |
 | `0x2006`–`0x2008` | protected/unread | ConfigR credential/security material; blocked |
 | `0x2009` | `05` | RF firmware revision 5 observed and mapped with the UI revision to `DeviceInfo.sw_version`; no firmware-update control is inferred |
-| `0x200A` | `EP4213` | ConfigR `EpIdentifier`; product code mapped to `DeviceInfo.model_id` |
+| `0x200A` | `EP4213` | ConfigR `EpIdentifier`; product code shown in diagnostics |
 | `0x200B` | `7f9d` | Unnamed; not mapped |
 | `0x200C` | `1416050d0e00` | Unnamed; possible build data not established |
 | `0x200D` | `PGLHS600` | Board/firmware code; raw metadata only |
 | `0x1029` | `9eff96` | Same bytes as live backlight colour; semantic relationship unverified |
 | `0x200F` | `04e90f0000` | Unnamed/protected-write boundary; not mapped |
 
-### Read-only display heuristics
+### Audit-only decoding candidates
 
-The diagnostic sensor keeps every payload in the `raw_value` attribute. Where a
-shape or ConfigR label supports a reversible display-only interpretation, the
-sensor state is rendered as follows; these are not promoted to controls or
-semantic device capabilities:
+The following interpretations were considered during the audit but are not
+runtime entities. They remain here to distinguish a readable byte shape from a
+verified Home Assistant capability:
 
-| Address | Display-only rendering | Fallback |
+| Address | Candidate interpretation | Decision |
 |---|---|---|
-| `1/0x0007` | `key code N` | raw hexadecimal |
-| `1/0x1010` | `EOL test code N` | raw hexadecimal |
-| `1/0x1020`, `1/0x300E`, `2/0x100C` | `on`/`off` for one-byte `0`/`1` | raw hexadecimal |
-| `3/0x1029` | RGB bytes as `#RRGGBB` | raw hexadecimal |
-| `3/0x200C` | possible timestamp when the six bytes form a valid `20YY-MM-DD hh:mm` value | raw hexadecimal |
+| `1/0x0007` | Numeric key code | Transient UI event; do not expose |
+| `1/0x1010` | EOL test code | Diagnostic/test boundary; do not expose |
+| `1/0x1020`, `1/0x300E`, `2/0x100C` | Boolean for one-byte `0`/`1` | Semantics/control contract unverified; do not expose |
+| `3/0x1029` | RGB bytes as `#RRGGBB` | Relationship to backlight is unverified; do not expose |
+| `3/0x200C` | Possible timestamp | Encoding is unverified; do not expose |
+| Calibration payloads, `3/0x1022`, `2/0x700F`, `3/0x2003`, `3/0x200B`, `3/0x200F` | Raw bytes only | No defensible semantic decoding; do not expose |
 
-The calibration payloads, `3/0x1022`, `2/0x700F`, `3/0x2003`, `3/0x200B`,
-and `3/0x200F` remain raw because no defensible display decoding is available.
+Selectors are stateful: the protocol writes the selector and reads the response
+on the same authenticated connection. Plain reads can return the previously
+selected value or zeros and must not be interpreted as a fresh measurement.
 
-The selectors above are stateful: the integration must write the selector and
-read the response on the same authenticated connection. Plain reads can return
-the previously selected value or zeros and must not be interpreted as a fresh
-measurement.
 
 ## Independent live probe: 2026-11-20
 
@@ -591,11 +570,11 @@ control.
 | Target temperature | `0/0x1023`, live whole-degree value; bounded write/readback behavior | `native_target_temperature`, `TARGET_TEMPERATURE` | **Verified / implemented** |
 | Target min/max | `0/0x1006`, live 7–30 °C | `min_temp`, `max_temp` | **Verified / implemented** |
 | Target step/precision | Live setpoint writes and protocol whole-degree representation | `target_temperature_step=1`, `precision=1` | **Verified / implemented** |
-| HVAC modes | Only direct heat behavior is verified on this PLX050E | `HVACMode.HEAT` | **Verified / implemented**; no fabricated OFF/COOL/AUTO |
+| HVAC modes | Only direct heat behavior is verified on this PLX050E | `HVACMode.HEAT` | **Verified / implemented**; no OFF/COOL. No `AUTO`: hardware test 2026-11-24 (AM2086) showed a setpoint is accepted in User Timer and reads back, so HA's AUTO ("no temperature can be set") does not fit; timer profiles are presets |
 | HVAC action | Trac selector `1/0x0002`, active flag, and PLX output correlation | `HEATING`/`IDLE` | **Verified / implemented**; no temperature-derived action |
-| Eco preset | `0/0x1001`, live Eco payload and reversible known write | `PRESET_ECO` | **Verified / implemented** |
-| Frost preset | ConfigR terminology and known profile payload; live payload selected 7 °C but physical-display confirmation is pending | None | **Phase 2**; not advertised by the climate entity |
-| Other presets/modes | Away, boost, advance, manual, holiday, sleep, comfort, schedule | None | **Phase 2 or cloud-only**; no AM6532-safe local command |
+| Presets | `0/0x1001` writes read back on AM2086/AM6532: Manual `02`, Eco `03`, Frost Protect `04`, User Timer `01 03`, Home All Day `01 02`; Away via `0/0x102A` | `preset_mode`: `manual`, `eco`, `frost_protect`, `user_timer`, `home_all_day`, `away` | **Verified / implemented**. The old key `home` was renamed `home_all_day` (breaking for automations) |
+| Device-side mode quirks | Verified 2026-11-24 (n=2 for the first): in Manual, a setpoint <= 19 °C makes the heater report Eco (`0x1001=03`), 20-22 °C stays Manual (PLXE Eco default 19 °C, inference); Frost Protect + setpoint 20 switches the heater to Manual; User Timer + setpoint stays User Timer | None | Device behaviour, not an integration defect; the integration writes only `0/0x1023` |
+| Other modes | Boost, advance, holiday, sleep, comfort, schedules | None | **Phase 2 or cloud-only**; no AM6532-safe local command |
 | Fan, swing, horizontal swing | No verified AM6532 capability | None | **Unavailable; not exposed** |
 | Humidity and humidity target | No verified AM6532 capability | None | **Unavailable; not exposed** |
 | Target range | No verified independent low/high target | None | **Unavailable; not exposed** |
@@ -605,77 +584,80 @@ control.
 
 | Field/read | Evidence | HA surface | Phase 1 decision |
 |---|---|---|---|
-| Error status | `0/0x1011`, live healthy value and raw bytes | Diagnostic error-code sensor | **Verified / implemented** |
+| Error status | `0/0x1011`, live healthy value `0`; code meanings from the PLXE manual p.26 | Diagnostic error sensor with translated error-code states ("No error", ...) | **Verified / implemented**; unknown codes stay visible |
 | Rated power | `3/0x000A`, first LE16 = 500 W; matches the PLX050E rating | Disabled diagnostic power sensor | **Verified / implemented** |
 | Trac output percentage | `1/0x0002`, third byte and repeated live behavior correlate with output percentage | Disabled diagnostic percentage sensor | **Verified / implemented**, not an energy meter |
 | Calculated instantaneous power | Rated power × verified Trac percentage | Enabled `SensorDeviceClass.POWER`, W, measurement state class | **Verified / implemented**; derived power, not cumulative energy |
 | LCD/controller temperature | Selector `2/0x0008`, live separate value; selector 3 unavailable | Disabled diagnostic temperature sensor | **Verified / implemented** |
 | Display unit control | `0/0x1005`, Celsius → Fahrenheit → Celsius live readback | Config `select` | **Verified / implemented**; physical display wording remains phase 2 |
-| Heater model/series | `3/0x2005`, live `PLX050E;C;` | `DeviceInfo.model` | **Verified / implemented** |
-| Product code | `3/0x200A`, live `EP4213` | `DeviceInfo.model_id` | **Verified / implemented** |
+| Heater model/series | `3/0x2005`, live `PLX050E;C;` | `DeviceInfo.model` "PLX050E Series C" (series letter: inference), `DeviceInfo.model_id` raw string | **Verified / implemented** |
+| Product code | `3/0x200A`, live `EP4213` | Diagnostics | **Verified / implemented** |
 | UI software revision | Selector `1/3/0x2001`, live `1.7` | `DeviceInfo.sw_version` | **Verified / implemented** |
 | RF firmware revision | `3/0x2009`, live `5` | `DeviceInfo.sw_version` metadata | **Verified / implemented**; no update entity inferred |
 | Board code | `3/0x200D`, live `PGLHS600`, semantic meaning unresolved | None | **Raw-only; phase 2** |
-| Raw operating mode | `0/0x1001`, full bytes retained | Disabled diagnostic raw sensor | **Verified / implemented**; Eco is the only climate-decoded value; Frost remains phase-2 evidence |
+| Operating mode | `0/0x1001`, full bytes retained | Diagnostic ENUM operating-mode sensor | **Verified / implemented**; all six presets decoded |
 
 
-### Experimental raw controls
+### Current control boundary
 
-These controls remain raw hexadecimal text entities. Friendly names are
-ConfigR-derived hypotheses, not confirmed Home Assistant semantics:
+The integration no longer exposes arbitrary raw hexadecimal text entities.
+ConfigR and upstream field names remain research evidence; a name alone is not
+enough to create a Home Assistant control or sensor.
 
-| Entity | Address | Length | Evidence and boundary |
-|---|---|---:|---|
-| Experimental panel-heater clock | `0/0x0006` | 7 bytes | ConfigR `SetRtc` format; write is available, but no semantic date validation is performed |
-| Experimental schedule buffer | `0/0x1002` | 31 bytes | Sunhouse/QRAD layout is inferred; AM6532 schedule-buffer behavior remains unverified |
-| Experimental display backlight color | `1/0x0001` | 4 bytes | Reversible color payload observed in the protocol family |
-| Existing experimental fields | `0/0x0006`, `0/0x100D`, `0/0x1016`, `0/0x1017`, `0/0x1027`, `0/0x1028`, `0/0x102A`, `2/0x100A`, `2/0x100B`, `2/0x100F`, `2/0x1018`, `2/0x1019` | fixed per field | Raw write/readback trials only; meanings remain experimental |
-
-The verified `2/0x0005` Sound setting is no longer an experimental raw control.
-It is a configuration switch with an independent five-minute read schedule.
-
-The controls are for controlled manual testing, not normal automations. Protected
-security, credential, OTA, factory-reset, EOL, and undocumented write boundaries
-remain excluded.
+| Capability | Current Home Assistant surface | Decision |
+|---|---|---|
+| Setpoint `0/0x1023` | Native climate target | Verified and implemented |
+| User Timer `0/0x1001` | Climate preset `user_timer` | Verified and implemented |
+| Manual, Eco Mode, Frost Protect, Home All Day (`home_all_day`), Away Mode | Climate presets; Away return time is a separate datetime control (minute resolution, enabled by default, shown only while Away is active) | Verified mode/preset mapping; explicit Away deadline required. No `HVACMode.AUTO` |
+| Sound `2/0x0005` | Independent configuration switch with slow refresh | Verified and implemented |
+| Adaptive Start `0/0x1008` (`PREEMPTIVE_HEATING`, `0`/`0x1008`) | Configuration switch | Device read/write and manual verified; read restored to the snapshot after a regression (2026-11-24), guarded by `test_snapshot_reads_every_verified_setting` |
+| Open Window Detection `0/0x1007` | Configuration switch | Device read/write and manual verified |
+| Display unit `0/0x1005` | Configuration select | Reversible read/write verified |
+| Clock, schedules, backlight, advance, setback, runback, unnamed fields | None | Unexposed pending semantic and safety evidence |
+| Test, OTA, RF, disconnect, credentials, security | None | Explicitly blocked or unexposed |
 
 ### Writes audited
 
-| Write | Current status | Boundary |
-|---|---|---|
-| Setpoint `0/0x1023` | Live bounded whole-degree write/readback and tests | Climate target |
-| Eco preset `0/0x1001` | Live known payload and tests | Climate preset |
-| Display unit `0/0x1005` | Live reversible write/readback | Configuration select |
-| Frost preset `0/0x1001` | Payload is known, but physical-display confirmation is pending | Phase 2 confirmation before broader claim |
-| Experimental raw controls | Fixed-width hex writes now available for controlled testing | No semantic validation; meanings and device effects remain experimental |
-| Security, credential, OTA, test, factory-reset, EOL and protected fields | Explicitly blocked | Never expose |
+All exposed writes are fixed protocol operations with readback or device-level
+confirmation. Unknown, protected, security-adjacent, and firmware-related
+characteristics are not writable through Home Assistant.
 
-### Phase 2 physical confirmations
+### Remaining evidence gaps
 
-The next interactive phase is limited to values that cannot be confirmed from
-safe reads and regression fixtures alone:
+The current implementation is intentionally limited to the controls listed
+above. Remaining phase-two work is research only: additional protocol fields
+must not become entities until their semantics, repeatability, safe command
+contract, and Home Assistant mapping are all evidenced.
 
-1. Confirm the physical display text and resulting mode/target for Frost.
-2. Confirm whether the display-unit select changes only display formatting and
-   does not change the native sensor/setpoint semantics.
-3. If needed, observe a deliberate active-heating transition to correlate Trac
-   output values with display state; do not infer it from temperature alone.
-4. Confirm any additional mode or power behavior before adding a control.
+The full inventory of the 73 ConfigR parameter classes (encodings, owning
+screen, safety class, recommended HA surface and what is still missing, e.g.
+Boost, Advance, Setback, Out All Day/Holiday, schedules, temperature offset,
+min/max setpoint, away temperature) is in
+[`configr-entity-gap.md`](configr-entity-gap.md), with the firmware/OTA analysis
+in [`configr-firmware-analysis.md`](configr-firmware-analysis.md).
 
-No phase-2 item is currently advertised as a verified climate capability.
+Open questions: whether a setpoint written in User Timer is a temporary
+override or changes the schedule's comfort value (not yet observed); whether
+the Manual <= 19 °C to Eco switch is the firmware eco threshold (inference);
+the Trac correlation can still be extended by an active-heating transition.
+
+An active-heating transition can still be observed to expand Trac correlation,
+but HVAC action is never inferred from selected mode or temperature.
 
 ## Home Assistant mapping
 
 | Home Assistant surface | Capability evidence | Status |
 |---|---|---|
-| Climate entity | Live current temperature, single target, native Celsius, real limits, whole-degree step, heat-only behavior, and Eco preset | IMPLEMENTED; Frost remains phase 2 and is not advertised |
+| Climate entity | Live current temperature (tenths), single target, native Celsius, real limits, whole-degree step, heat-only behavior (no AUTO), six presets (`manual`, `eco`, `frost_protect`, `user_timer`, `home_all_day`, `away`), and explicit Away return-time datetime | IMPLEMENTED |
 | Display-unit select | Live display-unit field and ConfigR Celsius/Fahrenheit terminology | IMPLEMENTED |
-| Error-code sensor | Live error field and ConfigR fault diagnostics | IMPLEMENTED |
-| Raw operating-mode diagnostic sensor | Live raw mode characteristic; Eco is decoded for climate, while the bounded Frost payload remains raw/phase-2 evidence | IMPLEMENTED; diagnostic and disabled by default |
+| Error-code sensor | Live error field, ConfigR fault diagnostics and manual p.26 code table (translated states) | IMPLEMENTED |
+| Operating-mode diagnostic sensor | Live mode characteristic decoded as an ENUM; the climate exposes the same modes as presets | IMPLEMENTED; diagnostic and disabled by default |
 | Rated-power diagnostic sensor | Live `3/0x000A` first LE16 word, verified against PLX050E 500 W documentation; full raw payload preserved as an attribute | IMPLEMENTED; diagnostic and disabled by default |
-| LCD-temperature diagnostic sensor | Live selector `2/0x0008` returns a separate 29.0 °C controller/LCD reading; selector 3 is unavailable | IMPLEMENTED; diagnostic and disabled by default |
+| LCD-temperature diagnostic sensor | Live selector `2/0x0008` returns a separate controller/LCD reading | IMPLEMENTED; diagnostic and disabled by default |
 | Trac output-power diagnostic sensor | Official PLX report-screen semantics plus repeatable live Trac reads correlate the third byte with output power for PLX050E | IMPLEMENTED; percentage diagnostic and disabled by default |
-| HVAC action | Live Trac byte 1 distinguishes active heating and idle without deriving from target/current temperature | IMPLEMENTED; reports only `HEATING`/`IDLE` when valid |
-| Preset/fan/swing/humidity/range controls | Eco is verified; Frost has a bounded protocol value but still needs physical-display confirmation; remaining controls have no AM6532-safe mapping | PARTIALLY EXPOSED |
+| HVAC action | Live Trac byte distinguishes active heating and idle without deriving from target/current temperature | IMPLEMENTED; reports only `HEATING`/`IDLE` when valid |
+| Adaptive Start, Open Window Detection, Sound | Verified independent configuration controls | IMPLEMENTED |
+| Fan/swing/humidity/range controls | No AM6532-safe mapping | NOT EXPOSED |
 | Energy/charge/element sensors | Calculated power is exposed from verified output percentage × rated output; cumulative energy and independent element status remain unverified | PARTIALLY EXPOSED |
 | Calendar/schedule | App labels exist, but no AM6532 schedule protocol mapping | NOT EXPOSED |
 | Firmware update | App capability is not a recovered local protocol capability | NOT EXPOSED |

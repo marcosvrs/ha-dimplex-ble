@@ -1,433 +1,220 @@
 # ESPHome and BLE findings for Dimplex panel heaters
 
-**Status:** verified findings from the local Jarvis deployment and controlled
-ESPHome/API tests. This is an operational engineering record, not a claim that
-ESPHome upstream guarantees every behavior across future releases.
+**Status:** engineering record, rewritten 2026-11-24 from the adversarial BLE
+review. Source of truth: `docs/investigation-2026-11-24/ledger.md` and
+`design-addendum.md` (times below are UTC, 2026-11-24 unless stated). Earlier
+revisions of this file described a custom C++ relay component
+(`dimplex_passkey_proxy`), MITM prepare/request actions, a runtime PIN relay and a
+required ESP-IDF 5.5.5 pin. All of that was removed; see "Rejected" below.
 
 ## Scope and terminology
 
-- **Panel heater:** a Dimplex PLXE/PLX050E Series C product exposing the
-  `AM####<Dimplex>` BLE name.
-- **Proxy:** an ESP32-S3 running ESPHome's standard `bluetooth_proxy` and
-  `esp32_ble_tracker` components.
-- **Relay:** the only custom ESPHome component,
-  `dimplex_passkey_proxy`, which forwards a one-time Dimplex passkey request
-  and reply.
-- **HA route:** one Home Assistant Bluetooth scanner route. A panel heater's bond is
-  owned by the proxy route used during pairing.
+- **Panel heater:** a Dimplex PLXE/PLX050E Series C product advertising
+  `AM####<Dimplex>`. Its radio is an Espressif ESP32 (GATT `Esp32OtaEnable`).
+- **Proxy:** an ESP32-S3 running stock ESPHome (`bluetooth_proxy`,
+  `esp32_ble_tracker`) plus the `firmware/dimplex_pin_responder.yaml` package.
+- **Responder:** one dormant `ble_client` in that package that answers the
+  heater's passkey request.
+- Bluetooth is always on at the heater; there is no heater-side pairing mode.
+  Pairing starts when the central connects; the heater then shows a static
+  six-digit PIN. A missing PIN display means the central did not reach the
+  passkey request (see `AGENTS.md`).
 
-## Verified architecture boundary
+## Architecture
 
-Home Assistant owns discovery, route selection, GATT connection lifecycle,
-coordinator polling, retries, availability, and teardown. ESPHome remains the
-Bluetooth scanner/proxy and GATT transport.
+### Firmware (stock ESPHome, no external component, no C++)
 
-The custom firmware does **not** implement a second scanner, a second GATT
-client, a custom polling loop, or Dimplex protocol reads/writes. The custom
-firmware only adds the BLE authentication callback relay required because the
-panel heater's six-digit PIN is entered by the user while the ESP32 acts as the
-Bluetooth central.
+`firmware/dimplex_pin_responder.yaml` (spec: design-addendum section A):
 
-### Integration module ownership
+- RAM-only globals `dimplex_pin` (1000000 = disarmed) and `dimplex_pin_set_ms`.
+- One generic `ble_client` (`dimplex_pin_client`, `auto_connect: false`)
+  retargeted at runtime with `set_address()`.
+- `on_passkey_request`: fires event `esphome.dimplex_passkey_request` (address
+  only, no PIN), waits up to 25 s (below the 30 s SMP timer) for an armed PIN,
+  then `ble_client.passkey_reply`. No PIN in log text.
+- API actions `dimplex_pin_arm(address, passkey)` (passkey 1000000 = "target
+  only, PIN follows") and `dimplex_pin_clear()`.
+- `esp32_ble`: `io_capability: keyboard_only`, `auth_req_mode: bond_mitm` (or
+  `sc_mitm_bond`), `max_connections: 4` (3 proxy slots + 1 responder; total <= 9).
+- ESPHome >= 2026.11.0 with the default framework. No IDF pin is needed (H9).
+  `CONFIG_BT_BLE_RPA_SUPPORTED: "n"` is retained because production used it
+  successfully; do not add further BLE customization.
 
-- `route_policy.py` owns normalized proxy-route ranking, capacity eligibility,
-  assignment load, RSSI, and active-route affinity. Pairing-time selection and
-  runtime reconnects use the same policy.
-- `esphome_proxy.py` is the ESPHome adapter. It owns config-entry lookup, native
-  actions, encryption checks, and the passkey relay.
-- `commissioning.py` owns one pairing attempt's proxy lock, relay arm, bounded
-  wait, cancellation, and cleanup. The config flow owns only presentation and
-  bounded retry scheduling.
-- `client.py` owns the trusted panel-heater session and protocol reads/writes; it
-  consumes route facts and does not own ESPHome action semantics.
+### Home Assistant side
 
-`api.max_connections` controls concurrent ESPHome API clients (HA, diagnostics,
-and management tools). It does not increase the ESP32's BLE link capacity.
-The standard proxy currently exposes three active BLE connection slots.
+- Connections use the pinned proxy route (`scanner.connector.client`), because
+  habluetooth will not pin a source (habluetooth#628, rejected). Connect only
+  when the pinned proxy currently sees the heater.
+- Link sequence: `dimplex_pin_arm` (target, stored PIN) through the proxy's
+  native API client (never `hass.services`, so the PIN never enters the event
+  bus) -> connect -> shielded native `pair()` -> GATT. The arm must precede the
+  connect (RC-5). One per-proxy security lock is held across connect+pair; the
+  responder is cleared in `finally`.
+- `pair()` and `connect()` run as their own tasks awaited to completion even
+  when HA cancels the caller; the link is closed only after `pair()` resolved
+  (RC-2, RC-3). ATT 0x05/0x0F after a successful `pair()` is a transient
+  failure, not a reauth. Reauth only for a rejected stored PIN (reason 81).
+- Commissioning: flow shows progress, asks for the PIN only when the
+  `esphome.dimplex_passkey_request` event arrives (a bonded heater finishes
+  without a PIN prompt). Wrong PIN = SMP reason 81, pairing restarts at once.
+  PIN is static per heater and stored in the config entry for automatic
+  re-pair after a bond loss; it is redacted in diagnostics.
+- Reconnect is event-driven off every advertisement
+  (`bluetooth.async_register_advertisement_callback`; the regular callbacks skip
+  identical payloads, habluetooth 7.1.2 manager.py ~1316-1350).
+- Heater settle rule: `HEATER_SETTLE_S = 10` s between a link-down and the next
+  connect to the same heater, kept in a shared per-address registry. Basis: a
+  reconnect 20-23 ms after a clean disconnect is terminated within ~7 ms
+  (rsn 0x13) or answered "Invalid handle" (hardware 17:58:41, 18:24:23), and
+  ConfigR help text says to wait ~10 s for the product "to go to sleep".
+- Connection mode option: persistent link (default, one proxy slot permanently
+  per heater) or per-poll connect/disconnect (60 s interval; first deployed on
+  AM8224 17:58). In per-poll mode slow reads (Sound) must reuse the poll
+  connection.
+- Stall repair: after an abnormal link drop and 60 s without an advertisement
+  the integration raises a "heater stopped responding" repair (needs a wall
+  power cycle).
+- Observability: DEBUG lines with the address on every line (CONNECT/PAIR
+  request+result, GATT result, DISCONNECT, ROUTE_NOT_SEEN, RESPONDER_ARM/CLEAR).
+  Set `aioesphomeapi.connection: info` on the HA host, because DEBUG logs the
+  `ExecuteService` arguments (the PIN). Pre-15:00 logs from the old relay may
+  contain PINs.
 
-## Dimplex pairing facts
+## Verified root causes
 
-- Bluetooth stays enabled on the panel heater.
-- There is no separate panel-heater-side "pairing mode" to enable.
-- Pairing starts when the central initiates the connection and authentication.
-- The panel heater displays the PIN only during that authentication attempt.
-- A missing PIN display means the central did not reach the passkey request; it
-  is not evidence that Bluetooth is disabled.
-- The passkey relay is needed for first pairing or bond repair only. A valid
-  bonded reconnect does not request a new PIN.
-- Pairing is serialized per proxy so a second PIN cannot replace the first
-  proxy-scoped pending request.
+### RC-1: proxy API rejected HA (12:34-13:45)
+ESPHome 2026.11.0 limits API clients to 5 (`api_server.cpp:323`); at the limit the
+proxy accepts TCP then closes, so HA saw `EncryptionHelloAPIError`. 5 sockets
+were held by 17 orphaned `esphome run/logs` processes in the esphome container.
+SIGTERM on only those processes restored the proxy within ~60 s. Key hashes
+HA==YAML ruled out a key mismatch. Not a code defect.
 
-These facts are encoded in `AGENTS.md` and must not be replaced with advice to
-toggle Bluetooth or put the panel heater into a non-existent pairing mode.
+### RC-2: failed AUTH_CMPL deletes the bond (IDF 5.5.5 source)
+`bta_dm_act.c:5021-5038` (RAM) and `btc_dm.c:286-303` (NVS): any failed
+AUTH_CMPL except reason 5 removes the bond; no Kconfig to disable (esp-idf#19303).
+Reason 102 = SMP_CONN_TOUT, 99 = SMP_RSP_TIMEOUT, 97 = SMP_ENC_FAIL. The old
+flow (fire-and-forget encryption, immediate read, disconnect on 0x05/0x0F,
+30 s pairing waits cut by HA disconnect) produced repeated 102s. Living-room
+showed `success=0 reason=102 bonds=0` at 13:49 with no reboot (bonds deleted at
+runtime). Design rule: never abort an in-progress security procedure; await
+`pair()` before GATT. Hardware reproduction by reverting was not done.
 
-## Direct ESPHome API test requirement
+### RC-3: stale "closing" GATT record after a cancelled connect (AM2086, 15:00-15:15)
+Shutting-down HA cancelled an in-flight connect as the link formed:
+`L2CA_CancelBleConnectReq - no connection pending` leaves the tcb "closing"
+(`gatt_main.c:276-277`, `l2c_ble.c:98-101`); the internal retry keeps the record
+(`l2c_link.c:532-544`, ESPHome CONFIG count 10), so every `gattc_open` fails in
+<100 ms with status 133 (`gatt_main.c:400-402`, `bta_gattc_act.c:554-559`).
+Rebooting only the living-room proxy at 15:12 fixed it (heater advertised again
+15:12:54, reconnected 15:15:06), so the state was proxy-side. Rejected
+workaround: `CONFIG_BT_GATTC_CONNECT_RETRY_COUNT=0` (the same retry recovered a
+normal 0x3e for AM1382 at 15:13:00). Mitigation deployed 15:18: connect runs as
+its own bounded (15 s) task even if HA cancels. Residual: HA process death or
+API drop mid-connect. Draft upstream report: `docs/upstream-issue-drafts.md`.
 
-A direct `aioesphomeapi` probe must subscribe to Bluetooth advertisements before
-requesting a GATT connection and must keep that subscription active until the
-GATT session ends:
+### RC-4: third uncached link refused by the controller (16:10, 17:08)
+`BT_HCI opcode=0x200d status 0x0d Rejected: Resources` 54 ms after "Connecting v3
+without cache" (fixed 7.5 ms interval; `l2c_ble.c:1058-1076`), then status 133.
+esphome#22859 (C3/S3 controller, won't-fix 2026-11-18): uncached third link
+refused 19/24, cached (MEDIUM 8.75-11.25 ms) never refused. Raising
+`max_connections` does not help. After an HA restart the GATT cache is empty so
+the first reconnect is uncached: 4/4 refusals for AM2086 as the third heater on
+main-bedroom (17:08-17:10). The refusal is local (no SMP, no bond loss). With one
+heater removed the connect was accepted (16:13:08).
 
-```python
-await client.connect(login=True)
-advertisement_unsubscribe = client.subscribe_bluetooth_le_advertisements(
-    on_advertisement
-)
-disconnect = await client.bluetooth_device_connect(...)
-# use GATT connection
-disconnect()
-advertisement_unsubscribe()
-await client.disconnect()
-```
+### RC-5: responder armed after the heater asked for the PIN (16:13)
+Link up 16:13:08.5, the heater's Security Request started SMP at once, PASSKEY_REQ
+arrived with the responder untargeted, PIN displayed, armed 16:13:10.4 after GATT
+discovery, `smp_rsp_timeout` reason 99 at 16:13:38.9. Fix (deployed 16:22): arm
+before connect, hold the lock across connect+pair; a contract test asserts the
+order action -> connect -> pair.
 
-If the advertisement subscription is omitted, ESPHome sees no active API
-Bluetooth subscriber and tears down the connection. The observed log sequence
-was:
+### Heater settle time
+See the settle rule above (17:58:41, 18:24:23 hardware, ConfigR guidance).
 
-```text
-disconnect while backend idle, err=-1
-Pending open cancelled
-Disconnected, reason=0x100
-```
+### Heater BLE stall (AM8224 14:08 and 17:19; AM2086 17:34)
+After an abnormal link loss (AM8224 17:19:19: read of handle 143 hung ~10 s,
+error 133, HCI 0x08 supervision timeout) the heater stops advertising until a
+wall power cycle. Isolation (AGENTS.md rules): HA kept polling; the proxy held no
+link (allocations 1/3; Jarvis hci0 had none); a USB test ESP32 and a phone
+(nRF Connect) next to AM8224 heard nothing; both proxies were rebooted 13:58/14:04
+and the heater stayed silent until the 14:08 power cycle (so not RC-3); the
+heater re-appeared and reconnected via its intact bond after power cycling
+(17:35:04). ~50 clean disconnects always re-advertised; 2/2 abnormal losses did
+not. No vendor guidance found. Mitigations: stall repair, per-poll option,
+settle rule.
 
-This was a test-harness error, not a Dimplex rejection, radio-range problem,
-or proxy-capacity limit. Home Assistant normally owns the required subscription,
-so a bare direct probe does not model the HA runtime.
+### H14: heater keeps bonds with several centrals
+AM2086 moved main-bedroom -> living-room at 17:13: `pair()` ok in 0.01 s, no
+PIN; the living-room LTK from 15:21 stayed valid after bonding with main-bedroom
+(16:52). The heater bond limit is unknown (ConfigR notes the heater evicts bonds
+at its limit; do not create bonds repeatedly).
 
-## Controlled connection results
+### H9: ESP-IDF 5.5.6 verified (18:15-18:25)
+ESPHome 2026.11 default IDF 5.5.6 links `--wrap=smp_check_auth_req` and
+`--wrap=btm_sec_clear_ble_keys` (esp32_ble `bluedroid_bond_keys.c`). After an OTA
+and 3 entry reloads on living-room: 9/9 LTK re-encryptions, 0 passkey requests,
+0 fresh pairings, 0 bond deletions. The 5.5.5 pin is no longer needed
+(esp-idf#19286/#19303, fix PR #19322 unmerged; ESPHome PR #22559).
 
-The following were observed with the production-style proxy and a subscribed
-API client:
+## Experiments that settled the design
 
-| Test | Result |
+| When | Result |
 |---|---|
-| AM8224 through stock proxy path | GATT connection, MTU 517, seven services |
-| First AM8224 pairing through the passkey relay | Authentication success, bond created, seven services discovered |
-| Bonded AM8224 reconnect | Successful without a PIN |
-| AM6532 through the same proxy | Successful |
-| AM6532 and AM8224 concurrently through one proxy | Both connected; each reported MTU 517 and seven services |
-| HA config flow for AM8224 | Created the entry after the cached-route fix and PIN submission |
-| HA restart with both bonds present | Both entries reconnected without PIN or reauthentication |
+| 13:49 | Native `pair()` on a bonded heater re-encrypts in ~0.1 s, no PIN. Living-room `bonds=0`. H-RACE rejected. |
+| 13:58 (E1) | Stock `ble_client` `on_passkey_request` answered a proxy-initiated pairing (`auth success mode=13`). |
+| 14:00 (E2) | Bond reuse after HA restart without PIN (0.357 s). Bond survived ESP reboot + OTA (14:06). |
+| 15:20 (T-REPAIR) | Bond removed with native UNPAIR; HA re-paired with the stored PIN in 2.07 s, outage ~22 s. Marker `BT_SMP: FOR LE SC LTK IS USED INSTEAD OF STK` = fresh pairing. |
+| 16:35-16:53 (R-PIN) | User-typed PIN commissioning passed: wrong PIN -> 81, slow typist -> 30 s timeout then fresh pairing with PIN armed before connect. |
+| 17:50 | In User Timer a setpoint is accepted (target reads back); Frost Protect + setpoint switches the heater to Manual. |
 
-Therefore one ESP32 proxy can serve both tested panel heaters. The tested proxy's
-three BLE slots leave one slot for another concurrent BLE link, although other
-HA Bluetooth integrations can consume the same proxy capacity.
+Interim baseline 14:09-14:27: 343/343 polls succeeded on four heaters through
+two stock proxies (not like-for-like with the 963 failed polls of 12:20-13:36;
+sustained soak still required).
 
-## Firmware settings that are evidence-backed
+## Rejected hypotheses and approaches
 
-The stable proxy builds use:
+- H-RACE (read before encryption completes) rejected for living-room; the real
+  harm was bond deletion (RC-2).
+- Custom C++ relay, `prepare`/`request` MITM actions, `configure_security_()`
+  (redundant with `esp32_ble` YAML settings) and runtime PIN relay: removed.
+- Roaming/route ranking/cached-route blocks/backoff ladders: removed; the heater
+  is bound to the proxy holding its bond; a move uses a temporary pinned link
+  and never unpairs the old proxy.
+- `CONFIG_BT_GATTC_CONNECT_RETRY_COUNT=0` (RC-3), raising `max_connections`
+  (RC-4), proxy reboot as a reliability fix, "heater only keeps one bond" (H14),
+  USB test ESP32 as the stall holder: all ruled out.
+- ESPHome has no native passkey path (feature-requests#2013, bleak#1864); hence
+  the stock-YAML responder.
 
-```yaml
-esp32_ble:
-  io_capability: keyboard_only
-  auth_req_mode: bond_mitm
+## Known limits
 
-esp32:
-  framework:
-    version: 5.5.5
-    sdkconfig_options:
-      CONFIG_BT_BLE_RPA_SUPPORTED: "n"
-```
+- <= 2 heaters per ESP32-S3 proxy for reliable recovery after HA restarts (RC-4;
+  the proxy picker warns). Current layout 2+2: main-bedroom AM6532+AM8224,
+  living-room AM1382+AM2086. Persistent links use a proxy slot permanently.
+- 3 BLE slots per proxy, shared with every other BLE integration; the responder
+  is an extra compile-time slot (max 9).
+- The PIN window is 30 s (SMP response timer); the responder waits 25 s.
+  A typed PIN after a timeout starts a fresh pairing.
+- A heater BLE stall needs a wall power cycle.
+- Proxy API clients max 5 (RC-1).
+- Other discovered heaters (AM5832, AM8922) are unconfigured.
 
-The explicit ESP-IDF 5.5.5 pin is a deployment workaround. ESP-IDF 5.5.6
-showed a bonded-reconnect regression in the relevant timeframe in upstream
-tracking; it must not be removed until a newer version is tested against these
-panel heaters. `CONFIG_BT_BLE_RPA_SUPPORTED: "n"` is retained because the verified
-production proxy used it successfully; it is not a license to add more BLE
-customization.
+## Operational rules
 
-### Deployment invariant
-
-Both production proxies must resolve the framework pin to ESP-IDF 5.5.5. On
-2026-11-21, the main-bedroom YAML had drifted back to the package default
-(5.5.6) while the living-room YAML still pinned 5.5.5. This was observable with
-`esphome config`, before firmware upload. Restore the explicit pin before
-building the main proxy; otherwise the bonded-reconnect regression workaround
-is not active.
-
-The passkey action address must be the normalized twelve-hex-digit Bluetooth
-address (for example `c4d8d56f6532`), not a colon-separated address. The HA
-integration normalizes it before calling ESPHome. Direct diagnostic scripts
-must do the same or the relay rejects the action as invalid and the subsequent
-authentication attempt times out.
-
-The proxy must expose only these Dimplex user actions:
-
-- `arm_dimplex_pairing(address)`
-- `set_dimplex_pairing_passkey(address, passkey)`
-- `cancel_dimplex_pairing()`
-
-An attempted `clear_dimplex_bond(address)` action failed compilation because the
-current relay component has no `clear_bond` method. Bond clearing is therefore
-not part of the supported proxy API. Do not add that action to a YAML file unless
-the component implements it and the behavior is separately verified.
-
-## Bonds and NVS
-
-The ESP32 NVS contains state needed for API/BLE operation, including bonds. An
-NVS erase is a destructive diagnostic operation:
-
-1. It removes existing panel-heater bonds from the proxy.
-2. Existing HA entries can then report authentication failure.
-3. Every affected panel heater must be paired again.
-
-Do not erase NVS as a routine reconnect or troubleshooting step. Prefer an HA
-reauthentication flow and inspect the proxy/API connection first.
-
-### Current-session recovery record
-
-The current-session AM2086 investigation exposed a documentation gap. The
-operator reported that an earlier AM8224/main-bedroom recovery required
-clearing proxy NVS/BLE state. The repository previously recorded only the
-effect and destructive consequences, not that operational history or its exact
-command.
-
-The live evidence did not justify repeating a full NVS erase on the
-living-room proxy before the operator explicitly authorized destructive
-recovery. Its encrypted API was healthy before the test and a targeted
-`bluetooth_device_clear_cache(0xc4d8d569c086)` request timed out because the
-proxy had no GATT route to AM2086. A non-destructive safe-mode reboot then
-completed: the proxy returned online, HA kept both working panel-heater bonds alive
-by moving AM8224 to the main-bedroom proxy, the living proxy reported three
-of three BLE slots free, and AM2086 remained absent from all three HA scanner
-sources.
-
-After explicit authorization, the living-room proxy's HA `Factory reset`
-button was tested while it had zero active Dimplex allocations. ESPHome's
-factory-reset implementation calls `global_preferences->reset()`, which
-invokes `nvs_flash_erase()` for the NVS partition before reboot. The proxy
-returned online with its encrypted API and Dimplex pairing services intact.
-The main-bedroom proxy retained both AM6532 and AM8224 allocations and
-continued successful coordinator updates. AM2086 still did not appear in any
-HA scanner source after the NVS erase. This rules out stale living-proxy NVS
-or a living-proxy BLE cache as the cause of the AM2086 discovery failure.
-The direct connection test was then repeated with the required active
-`subscribe_bluetooth_le_advertisements()` subscription, for twenty seconds
-before the GATT request and throughout the request. It received zero AM2086
-advertisements and the address-scoped connection still timed out. The proxy
-remained healthy afterward with three of three BLE slots free.
-
-An independent CoreBluetooth scan from the MacBook was also run for thirty
-seconds. It observed 29 other BLE peripherals, including the iPhone and
-nearby accessories, but no `AM2086<Dimplex>` or other Dimplex advertisement.
-This is independent confirmation that the panel heater was not advertising in the
-RF environment during the test; it is not a proxy scanner failure.
-An additional unfiltered 35-second CoreBluetooth scan was run after the
-targeted scan. It reported many connectable peripherals and manufacturer
-payloads, but no `AM2086`, `Dimplex`, or matching panel-heater advertisement. This
-rules out the targeted name/address filter as the reason the Mac test missed
-the panel heater.
-The upstream Q-Rad bridge research adds an important discriminator: on a
-Q-Rad with Bluetooth enabled, advertising was observed indefinitely after
-disconnect, and a wall power cycle restored advertising within one minute.
-The same research records one-central-at-a-time behavior. Therefore a silent
-AM2086 can mean either that another central (for example ConfigR or a phone)
-still owns the link, or that AM2086's radio/firmware is stuck; it is not normal
-post-pair behavior established by the reference implementation.
-
-
-
-As a control, Home Assistant's normal scanner registry simultaneously contained
-`AM6532<Dimplex>` from the main-bedroom proxy at RSSI `-64 dBm` and a separate
-nearby `AM3314<Dimplex>` at `-96 dBm`. AM8224 was active as a GATT allocation
-on the main-bedroom proxy rather than an advertisement record. Thus the
-scanner/proxy path was demonstrably seeing Dimplex peripherals while AM2086
-was absent.
-
-The AM2086 entry was not created by a partial discovery. Its stored creation
-time is `2026-11-20T22:41:01Z`, and the integration's `async_pair()` creates
-an entry only after a PIN pairing plus a fresh authenticated reconnect both
-return the panel-heater identity. The device registry received the PLX050E/EP4213
-metadata at `22:41:24Z`. The raw pairing log was rotated away, so this is
-strong storage/code evidence of a previously successful bond, not a retained
-pairing-success log. The later absence is therefore a bond/runtime-loss
-event, not proof that AM2086 has never paired.
-The recorder timeline makes the failure order explicit: AM2086 was last
-available at `2026-11-20T22:48:09Z`, while AM6532 remained available until
-`22:49:35Z` and AM8224 until `22:57:22Z`. AM2086 therefore failed before the
-later shared HA/proxy outage; it was not merely collateral damage from that
-outage.
-
-
-The observed timeline is consistent with a post-pair runtime/bond failure:
-the living proxy firmware compiled at `22:13:27Z`, the AM2086 entry was
-created at `22:41:01Z`, Home Assistant restarted at `02:47:27Z`, and the
-first retained failure was immediately after that restart because no current
-AM2086 advertisement route existed. The later safe-mode reboot and full living
-proxy NVS erase did not restore advertisements. No evidence implicates the
-main-bedroom proxy or either working panel heater.
-
-The next recovery operation is physical and cannot be performed by HA:
-terminate any ConfigR/phone Bluetooth connection to AM2086, leave its
-Bluetooth setting enabled, power-cycle the panel heater, wait up to one minute,
-and verify that `AM2086<Dimplex>` is visible before starting HA pairing. The
-Q-Rad research records advertising returning within a minute after a wall
-power cycle, and ConfigR's recovered lifecycle requires the current central to
-disconnect before another connection. If AM2086 remains absent from both
-proxy and Mac scans after that operation, the remaining fault is inside the
-panel heater's Bluetooth/radio state or hardware and cannot be repaired through the
-proxy.
-
-The earlier AM8224 erase command is not recoverable from the repository; it
-must not be reconstructed by guess. The verified current recovery operation
-was the living proxy's HA `Factory reset` action, and it is destructive:
-affected panel-heater bonds require PIN pairing again.
-
-
-## Home Assistant route selection
-
-A Dimplex discovery callback can arrive from the host adapter while the selected
-ESPHome proxy's route is absent from that one discovery snapshot. The observed
-failure was:
-
-```text
-No passkey-capable ESPHome route
-(connectable_candidates=1, candidates_with_source=1, matching_entries=0)
-```
-
-The proxy route was still present in HA's scanner registry. The integration now
-falls back to that registry when the current snapshot has no eligible route. It
-still requires a loaded, encrypted ESPHome config entry with all three pairing
-actions; a host adapter or incomplete proxy is never accepted.
-
-The selected proxy source is persisted with the panel-heater config entry.
-The integration does not silently move a panel heater to another proxy, because the
-bond belongs to the controller that performed pairing.
-
-## ESPHome management observations
-
-- Stale `esphome logs` clients left running in the ESPHome container produced
-  `BAD_INDICATOR errno=11` noise and API churn. Stop old log clients before
-  interpreting proxy behavior.
-- The running proxy must be checked through the encrypted API, not only by ping
-  or TCP port reachability. API reachability alone does not prove that the
-  custom user actions are present.
-- After OTA, query the API's `UserService` list and verify the three Dimplex
-  actions. Then reload or enable the matching HA ESPHome config entry so HA
-  registers the corresponding service names.
-- The living-room proxy was online but its HA entry was user-disabled and its
-  previous firmware did not expose the relay actions. It was rebuilt with the
-  tested settings, flashed over OTA, verified through the API, and enabled in
-  HA. The HA service names then appeared.
-- One transient main-proxy API reset was observed while enabling the second
-  proxy; both panel-heater coordinators recovered automatically within the next
-  refresh cycle. No further errors were observed in the subsequent verification
-  window.
-
-### 2026-11-21 proxy API recovery
-
-After the Home Assistant restart, both ESPHome API sessions failed: the
-main-bedroom proxy returned `EOF received`, and the living-room proxy dropped
-the connection immediately after the encrypted hello. HA consequently marked
-AM6532, AM8224, and AM2086 unavailable. The configured Noise-PSK fingerprints
-matched the current proxy YAML for both devices, so the failure did not prove a
-stored-key mismatch; TCP port reachability was also insufficient evidence.
-
-The current YAML was compiled and uploaded over encrypted OTA to both proxies.
-OTA succeeded without erasing the NVS partition. The two already-bonded panel heaters
-then produced successful coordinator updates again through the main-bedroom
-and living-room routes. AM2086 still had no advertisement route and remained
-unavailable. This separates the transient proxy API failure from the AM2086
-fault: repairing the proxies restores existing bonds, but cannot make a
-non-advertising panel heater discoverable.
-
-The pre-factory living-proxy NVS backup contained the AM2086 address inside the
-Bluetooth GATT-cache region. It was restored through the proxy's USB serial
-connection as a controlled experiment, followed by an HA config-entry reload.
-AM2086 still had no route and remained unavailable. The proxy's current NVS
-backup was then restored, so the experiment did not leave the living proxy in
-the older cache state. A cache entry is therefore not sufficient to wake or
-connect to this panel heater.
-
-HA contains an `innr SP 120` socket in the Single Bedroom area, but it was
-unavailable. Both normal switch service calls and a direct Zigbee On/Off
-command failed because the device had no route; reloading ZHA did not restore
-it. It cannot be used as a remote AM2086 power-cycle path. A fresh Mac
-CoreBluetooth scan after these experiments still found no Dimplex
-advertisement, while macOS listed AM2086 only as a cached, disconnected device.
-
-The official PLXE Series C manual adds a device-side hypothesis that cannot be
-tested remotely: `Settings -> Comms` controls wireless-connectivity features,
-and the manual lists Bluetooth as being for software updates. It also defines
-fault code `60` as a wireless-communication-module error and `61` as a hub
-connection error. The same manual identifies `PLX050E` as the model family and
-documents a device-side factory reset (`Advance` + `Menu` for five seconds,
-then `Factory Reset` -> `Yes`). This is not proof that AM2086 has a disabled
-setting or a hardware fault, but it is the only remaining device-side recovery
-path after the remote BLE and NVS tests. Source: Dimplex, *PLXE Panel Heater
-Models ... Series C, Issue 7*, pp. 6, 11, 23, 25-26.
-
-The official ConfigR product page lists PLXENC as its panel-heater product and
-requires checking the compatibility list before connection. The AM2086,
-AM6532, and AM8224 metadata all identify them as `PLX050E;C;`, not PLXENC.
-The PLXE Series C manual describes Bluetooth as intended for software updates,
-while the older PLX050E manual says the Bluetooth connection is “currently
-without function.” This means ConfigR/PLXENC pairing behavior must not be
-treated as an official PLX050E contract. It does not explain why AM6532 and
-AM8224 currently work with the reverse-engineered protocol, but it does make
-AM2086's device-side wireless state or module variant the remaining
-model-specific variable.
-
-## HA runtime reliability findings
-
-The ESPHome BLE transport reports disconnect error `19` as
-`ESP_GATT_CONN_TERMINATE_PEER_USER` (“connection terminated by peer user”).
-That is a transport failure, not proof that the Dimplex bond is missing.
-Runtime `pair()` failures are therefore classified as authentication failures
-only when the underlying error explicitly says “insufficient authentication” or
-“insufficient encryption”. Other failures remain retryable connection errors.
-
-The coordinator retries one failed authenticated GATT session without starting
-PIN pairing. It also closes the short-lived poll session after the climate and
-experimental reads. Experimental reads are optional, read in three-field
-batches, and each characteristic read has a bounded timeout. A full
-experimental batch held AM1382's GATT session until the panel heater terminated it
-at approximately 30 seconds; the bounded batches prevent experimental controls
-from blocking platform setup or masking climate recovery.
-
-These changes do not recreate a lost bond. A panel heater whose bond is genuinely
-missing still requires one user-entered PIN; repeated failures must not
-silently start PIN pairing.
-
-### 2026-11-22 bond-preserving runtime reconnect
-
-Runtime snapshot, service-metadata, raw-read, raw-field, and raw-write calls
-must request `pair=False`. Only the explicit commissioning/repair operation
-uses `pair=True`; a normal reconnect must reuse the existing ESPHome bond.
-Before this correction, runtime reconnects requested pairing and could produce
-`BluetoothDevicePairingResponse` events during ordinary coordinator polls.
-
-Live verification after deployment showed AM2086, AM6532, and AM8224 continuing
-to poll successfully with `pair=False`. AM1382 still reports authentication
-failure because its saved config entry has no stored passkey and its bond is
-not currently usable; that is a separate commissioning state, not evidence
-that normal bonded reconnects should initiate pairing.
-
-## Operational commissioning checklist
-
-1. Validate the YAML and compile before flashing.
-2. Use the tested ESP-IDF 5.5.5 configuration for these ESP32-S3 proxies.
-3. Flash over OTA only when the device's API is reachable; use USB recovery if
-   OTA is unavailable.
-4. Verify the encrypted API reports the proxy identity and three Dimplex
-   `UserService` actions.
-5. Verify the HA ESPHome config entry is enabled and loaded.
-6. Verify HA exposes the three proxy action services.
-7. Start pairing from HA; enter the PIN only when the panel heater displays it.
-8. Confirm service discovery and one successful HA snapshot before considering
-   the panel heater commissioned.
-9. Restart HA and confirm bonded reconnect without a new PIN.
-10. Keep the proxy's BLE slot usage in mind when adding other BLE integrations.
-
-## Known limitations and open verification
-
-- The IDF 5.5.5 workaround is retained pending a verified upstream replacement.
-- The three-slot limit is the tested ESPHome configuration, not a guarantee that
-  every future ESPHome release keeps the same limit.
-- A successful short soak proves the tested route and bonds work; it does not
-  prove months of uninterrupted operation. Long-duration monitoring remains a
-  separate reliability exercise.
-- The living-room proxy is commissioned and ready, but a new living-room panel
-  heater has not been paired merely by flashing the proxy.
+1. Log captures on the proxy must be bounded (`timeout`) and kept on the host
+   volume, not inside the ESPHome container (a container recreation lost the
+   17:19 stall log). Host captures: `~/dimplex-logs/`.
+2. Never run `esphome run` or `esphome logs` unbounded; `esphome run` always
+   with `--no-logs` (RC-1).
+3. Never erase NVS or clear bonds routinely; a re-pair is automatic after a lost
+   bond but a failed pairing can delete a good bond (RC-2).
+4. Use ESPHome >= 2026.11.0 default framework; check with `esphome config`.
+5. Validate and compile before flashing; OTA only when the API is reachable.
+6. Do not reconnect to the same heater within 10 s of a disconnect.
+7. Destructive experiments only on the spare USB ESP32, never production.
+8. Recommendation: rotate both proxies' API encryption keys (old keys appeared in
+   deleted files and earlier logs).
 
 ## References
 
@@ -435,6 +222,7 @@ that normal bonded reconnects should initiate pairing.
 - [ESPHome issue 19453](https://github.com/esphome/ESPHome/issues/19453)
 - [ESPHome issue 19858](https://github.com/esphome/ESPHome/issues/19858)
 - [ESPHome issue 22859](https://github.com/esphome/ESPHome/issues/22859)
+- [esp-idf issue 19303](https://github.com/espressif/esp-idf/issues/19303)
 - [Dimplex QRAD Smart Bridge research](https://github.com/philcluff/dimplex-qrad-smart-bridge/blob/main/docs/research.md)
 - [Dimplex QRAD Smart Bridge backlog](https://github.com/philcluff/dimplex-qrad-smart-bridge/blob/main/docs/backlog.md)
 - [Sunhouse/Dimplex ESPHome project](https://github.com/JYewman/Sunhouse-Dimplex-Storage-Heater-ESPHome-Home-Assistant)

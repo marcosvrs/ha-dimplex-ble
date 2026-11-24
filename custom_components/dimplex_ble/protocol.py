@@ -9,16 +9,40 @@ type GattAddress = tuple[int, int]
 OPEN_WINDOW_DETECTION: Final[GattAddress] = (0, 0x1007)
 PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
 HEATING_MODE: Final[GattAddress] = (0, 0x1001)
+AWAY_MODE: Final[GattAddress] = (0, 0x102A)
 SOUND: Final[GattAddress] = (2, 0x0005)
+# ConfigR AdvanceHeatingParameter, SetpointRange, SetbackParameter and
+# SpConfigParameter (docs/configr-entity-gap.md, rows 2, 3, 6 and 7).
+ADVANCE_HEATING: Final[GattAddress] = (0, 0x100D)
+SETPOINT_RANGE: Final[GattAddress] = (0, 0x1006)
+SETBACK: Final[GattAddress] = (0, 0x1016)
+ROOM_TEMPERATURE_OFFSET: Final[GattAddress] = (2, 0x1019)
 SOUND_PAYLOAD_LENGTH: Final = 3
+AWAY_MODE_PAYLOAD_LENGTH: Final = 7
+SETBACK_PAYLOAD_LENGTH: Final = 2
+
+# Away target bounds of the Dimplex cloud client (7-18 degC); the PLXE manual
+# gives the 7 degC default (p. 17) (docs/capability-matrix.md).
+AWAY_TEMPERATURE_MIN_C: Final = 7
+AWAY_TEMPERATURE_MAX_C: Final = 18
+# Room-temperature offset: the Quantum manual (same controller family) documents
+# +/-3.0 degC; ConfigR's encoding itself spans -15.5 to +10.0 degC.
+TEMPERATURE_OFFSET_LIMIT_C: Final = 3.0
 
 HEATING_MODE_TIMER = 0x01
 HEATING_MODE_MANUAL = 0x02
 HEATING_MODE_ECO = 0x03
 HEATING_MODE_FROST_PROTECT = 0x04
+TIMER_SUBMODE_OUT = 0x01
+TIMER_SUBMODE_HOME = 0x02
 TIMER_SUBMODE_USER_TIMER = 0x03
+TIMER_SUBMODE_AWAY = 0x05
 
 PRESET_MANUAL = "manual"
+PRESET_HOME_ALL_DAY = "home_all_day"
+PRESET_OUT_ALL_DAY = "out_all_day"
+PRESET_AWAY = "away"
+PRESET_USER_TIMER = "user_timer"
 PRESET_FROST_PROTECT = "frost_protect"
 
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
@@ -70,27 +94,6 @@ BLOCKED_WRITES: Final = frozenset(
 )
 
 
-EXPERIMENTAL_RAW_FIELD_SPECS: Final[tuple[tuple[GattAddress, int], ...]] = (
-    ((0, 0x0006), 7),
-    ((0, 0x1002), 31),
-    ((1, 0x0001), 4),
-    ((0, 0x100D), 1),
-    ((0, 0x1016), 2),
-    ((0, 0x1017), 2),
-    ((0, 0x1027), 2),
-    ((0, 0x1028), 2),
-    ((0, 0x102A), 7),
-    ((2, 0x100A), 1),
-    ((2, 0x100B), 1),
-    ((2, 0x100F), 1),
-    ((2, 0x1018), 1),
-    ((2, 0x1019), 1),
-)
-EXPERIMENTAL_RAW_FIELDS: Final[tuple[GattAddress, ...]] = tuple(
-    address for address, _ in EXPERIMENTAL_RAW_FIELD_SPECS
-)
-
-
 class DimplexProtocolError(ValueError):
     """A requested GATT value or payload is invalid."""
 
@@ -123,6 +126,10 @@ class HeaterSnapshot:
     rf_firmware_revision: int | None = None
     open_window_detection: bool | None = None
     preemptive_heating: bool | None = None
+    away_active: bool | None = None
+    away_until: datetime | None = None
+    away_target_temperature_c: int | None = None
+    advance_active: bool | None = None
 
 
 def service_uuid(group: int) -> str:
@@ -164,116 +171,41 @@ def validate_raw_access(group: int, characteristic: int, *, write: bool) -> None
         raise ProtectedCharacteristicError("This characteristic is blocked for reads")
 
 
-def parse_hex_payload(value: str) -> bytes:
-    """Parse a non-empty hex payload within the ATT attribute value limit."""
-    try:
-        payload = bytes.fromhex(value)
-    except ValueError as err:
-        raise DimplexProtocolError("Payload must contain hexadecimal bytes") from err
-    if not payload:
-        raise DimplexProtocolError("Payload must not be empty")
-    if len(payload) > MAX_GATT_VALUE_BYTES:
-        raise DimplexProtocolError("Payload exceeds the 512-byte GATT value limit")
-    return payload
-
-
-def decode_known_raw_value(
-    address: GattAddress, value: bytes
-) -> dict[str, str | int | bool]:
-    """Decode only payload layouts established by the protocol evidence."""
-    decoded: dict[str, str | int | bool] = {}
-
-    if address == (0, 0x0006) and len(value) == 7:
-        century, year, month, day, hour, minute, flag = value
-        try:
-            decoded["clock"] = datetime(
-                century * 100 + year,
-                month,
-                day,
-                hour,
-                minute,
-            ).isoformat(timespec="minutes")
-        except ValueError:
-            pass
-        decoded["clock_flag"] = flag
-    elif address == (1, 0x0001) and len(value) == 4:
-        decoded["backlight_selector"] = value[0]
-        decoded["backlight_rgb"] = f"#{value[1]:02x}{value[2]:02x}{value[3]:02x}"
-    elif address == (1, 0x0007) and len(value) == 1:
-        decoded["last_key_code"] = value[0]
-    elif address == (0, 0x100D) and len(value) == 1 and value[0] in (0, 1):
-        decoded["advance_active"] = bool(value[0])
-    elif address == (0, 0x1028) and len(value) == 2:
-        decoded["runback_setpoint_c"] = int.from_bytes(value, "little")
-    elif address == (0, 0x102A) and len(value) == 7:
-        active, year, month, day, minute, hour, temperature = value
-        decoded["away_active"] = bool(active)
-        decoded["away_target_temperature_c"] = temperature
-        try:
-            decoded["away_until"] = datetime(
-                2000 + year,
-                month,
-                day,
-                hour,
-                minute,
-            ).isoformat(timespec="minutes")
-        except ValueError:
-            pass
-
-    return decoded
-
-
-def format_known_raw_value(address: GattAddress, value: bytes) -> str | None:
-    """Return a human-readable value only for an established payload layout."""
-    decoded = decode_known_raw_value(address, value)
-    if not decoded:
+def parse_away_mode(
+    value: bytes | None,
+) -> tuple[bool, datetime | None, int] | None:
+    """Parse the verified Away Mode payload."""
+    if value is None or len(value) != AWAY_MODE_PAYLOAD_LENGTH:
         return None
-    if address == (0, 0x0006):
-        clock = decoded.get("clock")
-        flag = decoded.get("clock_flag")
-        return f"{clock} (flag {flag})" if clock is not None else f"flag {flag}"
-    if address == (1, 0x0001):
-        return f"{decoded['backlight_rgb']} (selector {decoded['backlight_selector']})"
-    if address == (1, 0x0007):
-        return f"key code {decoded['last_key_code']}"
-    if address == (0, 0x100D):
-        return "on" if decoded["advance_active"] else "off"
-    if address == (0, 0x1028):
-        return f"{decoded['runback_setpoint_c']} °C"
-    if address == (0, 0x102A):
-        status = "on" if decoded["away_active"] else "off"
-        target = decoded["away_target_temperature_c"]
-        until = decoded.get("away_until")
-        suffix = f", until {until}" if until is not None else ""
-        return f"{status}, target {target} °C{suffix}"
-    return None
+    active, year, month, day, minute, hour, temperature = value
+    try:
+        until = datetime(2000 + year, month, day, hour, minute)
+    except ValueError:
+        until = None
+    return bool(active), until, temperature
 
 
-def format_readonly_raw_value(address: GattAddress, value: bytes) -> str | None:
-    """Format only conservative or explicitly marked read-only guesses."""
-    known = format_known_raw_value(address, value)
-    if known is not None:
-        return known
-    if address == (3, 0x1029) and len(value) == 3:
-        return f"#{value[0]:02x}{value[1]:02x}{value[2]:02x}"
-    if address == (1, 0x1010) and len(value) == 1:
-        return f"EOL test code {value[0]}"
-    if address in {(1, 0x1020), (1, 0x300E), (2, 0x100C)} and len(value) == 1:
-        if value[0] in (0, 1):
-            return "on" if value[0] else "off"
-    if address == (3, 0x200C) and len(value) == 6 and value[0] == 0x14:
-        try:
-            timestamp = datetime(
-                value[0] * 100 + value[1],
-                value[2],
-                value[3],
-                value[4],
-                value[5],
-            )
-        except ValueError:
-            return None
-        return f"{timestamp.isoformat(timespec='minutes')} (possible build timestamp)"
-    return None
+def encode_away_mode(
+    active: bool,
+    until: datetime,
+    target_temperature_c: int = 7,
+) -> bytes:
+    """Encode the verified Away Mode payload."""
+    if not 2000 <= until.year <= 2255:
+        raise DimplexProtocolError("Away Mode year is outside the encodable range")
+    if not 0 <= target_temperature_c <= 0xFF:
+        raise DimplexProtocolError("Away Mode target is outside the encodable range")
+    return bytes(
+        (
+            int(active),
+            until.year - 2000,
+            until.month,
+            until.day,
+            until.minute,
+            until.hour,
+            target_temperature_c,
+        )
+    )
 
 
 def encode_setpoint(temperature_c: float) -> bytes:
@@ -287,26 +219,62 @@ def encode_setpoint(temperature_c: float) -> bytes:
 
 
 _HEATING_MODE_NAMES: Final[dict[int, str]] = {
-    HEATING_MODE_TIMER: "Timer Mode",
-    HEATING_MODE_MANUAL: "Manual",
-    HEATING_MODE_ECO: "Eco Mode",
-    HEATING_MODE_FROST_PROTECT: "Frost Protect",
+    HEATING_MODE_TIMER: "timer",
+    HEATING_MODE_MANUAL: "manual",
+    HEATING_MODE_ECO: "eco",
+    HEATING_MODE_FROST_PROTECT: "frost_protect",
 }
 _TIMER_SUBMODE_NAMES: Final[dict[int, str]] = {
-    0x01: "Out All Day",
-    0x02: "Home All Day",
-    TIMER_SUBMODE_USER_TIMER: "User Timer",
-    0x05: "Away",
+    TIMER_SUBMODE_OUT: PRESET_OUT_ALL_DAY,
+    TIMER_SUBMODE_HOME: PRESET_HOME_ALL_DAY,
+    TIMER_SUBMODE_USER_TIMER: PRESET_USER_TIMER,
+    TIMER_SUBMODE_AWAY: PRESET_AWAY,
 }
+# Timer profiles: Advance only works while one of them runs (PLXE manual p. 17).
+TIMER_MODE_KEYS: Final = frozenset(
+    {"timer", PRESET_USER_TIMER, PRESET_HOME_ALL_DAY, PRESET_OUT_ALL_DAY}
+)
+# Every value heating_mode_key() can return: the operating-mode sensor options.
+HEATING_MODE_KEYS: Final = (
+    PRESET_USER_TIMER,
+    PRESET_HOME_ALL_DAY,
+    PRESET_OUT_ALL_DAY,
+    PRESET_AWAY,
+    "timer",
+    PRESET_MANUAL,
+    "eco",
+    PRESET_FROST_PROTECT,
+)
 
 _PRESET_MODE_CODES: Final[dict[str, int]] = {
     PRESET_MANUAL: HEATING_MODE_MANUAL,
+    PRESET_USER_TIMER: HEATING_MODE_TIMER,
     "eco": HEATING_MODE_ECO,
     PRESET_FROST_PROTECT: HEATING_MODE_FROST_PROTECT,
 }
 _PRESET_MODES_BY_CODE: Final[dict[int, str]] = {
     code: preset for preset, code in _PRESET_MODE_CODES.items()
 }
+
+
+# Error codes with a documented meaning: 0 read live as "no error" on the
+# PLX050E (docs/capability-matrix.md); the others are the fault codes of the
+# PLXE Series C manual, Issue 7, PDF p. 26 (docs/dimplex-manual-research.md).
+# Any other code is shown as its number.
+DOCUMENTED_ERROR_CODES: Final = frozenset(
+    {0, 20, 21, 22, 23, 24, 30, 32, 33, 34, 40, 41, 50, 52, 53, 54, 55, 60, 61}
+)
+
+
+def error_code_state(code: int | None) -> str | None:
+    """Return the translatable state of an error code, else ``Code N``."""
+    if code is None:
+        return None
+    if code == 0:
+        return "no_error"
+    if code in DOCUMENTED_ERROR_CODES:
+        return f"code_{code}"
+    return f"Code {code}"
 
 
 def parse_heating_mode_code(value: bytes | None) -> int | None:
@@ -316,29 +284,58 @@ def parse_heating_mode_code(value: bytes | None) -> int | None:
     return value[0]
 
 
-def format_heating_mode(value: bytes | None) -> str | None:
-    """Return the documented heating mode, or None for an unknown payload."""
+def heating_mode_key(value: bytes | None) -> str | None:
+    """Return the documented heating mode key, or None for an unknown payload."""
     mode_code = parse_heating_mode_code(value)
     if mode_code is None:
         return None
-    mode = _HEATING_MODE_NAMES[mode_code]
     if mode_code == HEATING_MODE_TIMER and value is not None and len(value) > 1:
         submode = _TIMER_SUBMODE_NAMES.get(value[1])
         if submode is not None:
-            return f"{mode} ({submode})"
-    return mode
+            return submode
+    return _HEATING_MODE_NAMES[mode_code]
+
+
+def parse_model(value: str | None) -> str | None:
+    """Return a readable model from the HeaterType string, e.g. ``PLX050E;C;``.
+
+    INFERENCE: the single letter after the model is the product series
+    ("PLX050E;C;" is sold as "PLX050E Series C"; docs/dimplex-manual-research.md
+    matches this identity to the PLXE Series C manual). Dimplex does not
+    document the field format.
+    """
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(";") if part.strip()]
+    if not parts:
+        return None
+    if len(parts) == 2 and len(parts[1]) == 1 and parts[1].isalpha():
+        return f"{parts[0]} Series {parts[1].upper()}"
+    return " ".join(parts)
+
+
+def encode_timer_mode(submode: int) -> bytes:
+    """Encode a verified timer-mode selection."""
+    if submode not in _TIMER_SUBMODE_NAMES:
+        raise DimplexProtocolError("Unsupported timer submode")
+    return bytes((HEATING_MODE_TIMER, submode, 0, 0, 0, 0))
 
 
 def encode_heating_mode(mode_code: int) -> bytes:
     """Encode a verified operating-mode command."""
     if mode_code not in _HEATING_MODE_NAMES:
         raise DimplexProtocolError("Unsupported heating mode")
-    timer_submode = TIMER_SUBMODE_USER_TIMER if mode_code == HEATING_MODE_TIMER else 0
-    return bytes((mode_code, timer_submode, 0, 0, 0, 0))
+    if mode_code == HEATING_MODE_TIMER:
+        return encode_timer_mode(TIMER_SUBMODE_USER_TIMER)
+    return bytes((mode_code, 0, 0, 0, 0, 0))
 
 
 def encode_preset_mode(preset: str) -> bytes:
     """Encode a verified panel-heater preset command."""
+    if preset == PRESET_HOME_ALL_DAY:
+        return encode_timer_mode(TIMER_SUBMODE_HOME)
+    if preset == PRESET_OUT_ALL_DAY:
+        return encode_timer_mode(TIMER_SUBMODE_OUT)
     try:
         code = _PRESET_MODE_CODES[preset]
     except KeyError as err:
@@ -366,6 +363,58 @@ def parse_sound_enabled(value: bytes | None) -> bool | None:
 def encode_sound(enabled: bool) -> bytes:
     """Encode the verified three-byte Sound setting."""
     return bytes((int(enabled), 0, 0))
+
+
+def parse_advance(value: bytes | None) -> bool | None:
+    """Decode AdvanceHeating: ``Off=0``/``On=1``; boost variants are unknown."""
+    if value is None or len(value) != 1 or value[0] not in (0, 1):
+        return None
+    return bool(value[0])
+
+
+def encode_advance(active: bool) -> bytes:
+    """Encode AdvanceHeating ``On=1``/``Off=0``; the boost variants are not used."""
+    return bytes((int(active),))
+
+
+def parse_setback(value: bytes | None) -> bool | None:
+    """Decode whether Setback is on from ``[IsActive, Temperature]``."""
+    if value is None or len(value) != SETBACK_PAYLOAD_LENGTH or value[0] not in (0, 1):
+        return None
+    return bool(value[0])
+
+
+def encode_setback(active: bool, current: bytes | None) -> bytes:
+    """Switch Setback, keeping the heater's own Setback temperature byte.
+
+    The temperature byte's scale is unverified, so it is never generated.
+    """
+    if parse_setback(current) is None:
+        raise DimplexProtocolError("The current Setback value is unknown")
+    assert current is not None  # checked by parse_setback()
+    return bytes((int(active), current[1]))
+
+
+def parse_temperature_offset(value: bytes | None) -> float | None:
+    """Decode the SpConfig room-temperature offset (signed tenths of degC).
+
+    ConfigR: a byte up to 100 is ``+b/10``, any larger byte is ``(b - 256)/10``.
+    """
+    if value is None or len(value) != 1:
+        return None
+    raw = value[0]
+    return (raw if raw <= 100 else raw - 256) / 10
+
+
+def encode_temperature_offset(offset_c: float) -> bytes:
+    """Encode a room-temperature offset in 0.1 degC steps within the safe limit."""
+    value = float(offset_c)
+    if not isfinite(value) or abs(value) > TEMPERATURE_OFFSET_LIMIT_C:
+        raise DimplexProtocolError("Offset is outside the supported range")
+    tenths = round(value * 10)
+    if abs(value * 10 - tenths) > 1e-6:
+        raise DimplexProtocolError("Offset must use 0.1 degC steps")
+    return bytes((tenths % 256,))
 
 
 def _parse_selected_temperature(value: bytes | None, selector: int) -> float | None:
@@ -421,7 +470,7 @@ def parse_snapshot(
     if setpoint_c == 0:
         setpoint_c = None
 
-    limits = values.get((0, 0x1006))
+    limits = values.get(SETPOINT_RANGE)
     minimum_temperature_c: int | None = None
     maximum_temperature_c: int | None = None
     if limits is not None and len(limits) >= 4:
@@ -455,6 +504,11 @@ def parse_snapshot(
         if preemptive is not None and len(preemptive) == 1 and preemptive[0] in (0, 1)
         else None
     )
+    away_mode = parse_away_mode(values.get(AWAY_MODE))
+    away_active = away_mode[0] if away_mode is not None else None
+    away_until = away_mode[1] if away_mode is not None else None
+    away_target_temperature_c = away_mode[2] if away_mode is not None else None
+    advance_active = parse_advance(values.get(ADVANCE_HEATING))
 
     power_loading = values.get((3, 0x000A))
     rated_power_w = (
@@ -493,4 +547,8 @@ def parse_snapshot(
         rf_firmware_revision=rf_firmware_revision,
         open_window_detection=open_window_detection,
         preemptive_heating=preemptive_heating,
+        away_active=away_active,
+        away_until=away_until,
+        away_target_temperature_c=away_target_temperature_c,
+        advance_active=advance_active,
     )

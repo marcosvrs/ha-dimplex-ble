@@ -1,0 +1,54 @@
+# ESPHome BLE proxy + Dimplex PIN responder package (stock YAML, no external components).
+substitutions:
+  name: living-room-bluetooth-proxy
+  friendly_name: Living Room Bluetooth Proxy
+
+packages:
+  # dimplex_pin_responder.yaml must be in the same folder as this file.
+  dimplex_pin_responder: !include dimplex_pin_responder.yaml
+  # Pinned to the esphome/bluetooth-proxies commit that main pointed to on
+  # 2026-11-09 (previously "@main"); no tag exists for ESPHome 2026.11.
+  esphome.bluetooth-proxy: "github://esphome/bluetooth-proxies/esp32-generic/esp32-generic-s3.yaml@da95a91b1c1d691736df5e676f1d2a3324f28bc4"
+
+esphome:
+  name: ${name}
+  name_add_mac_suffix: false
+  friendly_name: ${friendly_name}
+
+esp32:
+  framework:
+    type: esp-idf
+    # No framework pin: use ESPHome >= 2026.11.0 and its default framework
+    # (ESP-IDF 5.5.6 with ESPHome's bond-key wrap). Older ESPHome with IDF
+    # 5.5.6 lacks the bond-key fix.
+    sdkconfig_options:
+      CONFIG_BT_BLE_RPA_SUPPORTED: "n"
+
+api:
+  encryption:
+    key: !secret living_room_api_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# DEBUG is for investigating problems; for normal use set the level to INFO
+# and drop the per-tag "logs" overrides.
+logger:
+  level: DEBUG
+  logs:
+    esp32_ble: DEBUG
+    esp32_ble_client: DEBUG
+    ble_client: DEBUG
+    bluetooth_proxy: DEBUG
+    esp-idf: DEBUG
+
+esp32_ble:
+  io_capability: keyboard_only
+  auth_req_mode: sc_mitm_bond
+  # bluetooth_proxy connection_slots (3) + 1 dimplex_pin_client responder
+  max_connections: 4
+
+bluetooth_proxy:
+  active: true
+  connection_slots: 3

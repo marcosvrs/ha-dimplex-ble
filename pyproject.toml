@@ -16,6 +16,7 @@ source_paths = ["custom_components/dimplex_ble"]
 pytest_add_cli_args_test_selection = ["tests"]
 cache_invalidation_files = ["tests/*.py"]
 use_setproctitle = false
+process_isolation = "forkserver"
 on_dependency_change = "rerun"
 
 [tool.ruff]

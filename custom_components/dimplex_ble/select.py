@@ -8,14 +8,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .client import DimplexError
 from .const import DOMAIN
 from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
-from .exceptions import to_homeassistant_error
+from .protocol import GattAddress
 
 PARALLEL_UPDATES = 1
 DISPLAY_UNIT_OPTIONS = ["celsius", "fahrenheit"]
+DISPLAY_UNIT: GattAddress = (0, 0x1005)
 
 
 async def async_setup_entry(
@@ -31,6 +31,7 @@ class DimplexDisplayUnitSelect(DimplexEntity, SelectEntity):
     """Read and write the panel heater's display temperature unit."""
 
     _attr_translation_key = "temperature_unit"
+    _unique_suffix = "temperature_unit"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = DISPLAY_UNIT_OPTIONS
 
@@ -49,12 +50,6 @@ class DimplexDisplayUnitSelect(DimplexEntity, SelectEntity):
                 translation_domain=DOMAIN,
                 translation_key="invalid_temperature_unit",
             )
-        try:
-            await self._client.async_write_raw(
-                0,
-                0x1005,
-                bytes((DISPLAY_UNIT_OPTIONS.index(option),)),
-            )
-            await self.coordinator.async_request_refresh()
-        except DimplexError as err:
-            raise to_homeassistant_error(err) from err
+        await self.coordinator.async_write(
+            DISPLAY_UNIT, bytes((DISPLAY_UNIT_OPTIONS.index(option),))
+        )

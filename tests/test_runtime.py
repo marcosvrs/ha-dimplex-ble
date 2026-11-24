@@ -1,2110 +1,484 @@
+"""Entry lifecycle, coordinator, diagnostics and services against a fake proxy."""
+
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import asdict
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import probatio
 import pytest
-from homeassistant.components.bluetooth import BluetoothScanningMode
-from homeassistant.components.climate import ClimateEntityFeature, HVACAction, HVACMode
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import (
-    EVENT_HOMEASSISTANT_STOP,
-    PERCENTAGE,
-    EntityCategory,
-    UnitOfTemperature,
-)
-from homeassistant.exceptions import (
-    ConfigEntryNotReady,
-    HomeAssistantError,
-    ServiceValidationError,
-)
+from conftest import ADDRESS, PIN, PROXY, FakeProxy, pair_failure
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import EVENT_CALL_SERVICE, EVENT_HOMEASSISTANT_STOP
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from custom_components.dimplex_ble import (
-    _any_discovery_flow_in_progress,
-    _discovery_flow_in_progress,
-    async_remove_config_entry_device,
-    async_setup,
-    async_setup_entry,
-    async_unload,
-    async_unload_entry,
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
 )
-from custom_components.dimplex_ble import climate as climate_platform
-from custom_components.dimplex_ble import select as select_platform
-from custom_components.dimplex_ble import sensor as sensor_platform
-from custom_components.dimplex_ble import services as integration_services
-from custom_components.dimplex_ble.climate import DimplexClimate
+
+from custom_components.dimplex_ble import async_remove_config_entry_device
 from custom_components.dimplex_ble.const import (
-    CLIENTS,
     CONF_ADDRESS,
-    CONF_ADDRESS_TYPE,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
     DOMAIN,
-    PENDING_DEVICES,
-    PLATFORMS,
+    UNIQUE_ID_SUFFIXES,
+    UNVERIFIED_LEGACY_SUFFIXES,
 )
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.diagnostics import (
     async_get_config_entry_diagnostics,
 )
-from custom_components.dimplex_ble.protocol import HeaterSnapshot
-from custom_components.dimplex_ble.select import DimplexDisplayUnitSelect
-from custom_components.dimplex_ble.sensor import (
-    EXPERIMENTAL_READ_ONLY_FIELDS,
-    DimplexCalculatedPowerSensor,
-    DimplexErrorCodeSensor,
-    DimplexExperimentalRawSensor,
-    DimplexLcdTemperatureSensor,
-    DimplexOperatingModeSensor,
-    DimplexOutputPowerSensor,
-    DimplexRatedPowerSensor,
-)
+from custom_components.dimplex_ble.errors import HeaterAuthError
 
-ADDRESS = "AA:BB:CC:DD:EE:20"
-PROXY = "esphome-proxy"
+# The climate entity uses the native_* climate API of HA 2026.11; the pinned test
+# harness (HA 2026.10) cannot add it, so availability is observed on the select.
+UNIT = "select.dimplex_panel_heater_am6532_display_temperature_unit"
 
 
-@pytest.fixture(autouse=True)
-def mock_entry_bluetooth_callback_registration(monkeypatch):
-    """Keep entry setup tests independent of the live Bluetooth manager."""
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        Mock(return_value=Mock()),
-    )
+pytestmark = pytest.mark.usefixtures("skip_dependencies")
 
 
-def snapshot(
-    *,
-    model="QRAD100E",
-    setpoint=21,
-    minimum=5,
-    maximum=30,
-    current=19.5,
-    error=48879,
-    error_hex="efbe",
-    mode_hex="0201",
-    unit=0,
-    rated_power=None,
-    power_loading_hex=None,
-    lcd_temperature=None,
-    trac_status_hex=None,
-    heating_active=None,
-    trac_output_power_percent=None,
-    product_code=None,
-    ui_version=None,
-    rf_firmware_revision=None,
-):
-    return HeaterSnapshot(
-        model=model,
-        setpoint_c=setpoint,
-        minimum_temperature_c=minimum,
-        maximum_temperature_c=maximum,
-        current_temperature_c=current,
-        error_code=error,
-        error_status_hex=error_hex,
-        operating_mode_hex=mode_hex,
-        display_unit=unit,
-        rated_power_w=rated_power,
-        power_loading_hex=power_loading_hex,
-        lcd_temperature_c=lcd_temperature,
-        trac_status_hex=trac_status_hex,
-        heating_active=heating_active,
-        trac_output_power_percent=trac_output_power_percent,
-        product_code=product_code,
-        ui_version=ui_version,
-        rf_firmware_revision=rf_firmware_revision,
-    )
-
-
-def make_coordinator(hass, *, data=None, client=None, entry=None):
-    config_entry = entry or MockConfigEntry(
+def make_entry(hass, **data) -> MockConfigEntry:
+    entry = MockConfigEntry(
         domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+        title="Dimplex Panel Heater AM6532",
+        unique_id=ADDRESS.lower(),
+        # Entries created before the refactor stored a lower-case address and
+        # an address_type; both must keep working without a migration.
+        data={
+            CONF_ADDRESS: ADDRESS.lower(),
+            CONF_PROXY_SOURCE: PROXY,
+            CONF_PASSKEY: PIN,
+            "address_type": 0,
+            **data,
+        },
     )
-    client = client or SimpleNamespace(
-        address=ADDRESS, async_read_raw_fields=AsyncMock(return_value={})
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def setup(hass, entry) -> bool:
+    result = await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return result
+
+
+def reauth_flows(hass) -> list:
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"]["source"] == SOURCE_REAUTH
+    ]
+
+
+async def test_setup_polls_through_the_pinned_proxy(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    service_calls = []
+    hass.bus.async_listen(EVENT_CALL_SERVICE, service_calls.append)
+
+    assert await setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.states.get(UNIT).state == "celsius"
+    assert hass.states.get("switch.dimplex_panel_heater_am6532_sound").state == "on"
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, ADDRESS.lower()), entry.entry_id
     )
-    if not hasattr(client, "address"):
-        client.address = ADDRESS
-    coordinator = DimplexCoordinator(hass, config_entry, client)
-    coordinator.data = data
-    return config_entry, coordinator
-
-def test_advertisement_does_not_refresh_healthy_coordinator(hass):
-    _, coordinator = make_coordinator(hass)
-    coordinator.async_request_refresh = AsyncMock()
-
-    coordinator.async_handle_advertisement(SimpleNamespace(), None)
-
-    coordinator.async_request_refresh.assert_not_awaited()
+    assert device is not None and device.model == "QRAD100E"
+    # Every advertisement, not only changed ones: a released heater re-sends
+    # identical data.
+    assert [address for _, address in fake_bt.callbacks] == [ADDRESS]
+    # The PIN goes through the proxy's API client, never through a service call.
+    assert ("dimplex_pin_arm", {"address": ADDRESS, "passkey": 12345}) in (
+        proxy.actions
+    )
+    assert service_calls == []
 
 
-async def test_advertisement_refreshes_unavailable_coordinator(hass):
-    _, coordinator = make_coordinator(hass)
-    coordinator.last_update_success = False
-    coordinator.async_request_refresh = AsyncMock()
+async def test_setup_removes_only_entities_the_integration_no_longer_creates(
+    hass, fake_bt, caplog
+) -> None:
+    """Orphans of earlier versions go; current unique_ids (frozen) stay."""
+    fake_bt.add()
+    entry = make_entry(hass)
+    other = MockConfigEntry(domain=DOMAIN, unique_id="other")
+    other.add_to_hass(hass)
+    registry = er.async_get(hass)
+    mac = ADDRESS.lower()
+    kept = {
+        "switch": f"{mac}_preemptive_heating",
+        "light": f"{mac}_pre_emptive_heating",  # unverified legacy: left alone
+        "sensor": f"{mac}_operating_mode_raw",
+        "select": f"{mac}_temperature_unit",
+        "number": f"{mac}_temperature_offset",
+    }
+    for domain, unique_id in kept.items():
+        registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=entry)
+    orphans = [
+        registry.async_get_or_create(
+            platform, DOMAIN, f"{mac}_{suffix}", config_entry=entry
+        ).entity_id
+        for platform, suffix in (
+            ("sensor", "raw_readonly_3_1022"),
+            ("text", "raw_0_1002"),
+            ("sensor", "temperature_units"),
+            ("number", "minimum_temperature"),
+            ("number", "maximum_temperature"),
+        )
+    ]
+    foreign = registry.async_get_or_create(
+        "sensor", DOMAIN, f"{mac}_raw_readonly_1_0007", config_entry=other
+    ).entity_id
+    caplog.set_level(logging.DEBUG, "custom_components.dimplex_ble")
 
-    coordinator.async_handle_advertisement(SimpleNamespace(), None)
+    assert await setup(hass, entry)
+
+    for entity_id in orphans:
+        assert registry.async_get(entity_id) is None
+    assert registry.async_get(foreign) is not None  # another entry's entity
+    for domain, unique_id in kept.items():
+        assert registry.async_get_entity_id(domain, DOMAIN, unique_id) is not None
+    assert "Removed 5 orphaned entities" in caplog.text
+    assert {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    } <= {
+        f"{mac}_{suffix}" for suffix in UNIQUE_ID_SUFFIXES | UNVERIFIED_LEGACY_SUFFIXES
+    }
+
+
+async def test_unavailable_heater_retries_setup_without_connecting(
+    hass, fake_bt
+) -> None:
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+
+    await setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert proxy.events == []
+
+
+async def test_rejected_pin_at_setup_starts_reauth(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    proxy.pair_errors = [pair_failure(81)]
+    entry = make_entry(hass)
+
+    await setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert len(reauth_flows(hass)) == 1
+
+
+async def test_runtime_rejection_starts_reauth_and_stops_polling(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.clients[0].is_connected = False
+    proxy.pair_errors = [pair_failure(81)]
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done()
+    pairings = proxy.events.count("pair_start")
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
     await hass.async_block_till_done()
 
-    coordinator.async_request_refresh.assert_awaited_once()
+    assert len(reauth_flows(hass)) == 1
+    assert hass.states.get(UNIT).state == "unavailable"
+    assert proxy.events.count("pair_start") == pairings
+    # Advertisements must not restart pairing with the rejected PIN either.
+    fake_bt.advertise(PROXY)
+    await hass.async_block_till_done()
+    assert proxy.events.count("pair_start") == pairings
 
 
-async def test_rule_setup_registers_services_and_passive_discovery(hass, monkeypatch):
-    register = Mock(return_value=lambda: None)
-    setup_services = Mock()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        register,
+async def test_transient_failure_recovers_on_the_next_poll(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.clients[0].is_connected = False
+    proxy.pair_errors = [pair_failure(99)]
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done()
+    assert hass.states.get(UNIT).state == "unavailable"
+    assert reauth_flows(hass) == []
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=22))
+    await hass.async_block_till_done()
+    assert hass.states.get(UNIT).state == "celsius"
+
+
+async def test_advertisement_on_the_pinned_proxy_refreshes_an_unavailable_heater(
+    hass, fake_bt
+) -> None:
+    proxy = fake_bt.add()
+    other = fake_bt.add(FakeProxy("14:C1:9F:22:4C:DA"))
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    coordinator: DimplexCoordinator = entry.runtime_data
+    proxy.clients[0].is_connected = False
+    proxy.sees_heater = False
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done()
+    assert hass.states.get(UNIT).state == "unavailable"  # ROUTE_NOT_SEEN
+    refreshes = []
+    request_refresh = coordinator.async_request_refresh
+
+    async def counted_refresh() -> None:
+        refreshes.append(None)
+        await request_refresh()
+
+    coordinator.async_request_refresh = counted_refresh
+
+    fake_bt.advertise(other.source)
+    await hass.async_block_till_done()
+    assert refreshes == []
+
+    # The heater re-advertises identical data on the pinned proxy.
+    fake_bt.advertise(PROXY)
+    await hass.async_block_till_done()
+    assert len(refreshes) == 1
+    assert hass.states.get(UNIT).state == "celsius"
+
+    fake_bt.advertise(PROXY)  # available again: no refresh storm
+    await hass.async_block_till_done()
+    assert len(refreshes) == 1
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert fake_bt.callbacks == []
+
+
+async def test_command_rejection_starts_reauth(hass, fake_bt) -> None:
+    fake_bt.add()
+    entry = make_entry(hass)
+    link = SimpleNamespace(
+        address=ADDRESS,
+        source=PROXY,
+        async_write=AsyncMock(side_effect=HeaterAuthError()),
     )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.async_setup_services", setup_services
-    )
-    assert await async_setup(hass, {}) is True
-    setup_services.assert_called_once_with(hass)
-    assert register.call_args.args[0] is hass
-    assert register.call_args.args[2] == {"connectable": True}
-    from homeassistant.components.bluetooth import BluetoothScanningMode
+    coordinator = DimplexCoordinator(hass, entry, link)
 
-    assert register.call_args.args[3] is BluetoothScanningMode.PASSIVE
-    assert hass.data[DOMAIN]["cancel_discovery"] is register.return_value
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_write((0, 0x1005), b"\x01")
+
+    assert err.value.translation_key == "reauth_required"
+    await hass.async_block_till_done()
+    assert len(reauth_flows(hass)) == 1
 
 
-async def test_rule_homeassistant_stop_closes_persistent_clients(hass, monkeypatch):
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        Mock(return_value=Mock()),
-    )
-    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
-    await async_setup(hass, {})
+async def test_unload_waits_for_in_flight_pairing_then_closes_once(
+    hass, fake_bt
+) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.clients[0].is_connected = False
+    proxy.pair_gate = hass.loop.create_future()
+    poll = hass.async_create_task(entry.runtime_data.async_refresh())
+    await asyncio.sleep(0)
+    assert proxy.events[-1] == "pair_start"
 
-    client = SimpleNamespace(async_shutdown=AsyncMock())
-    hass.data[DOMAIN][CLIENTS].append(client)
+    unload = hass.async_create_task(hass.config_entries.async_unload(entry.entry_id))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert proxy.events[-1] == "pair_start"
+
+    proxy.pair_gate.set_result(None)
+    await poll
+    assert await unload
+    assert proxy.events[-1] == "disconnect"
+    assert proxy.events.count("disconnect") == 2  # the stale link, then the close
+    assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_home_assistant_stop_closes_the_link(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
 
-    client.async_shutdown.assert_awaited_once()
-
-def test_discovery_flow_in_progress_matches_only_address_and_preserves_filter(
-    hass, monkeypatch
-):
-    progress = Mock()
-    monkeypatch.setattr(
-        hass.config_entries.flow,
-        "async_progress_by_handler",
-        progress,
-    )
-    progress.return_value = [{"context": {"unique_id": ADDRESS}}]
-    assert _discovery_flow_in_progress(hass, ADDRESS.lower()) is True
-    progress.assert_called_once_with(DOMAIN, include_uninitialized=True)
-
-    progress.reset_mock()
-    progress.return_value = [{"context": {"unique_id": "AA:BB:CC:DD:EE:99"}}]
-    assert _discovery_flow_in_progress(hass, ADDRESS) is False
-
-    progress.return_value = [{"context": {}}]
-    assert _discovery_flow_in_progress(hass, ADDRESS) is False
-
-def test_any_discovery_flow_in_progress_blocks_other_heaters(hass, monkeypatch):
-    progress = Mock(return_value=[{"context": {}}])
-    monkeypatch.setattr(
-        hass.config_entries.flow,
-        "async_progress_by_handler",
-        progress,
-    )
-
-    assert _any_discovery_flow_in_progress(hass) is True
-    progress.assert_called_once_with(DOMAIN, include_uninitialized=True)
-
-    progress.return_value = []
-    assert _any_discovery_flow_in_progress(hass) is False
-
-async def test_rule_advertisement_callback_queues_matching_and_ignores_nonmatching(
-    hass, monkeypatch
-):
-    register = Mock(return_value=Mock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback", register
-    )
-    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
-    queued = []
-
-    def capture_task(coroutine):
-        queued.append(coroutine)
-        coroutine.close()
-
-    monkeypatch.setattr(hass, "async_create_task", capture_task)
-    await async_setup(hass, {})
-    discovered = register.call_args.args[1]
-    info = SimpleNamespace(
-        name=None,
-        device=SimpleNamespace(address="aa:bb:cc:dd:ee:21", name="heater<Dimplex>"),
-    )
-    discovered(info, None)
-    discovered(info, None)
-    discovered(
-        SimpleNamespace(name="Other", device=SimpleNamespace(address=ADDRESS)),
-        None,
-    )
-    assert len(queued) == 1
-    assert hass.data[DOMAIN]["cancel_discovery"] is register.return_value
+    assert proxy.events[-1] == "disconnect"
 
 
-async def test_rule_advertisement_reloads_retrying_entry(hass, monkeypatch):
-    register = Mock(return_value=Mock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback", register
-    )
-    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
-    entry = SimpleNamespace(
-        unique_id=ADDRESS,
-        state=ConfigEntryState.SETUP_RETRY,
-        entry_id="entry-id",
-    )
-    monkeypatch.setattr(
-        hass.config_entries, "async_entries", Mock(return_value=[entry])
-    )
-    reload_entry = Mock()
-    monkeypatch.setattr(
-        hass.config_entries, "async_schedule_reload", reload_entry
-    )
+async def test_sound_is_read_on_its_own_slow_schedule(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    coordinator: DimplexCoordinator = entry.runtime_data
+    reads = proxy.events.count(("read", "00000005-0000-1000-8000-00805f9b34fb"))
+    proxy.values[(2, 0x0005)] = b"\x00\x00\x00"
 
-    await async_setup(hass, {})
-    discovered = register.call_args.args[1]
-    discovered(
-        SimpleNamespace(
-            name="heater<Dimplex>",
-            device=SimpleNamespace(address=ADDRESS, name=None),
-        ),
-        None,
-    )
-
-    reload_entry.assert_called_once_with("entry-id")
-
-
-async def test_rule_advertisement_flow_is_executed_and_manifest_names_are_skipped(
-    hass, monkeypatch
-):
-    register = Mock(return_value=Mock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback", register
-    )
-    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
-    flow_init = AsyncMock(return_value={"type": "abort"})
-    monkeypatch.setattr(hass.config_entries.flow, "async_init", flow_init)
-    await async_setup(hass, {})
-    discovered = register.call_args.args[1]
-
-    discovered(
-        SimpleNamespace(
-            name="heater<Dimplex>",
-            device=SimpleNamespace(address=ADDRESS, name=None),
-        ),
-        None,
-    )
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=5, seconds=1))
     await hass.async_block_till_done()
-    flow_init.assert_awaited_once_with(
-        DOMAIN,
-        context={"source": "bluetooth"},
-        data=SimpleNamespace(
-            name="heater<Dimplex>",
-            device=SimpleNamespace(address=ADDRESS, name=None),
+
+    assert proxy.events.count(("read", "00000005-0000-1000-8000-00805f9b34fb")) > reads
+    assert coordinator.sound_value == b"\x00\x00\x00"
+
+
+async def test_sound_read_failures_and_skips(hass) -> None:
+    entry = make_entry(hass)
+    link = SimpleNamespace(
+        address=ADDRESS,
+        source=PROXY,
+        keep_connected=True,
+        async_read=AsyncMock(
+            side_effect=[HeaterAuthError(), b"\x07\x00\x00", None, None]
         ),
     )
-    assert hass.data[DOMAIN]["pending_discovery"] == set()
-
-    discovered(
-        SimpleNamespace(
-            name="AL1234",
-            device=SimpleNamespace(address="aa:bb:cc:dd:ee:21", name=None),
-        ),
-        None,
-    )
-    assert flow_init.await_count == 1
-
-
-async def test_rule_advertisement_callback_ignores_configured_heater(hass, monkeypatch):
-    register = Mock(return_value=Mock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback", register
-    )
-    monkeypatch.setattr("custom_components.dimplex_ble.async_setup_services", Mock())
-    queued = []
-
-    def capture_task(coroutine):
-        queued.append(coroutine)
-        coroutine.close()
-
-    monkeypatch.setattr(hass, "async_create_task", capture_task)
-    configured = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="AA:BB:CC:DD:EE:22",
-        data={CONF_ADDRESS: "AA:BB:CC:DD:EE:22", CONF_PROXY_SOURCE: PROXY},
-    )
-    configured.add_to_hass(hass)
-    await async_setup(hass, {})
-    discovered = register.call_args.args[1]
-    discovered(
-        SimpleNamespace(
-            name="heater<Dimplex>",
-            device=SimpleNamespace(address="aa:bb:cc:dd:ee:22", name=None),
-        ),
-        None,
-    )
-    assert queued == []
-
-
-async def test_rule_platform_setup_exposes_expected_entities(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot())
-    entry = MockConfigEntry(domain=DOMAIN)
-    entry.runtime_data = coordinator
-    added = {}
-
-    def collect(platform):
-        def add(entities):
-            added[platform] = entities
-
-        return add
-
-    await climate_platform.async_setup_entry(hass, entry, collect("climate"))
-    await select_platform.async_setup_entry(hass, entry, collect("select"))
-    await sensor_platform.async_setup_entry(hass, entry, collect("sensor"))
-    assert len(added["climate"]) == 1
-    assert isinstance(added["climate"][0], DimplexClimate)
-    assert len(added["select"]) == 1
-    assert isinstance(added["select"][0], DimplexDisplayUnitSelect)
-    assert [type(entity) for entity in added["sensor"][:6]] == [
-        DimplexErrorCodeSensor,
-        DimplexOperatingModeSensor,
-        DimplexRatedPowerSensor,
-        DimplexLcdTemperatureSensor,
-        DimplexOutputPowerSensor,
-        DimplexCalculatedPowerSensor,
-    ]
-    assert len(added["sensor"]) == 6 + len(EXPERIMENTAL_READ_ONLY_FIELDS)
-    assert all(
-        isinstance(entity, DimplexExperimentalRawSensor)
-        for entity in added["sensor"][6:]
-    )
-
-
-async def test_experimental_sensor_setup_does_not_read_ble_directly(hass):
-    _, coordinator = make_coordinator(hass)
-    entry = MockConfigEntry(domain=DOMAIN)
-    entry.runtime_data = coordinator
-    added = []
-
-    await sensor_platform.async_setup_entry(hass, entry, added.extend)
-
-    assert len(added) == 6 + len(EXPERIMENTAL_READ_ONLY_FIELDS)
-
-
-async def test_experimental_read_only_sensor_preserves_raw_value(hass):
-    raw_read = AsyncMock()
-    _, coordinator = make_coordinator(
-        hass,
-        client=SimpleNamespace(address=ADDRESS, async_read_raw_fields=raw_read),
-    )
-    coordinator.raw_fields.update(
-        {(1, 0x0007): b"\x06", (3, 0x000B): b"\x01\x02"}
-    )
-    entry = MockConfigEntry(domain=DOMAIN)
-    entry.runtime_data = coordinator
-    added = []
-
-    await sensor_platform.async_setup_entry(hass, entry, added.extend)
-
-    entity = next(
-        entity
-        for entity in added
-        if isinstance(entity, DimplexExperimentalRawSensor)
-        and entity._field.address == (3, 0x000B)
-    )
-    assert entity.native_value == "0102"
-    assert entity.extra_state_attributes == {
-        "service_group": 3,
-        "characteristic": 0x000B,
-        "raw_bytes": 2,
-        "raw_value": "0102",
-    }
-    assert not hasattr(entity, "async_set_value")
-
-    key_entity = next(
-        entity
-        for entity in added
-        if isinstance(entity, DimplexExperimentalRawSensor)
-        and entity._field.address == (1, 0x0007)
-    )
-    assert key_entity.native_value == "key code 6"
-    assert key_entity.extra_state_attributes["last_key_code"] == 6
-    assert key_entity.extra_state_attributes["decoded_value"] == "key code 6"
-
-    empty_entity = DimplexExperimentalRawSensor(
-        coordinator, EXPERIMENTAL_READ_ONLY_FIELDS[0], None
-    )
-    assert empty_entity.native_value == "key code 6"
-    assert (
-        empty_entity._attr_translation_key
-        == EXPERIMENTAL_READ_ONLY_FIELDS[0].translation_key
-    )
-    raw_read.assert_not_awaited()
-
-
-def test_experimental_raw_sensor_uses_initial_value_or_none(hass):
-    _, coordinator = make_coordinator(hass)
-    field = next(
-        field for field in EXPERIMENTAL_READ_ONLY_FIELDS if field.address == (3, 0x200F)
-    )
-
-    initial = DimplexExperimentalRawSensor(coordinator, field, b"\xaa")
-    empty = DimplexExperimentalRawSensor(coordinator, field, None)
-
-    assert initial.native_value == "aa"
-    assert empty.native_value is None
-
-
-async def test_rule_setup_entry_registers_device_before_first_refresh(
-    hass, monkeypatch
-):
-    """The create-entry UI can offer the standard device name and area step."""
-    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient",
-        Mock(return_value=client),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=object()),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-
-    async def first_refresh(_coordinator: DimplexCoordinator) -> None:
-        device = dr.async_get(hass).async_get_device_by_identifier(
-            (DOMAIN, ADDRESS.casefold()), entry.entry_id
-        )
-        assert device is not None
-        assert entry.entry_id in device.config_entries
-
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    entry.add_to_hass(hass)
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
-    await async_setup_entry(hass, entry)
-
-
-async def test_rule_setup_entry_retries_if_heater_is_offline(hass, monkeypatch):
-    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    captured_device = object()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=captured_device),
-    )
-    first_refresh = AsyncMock(side_effect=ConfigEntryNotReady)
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    forwarded = AsyncMock()
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forwarded)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    await async_setup_entry(hass, entry)
-    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, captured_device)
-    first_refresh.assert_awaited_once()
-    assert entry.runtime_data.client is client
-    assert entry.runtime_data.hass is hass
-    assert entry.runtime_data.config_entry is entry
-    client.async_shutdown.assert_not_awaited()
-    forwarded.assert_awaited_once_with(entry, PLATFORMS)
-
-
-
-async def test_rule_setup_failure_tolerates_client_without_shutdown(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(address=ADDRESS)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient",
-        Mock(return_value=client),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=object()),
-    )
-    monkeypatch.setattr(
-        DimplexCoordinator,
-        "async_config_entry_first_refresh",
-        AsyncMock(side_effect=ConfigEntryNotReady),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    forwarded = AsyncMock()
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forwarded)
-    await async_setup_entry(hass, entry)
-    forwarded.assert_awaited_once_with(entry, PLATFORMS)
-
-async def test_rule_setup_forwarding_failure_cleans_up_client(hass, monkeypatch):
-    """A platform setup failure must release the client and callback."""
-    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient",
-        Mock(return_value=client),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=object()),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        Mock(return_value=Mock()),
-    )
-    monkeypatch.setattr(
-        DimplexCoordinator,
-        "async_config_entry_first_refresh",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
-        hass.config_entries,
-        "async_forward_entry_setups",
-        AsyncMock(side_effect=RuntimeError("platform setup failed")),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-
-    with pytest.raises(RuntimeError, match="platform setup failed"):
-        await async_setup_entry(hass, entry)
-
-    client.async_shutdown.assert_awaited_once()
-    assert client not in hass.data[DOMAIN][CLIENTS]
-
-async def test_coordinator_shutdown_cancels_refresh_before_client_close(
-    hass, monkeypatch
-):
-    """Stop coordinator refreshes before releasing the BLE client."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.add_to_hass(hass)
-    client = SimpleNamespace(async_shutdown=AsyncMock())
-    coordinator = DimplexCoordinator(hass, entry, client)
-    parent_shutdown = AsyncMock()
-    monkeypatch.setattr(
-        "homeassistant.helpers.update_coordinator.DataUpdateCoordinator.async_shutdown",
-        parent_shutdown,
-    )
-
-    await coordinator.async_shutdown()
-
-    parent_shutdown.assert_awaited_once_with()
-    client.async_shutdown.assert_awaited_once_with()
-
-async def test_rule_setup_entry_uses_default_address_type_when_route_is_missing(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    def find_device(actual_hass, actual_address, actual_proxy):
-        assert actual_hass is hass
-        assert actual_address == ADDRESS
-        assert actual_proxy == PROXY
-        return None
-
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source", find_device
-    )
-    active_scan = AsyncMock()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_request_active_scan",
-        active_scan,
-    )
-    first_refresh = AsyncMock()
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    forwarded = AsyncMock()
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forwarded)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-        },
-    )
-
-    await async_setup_entry(hass, entry)
-
-    active_scan.assert_awaited_once_with(hass, duration=5.0)
-    assert client_factory.call_args.args[:3] == (hass, ADDRESS, PROXY)
-    assert client_factory.call_args.args[3].details["address_type"] == 0
-    assert client_factory.call_args.args[3].address == ADDRESS
-    assert client_factory.call_args.args[3].details == {
-        "source": PROXY,
-        "address_type": 0,
-    }
-    first_refresh.assert_awaited_once()
-    forwarded.assert_awaited_once_with(entry, PLATFORMS)
-
-
-async def test_rule_setup_entry_refreshes_when_heater_reappears(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(address=ADDRESS, async_shutdown=AsyncMock())
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient",
-        Mock(return_value=client),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(return_value=object()),
-    )
-    first_refresh = AsyncMock()
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    forward = AsyncMock()
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forward)
-    refresh = AsyncMock()
-    monkeypatch.setattr(DimplexCoordinator, "async_request_refresh", refresh)
-    cancel = Mock()
-    register = Mock(return_value=cancel)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        register,
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-
-    await async_setup_entry(hass, entry)
-    entry.runtime_data.last_update_success = False
-
-    register.assert_called_once()
-    assert register.call_args.args[2] == {
-        "address": ADDRESS.casefold(),
-        "connectable": True,
-    }
-    assert register.call_args.args[3] is BluetoothScanningMode.ACTIVE
-    register.call_args.args[1](SimpleNamespace(), None)
-    await hass.async_block_till_done()
-    refresh.assert_awaited_once()
-
-    monkeypatch.setattr(
-        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
-    )
-    assert await async_unload_entry(hass, entry) is True
-    cancel.assert_called_once()
-
-
-async def test_rule_setup_entry_uses_device_found_after_active_scan(hass, monkeypatch):
-    client = SimpleNamespace(address=ADDRESS)
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    discovered_device = SimpleNamespace(address=ADDRESS, details={"source": PROXY})
-    find_device = Mock(side_effect=[None, discovered_device])
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source", find_device
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_request_active_scan",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", AsyncMock()
-    )
-    monkeypatch.setattr(
-        hass.config_entries, "async_forward_entry_setups", AsyncMock()
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-
-    await async_setup_entry(hass, entry)
-
-    assert hass.data[DOMAIN][CLIENTS] == [client]
-    assert client_factory.call_args.args[3] is discovered_device
-
-
-async def test_rule_setup_entry_forwards_platforms_after_first_refresh(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(address=ADDRESS)
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    captured_device = object()
-    find_device = Mock(return_value=captured_device)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source", find_device
-    )
-    first_refresh = AsyncMock()
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    forwarded = AsyncMock()
-    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forwarded)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    await async_setup_entry(hass, entry)
-    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, captured_device)
-    find_device.assert_called_once_with(hass, ADDRESS, PROXY)
-    first_refresh.assert_awaited_once()
-    forwarded.assert_awaited_once_with(entry, PLATFORMS)
-
-
-async def test_rule_setup_entry_reuses_pending_discovery_device(hass, monkeypatch):
-    pending_device = object()
-    client = SimpleNamespace(address=ADDRESS)
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    find_device = Mock()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source", find_device
-    )
-    first_refresh = AsyncMock()
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", first_refresh
-    )
-    monkeypatch.setattr(
-        hass.config_entries, "async_forward_entry_setups", AsyncMock()
-    )
-    hass.data[DOMAIN] = {PENDING_DEVICES: {ADDRESS: pending_device}}
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-
-    await async_setup_entry(hass, entry)
-
-    find_device.assert_not_called()
-    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, pending_device)
-    assert hass.data[DOMAIN][PENDING_DEVICES] == {}
-    first_refresh.assert_awaited_once()
-
-
-async def test_rule_setup_entry_does_not_fabricate_device_for_invalid_address_type(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(address=ADDRESS)
-    client_factory = Mock(return_value=client)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.DimplexBluetoothClient", client_factory
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.ble_device_from_source",
-        Mock(side_effect=[None, None]),
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_request_active_scan",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
-        DimplexCoordinator, "async_config_entry_first_refresh", AsyncMock()
-    )
-    monkeypatch.setattr(
-        hass.config_entries, "async_forward_entry_setups", AsyncMock()
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-            CONF_ADDRESS_TYPE: "random",
-        },
-    )
-
-    await async_setup_entry(hass, entry)
-
-    client_factory.assert_called_once_with(hass, ADDRESS, PROXY, None)
-
-async def test_rule_config_entry_unload_and_integration_discovery_unload(
-    hass, monkeypatch
-):
-    unload_platforms = AsyncMock(return_value=True)
-    monkeypatch.setattr(hass.config_entries, "async_unload_platforms", unload_platforms)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    client = SimpleNamespace()
-    hass.data[DOMAIN] = {CLIENTS: [client]}
-    entry.runtime_data = SimpleNamespace(client=client, async_shutdown=AsyncMock())
-    assert await async_unload_entry(hass, entry) is True
-    assert hass.data[DOMAIN][CLIENTS] == []
-    unload_platforms.assert_awaited_once_with(entry, PLATFORMS)
-
-    cancel = Mock()
-    hass.data[DOMAIN] = {"cancel_discovery": cancel, "pending_discovery": {ADDRESS}}
-    assert await async_unload(hass) is True
-    cancel.assert_called_once_with()
-    assert "cancel_discovery" not in hass.data[DOMAIN]
-    assert "pending_discovery" not in hass.data[DOMAIN]
-    assert await async_unload(hass) is True
-    assert await async_unload(hass) is True
-
-    hass.data.pop(DOMAIN)
-    assert await async_unload(hass) is True
-
-
-@pytest.mark.parametrize("present, expected", [(True, False), (False, True)])
-async def test_rule_device_removal_only_allowed_when_heater_is_absent(
-    hass, monkeypatch, present, expected
-):
-    address_present = Mock(return_value=present)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_address_present",
-        address_present,
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN, data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY}
-    )
-    assert await async_remove_config_entry_device(hass, entry, object()) is expected
-    address_present.assert_called_once_with(hass, ADDRESS, connectable=True)
-
-
-async def test_rule_coordinator_returns_snapshot_and_wraps_connection_failures(hass):
-    client = SimpleNamespace(async_read_snapshot=AsyncMock(return_value=snapshot()))
-    entry, coordinator = make_coordinator(hass, client=client)
-    assert coordinator.config_entry is entry
-    assert coordinator.hass is hass
-    assert coordinator.client is client
-    assert coordinator.name == DOMAIN
-    assert coordinator.update_interval.total_seconds() == 10
-    assert coordinator.always_update is False
-    await coordinator.async_refresh()
-    assert coordinator.data == snapshot()
-
-
-async def test_rule_coordinator_polls_experimental_fields(hass):
-    from custom_components.dimplex_ble.protocol import EXPERIMENTAL_RAW_FIELDS
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(return_value=snapshot()),
-        async_read_raw_fields=AsyncMock(return_value={(0, 0x100D): b"\x01"}),
-        async_shutdown=AsyncMock(),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    await coordinator._async_update_data()
-
-    client.async_read_raw_fields.assert_awaited_once_with(EXPERIMENTAL_RAW_FIELDS[:3])
-    assert client.async_shutdown.await_count == 0
-    assert coordinator.raw_fields == {(0, 0x100D): b"\x01"}
-    await coordinator._async_update_data()
-    assert client.async_read_raw_fields.await_args_list[1].args == (
-        EXPERIMENTAL_RAW_FIELDS[3:6],
-    )
-
-
-async def test_rule_coordinator_rejects_invalid_saved_passkey(hass):
-    from custom_components.dimplex_ble.client import DimplexAuthenticationError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexAuthenticationError("authentication required")
-        )
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-            CONF_PASSKEY: "invalid",
-        },
-    )
-    _, coordinator = make_coordinator(hass, client=client, entry=entry)
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-
-
-async def test_rule_coordinator_handles_failed_automatic_repair(hass, monkeypatch):
-    from custom_components.dimplex_ble.client import DimplexAuthenticationError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexAuthenticationError("authentication required")
-        ),
-        async_pair=AsyncMock(),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-            CONF_PASSKEY: "123456",
-        },
-    )
-    _, coordinator = make_coordinator(hass, client=client, entry=entry)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.coordinator.async_pair_with_passkey",
-        AsyncMock(side_effect=RuntimeError),
-    )
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-    assert await coordinator._async_repair_authentication() is False
-
-
-async def test_rule_coordinator_ignores_failed_optional_reads(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(return_value=snapshot()),
-        async_read_raw_fields=AsyncMock(
-            side_effect=DimplexConnectionError("optional read failed")
-        ),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    assert await coordinator._async_update_data() == snapshot()
-    assert coordinator.raw_fields == {}
-
-
-async def test_rule_coordinator_reports_failed_retry(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexConnectionError("connection failed")
-        ),
-        async_retry_connection=AsyncMock(
-            side_effect=DimplexConnectionError("retry failed")
-        ),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-
-
-async def test_rule_coordinator_preserves_auth_failure_after_repair_read_failure(
-    hass, monkeypatch
-):
-    from custom_components.dimplex_ble.client import (
-        DimplexAuthenticationError,
-        DimplexConnectionError,
-    )
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=[
-                DimplexAuthenticationError("authentication required"),
-                DimplexConnectionError("repaired read failed"),
-            ]
-        ),
-        async_pair=AsyncMock(),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-            CONF_PASSKEY: "123456",
-        },
-    )
-    _, coordinator = make_coordinator(hass, client=client, entry=entry)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.coordinator.async_pair_with_passkey",
-        AsyncMock(),
-    )
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-
-async def test_rule_coordinator_shutdown_closes_client(hass):
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(return_value=snapshot()),
-        async_shutdown=AsyncMock(),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-    await coordinator.async_shutdown()
-    client.async_shutdown.assert_awaited_once()
-
-
-async def test_rule_coordinator_unavailable_update_is_retryable(hass, caplog):
-    caplog.set_level(logging.INFO, logger="custom_components.dimplex_ble.coordinator")
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexConnectionError("proxy unavailable")
-        )
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-    for _ in range(2):
-        await coordinator.async_refresh()
-        assert coordinator.last_update_success is False
-    assert client.async_read_snapshot.await_count == 2
-    with pytest.raises(UpdateFailed) as err:
-        await coordinator._async_update_data()
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "cannot_connect"
-    assert isinstance(err.value.__cause__, DimplexConnectionError)
-    client.async_read_snapshot.side_effect = None
-    client.async_read_snapshot.return_value = snapshot()
-    await coordinator.async_refresh()
-    messages = [record.getMessage() for record in caplog.records]
-    assert sum("Error fetching dimplex_ble data" in message for message in messages) == 1
-    assert sum("Fetching dimplex_ble data recovered" in message for message in messages) == 1
-
-async def test_rule_coordinator_retries_after_connection_drop(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexConnectionError("peer disconnected")
-        ),
-        async_retry_connection=AsyncMock(return_value=snapshot()),
-        async_shutdown=AsyncMock(),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    assert await coordinator._async_update_data() == snapshot()
-    client.async_retry_connection.assert_awaited_once()
-    client.async_shutdown.assert_not_awaited()
-
-
-async def test_rule_coordinator_delays_reauth_for_recoverable_auth_failures(hass):
-    from homeassistant.exceptions import ConfigEntryAuthFailed
-
-    from custom_components.dimplex_ble.client import DimplexAuthenticationError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=DimplexAuthenticationError("authentication required")
-        )
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-    with pytest.raises(ConfigEntryAuthFailed) as err:
-        await coordinator._async_update_data()
-
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "authentication_failed"
-    assert client.async_read_snapshot.await_count == 3
-async def test_rule_coordinator_repairs_a_lost_bond_with_saved_passkey(
-    hass, monkeypatch
-):
-    from custom_components.dimplex_ble.client import DimplexAuthenticationError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=[DimplexAuthenticationError("authentication required"), snapshot()]
-        ),
-        async_pair=AsyncMock(),
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Dimplex Heater 1",
-        data={
-            CONF_ADDRESS: ADDRESS,
-            CONF_PROXY_SOURCE: PROXY,
-            CONF_PASSKEY: "123456",
-        },
-    )
-    _, coordinator = make_coordinator(hass, client=client, entry=entry)
-    repair = AsyncMock()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.coordinator.async_pair_with_passkey",
-        repair,
-    )
-
-    assert await coordinator._async_update_data() == snapshot()
-
-    repair.assert_awaited_once_with(
-        hass,
-        PROXY,
-        ADDRESS,
-        "123456",
-        client.async_pair,
-        repair_timeout=30.0,
-    )
-    assert client.async_read_snapshot.await_count == 2
-    assert coordinator._authentication_failures == 0
-
-
-
-async def test_rule_coordinator_recovers_on_next_poll_after_auth_failure(hass):
-    from custom_components.dimplex_ble.client import DimplexAuthenticationError
-
-    client = SimpleNamespace(
-        async_read_snapshot=AsyncMock(
-            side_effect=[
-                DimplexAuthenticationError("authentication required"),
-                snapshot(),
-            ]
-        )
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-    assert await coordinator._async_update_data() == snapshot()
-    assert coordinator._authentication_failures == 0
-
-
-def test_rule_entity_device_identity_is_stable_and_does_not_expose_proxy(hass):
-    _, coordinator = make_coordinator(
-        hass,
-        data=snapshot(
-            product_code="EP4213",
-            ui_version="1.7",
-            rf_firmware_revision=5,
-        ),
-    )
-    entity = DimplexClimate(coordinator)
-    assert entity.unique_id == "aa:bb:cc:dd:ee:20_heater"
-    assert entity.device_info["identifiers"] == {(DOMAIN, "aa:bb:cc:dd:ee:20")}
-    assert entity.device_info["connections"] == {("bluetooth", "aa:bb:cc:dd:ee:20")}
-    assert entity.device_info["name"] == "Dimplex Heater 1"
-    assert entity.device_info["model"] == "QRAD100E"
-    assert entity.device_info["model_id"] == "EP4213"
-    assert entity.device_info["sw_version"] == "UI 1.7 / RF 5"
-    assert PROXY not in str(entity.device_info)
-
-
-def test_rule_device_model_is_unknown_before_the_first_poll(hass):
-    _, coordinator = make_coordinator(hass)
-    entity = DimplexClimate(coordinator)
-    assert entity.device_info["name"] == "Dimplex Heater 1"
-    assert entity.device_info["model"] is None
-
-
-
-def test_rule_climate_uses_ha_temperature_limits_without_reported_snapshot(hass):
-    _, coordinator = make_coordinator(hass)
-    entity = DimplexClimate(coordinator)
-    assert entity.native_current_temperature is None
-    assert entity.native_target_temperature is None
-    assert entity.min_temp == 7.0
-    assert entity.max_temp == 35.0
-
-
-
-
-async def test_rule_climate_translates_protocol_rejections(hass):
-    from custom_components.dimplex_ble.protocol import DimplexProtocolError
-
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(
-            side_effect=DimplexProtocolError("bad value")
-        )
-    )
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
-    assert err.value.translation_key == "invalid_gatt_request"
-
-
-
-def test_rule_error_sensor_omits_raw_bytes_when_unreported(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot(error_hex=None))
-    sensor = DimplexErrorCodeSensor(coordinator)
-    assert sensor.native_value == 48879
-    assert sensor.extra_state_attributes is None
-
-
-
-@pytest.mark.parametrize(
-    ("service_name", "error", "translation_key"),
-    [
-        ("read_gatt", "protected", "protected_characteristic"),
-        ("read_gatt", "protocol", "invalid_gatt_request"),
-        ("write_gatt", "protected", "protected_characteristic"),
-        ("write_gatt", "protocol", "invalid_gatt_request"),
-    ],
-)
-async def test_rule_raw_access_translates_protocol_rejections(
-    hass, monkeypatch, service_name, error, translation_key
-):
-    from custom_components.dimplex_ble.protocol import (
-        DimplexProtocolError,
-        ProtectedCharacteristicError,
-    )
-
-    error_type = (
-        ProtectedCharacteristicError
-        if error == "protected"
-        else DimplexProtocolError
-    )
-    client = SimpleNamespace(
-        async_read_raw=AsyncMock(side_effect=error_type("rejected")),
-        async_write_raw=AsyncMock(side_effect=error_type("rejected")),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    args = {"device_id": "registry-device", "service_group": 0, "characteristic": 1}
-    if service_name == "write_gatt":
-        args["payload"] = "01"
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN, service_name, args, blocking=True, return_response=True
-        )
-    assert err.value.translation_key == translation_key
-
-
-def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot())
-    entity = DimplexClimate(coordinator)
-    assert entity.available is True
-    assert entity.hvac_mode == HVACMode.HEAT
-    assert entity.hvac_modes == [HVACMode.HEAT, HVACMode.AUTO]
-    assert entity.native_temperature_unit == UnitOfTemperature.CELSIUS
-    assert entity.target_temperature_step == 1
-    assert entity.precision == 1
-    assert entity.supported_features == (
-        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
-    )
-    assert entity.preset_modes == ["manual", "eco", "frost_protect"]
-    assert entity.preset_mode == "manual"
-    assert entity.native_current_temperature == 19.5
-    assert entity.native_target_temperature == 21.0
-    assert entity.min_temp == 5.0
-    assert entity.max_temp == 30.0
-
-
-@pytest.mark.parametrize(
-    ("heating_active", "expected"),
-    [(True, HVACAction.HEATING), (False, HVACAction.IDLE), (None, None)],
-)
-def test_rule_climate_reports_only_directly_reported_hvac_action(
-    hass, heating_active, expected
-):
-    _, coordinator = make_coordinator(
-        hass, data=snapshot(heating_active=heating_active)
-    )
-    assert DimplexClimate(coordinator).hvac_action == expected
-
-
-def test_rule_diagnostic_sensors_expose_lcd_temperature_and_output_power(
-    hass,
-):
-    _, coordinator = make_coordinator(
-        hass,
-        data=snapshot(
-            rated_power=500,
-            lcd_temperature=29.0,
-            trac_status_hex="010164",
-            trac_output_power_percent=100,
-        ),
-    )
-    lcd_sensor = DimplexLcdTemperatureSensor(coordinator)
-    output_sensor = DimplexOutputPowerSensor(coordinator)
-    power_sensor = DimplexCalculatedPowerSensor(coordinator)
-    assert lcd_sensor.native_value == 29.0
-    assert lcd_sensor.device_class == "temperature"
-    assert lcd_sensor.native_unit_of_measurement == UnitOfTemperature.CELSIUS
-    assert lcd_sensor.entity_category == EntityCategory.DIAGNOSTIC
-    assert lcd_sensor.entity_registry_enabled_default is False
-    assert output_sensor.native_value == 100
-    assert output_sensor.extra_state_attributes == {"trac_raw": "010164"}
-    assert output_sensor.native_unit_of_measurement == PERCENTAGE
-    assert output_sensor.state_class == "measurement"
-    assert output_sensor.entity_category == EntityCategory.DIAGNOSTIC
-    assert output_sensor.entity_registry_enabled_default is False
-    assert power_sensor.native_value == 500
-    assert power_sensor.device_class == "power"
-    assert power_sensor.native_unit_of_measurement == "W"
-    assert power_sensor.state_class == "measurement"
-    assert power_sensor.entity_category is None
-
-
-
-@pytest.mark.parametrize(
-    ("mode_hex", "expected", "expected_hvac_mode"),
-    [
-        ("010300000000", None, HVACMode.AUTO),
-        ("020000000000", "manual", HVACMode.HEAT),
-        ("030000000000", "eco", HVACMode.HEAT),
-        ("040000000000", "frost_protect", HVACMode.HEAT),
-    ],
-)
-def test_rule_climate_reports_verified_modes(
-    hass, mode_hex, expected, expected_hvac_mode
-):
-    _, coordinator = make_coordinator(hass, data=snapshot(mode_hex=mode_hex))
-    entity = DimplexClimate(coordinator)
-    assert entity.preset_modes == ["manual", "eco", "frost_protect"]
-    assert entity.hvac_mode == expected_hvac_mode
-    assert entity.preset_mode == expected
-
-
-
-async def test_rule_climate_writes_verified_hvac_modes(hass) -> None:
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01\x03"))
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    coordinator.async_request_refresh = AsyncMock()
-
-    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.AUTO)
-
-    assert client.async_write_raw.await_args.args == (
-        0,
-        0x1001,
-        b"\x01\x03\x00\x00\x00\x00",
-    )
-    coordinator.async_request_refresh.assert_awaited_once()
-
-
-async def test_rule_climate_rejects_unsupported_hvac_mode(hass) -> None:
-    client = SimpleNamespace(async_write_raw=AsyncMock())
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.COOL)
-
-    assert err.value.translation_key == "invalid_hvac_mode"
-    client.async_write_raw.assert_not_awaited()
-
-
-async def test_rule_climate_does_not_rewrite_current_hvac_mode(hass) -> None:
-    client = SimpleNamespace(async_write_raw=AsyncMock())
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-
-    await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.HEAT)
-
-    client.async_write_raw.assert_not_awaited()
-
-
-async def test_rule_climate_translates_hvac_mode_write_failures(hass) -> None:
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    failure = DimplexConnectionError("offline")
-    client = SimpleNamespace(async_write_raw=AsyncMock(side_effect=failure))
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-
-    with pytest.raises(HomeAssistantError) as err:
-        await DimplexClimate(coordinator).async_set_hvac_mode(HVACMode.AUTO)
-
-    assert err.value.translation_key == "cannot_connect"
-    assert err.value.__cause__ is failure
-
-
-async def test_rule_climate_changes_auto_to_manual_before_setting_temperature(
-    hass,
-) -> None:
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(
-            side_effect=[b"\x02\x00\x00\x00\x00\x00", b"\x16\x00"]
-        )
-    )
-    _, coordinator = make_coordinator(
-        hass, data=snapshot(mode_hex="010300000000"), client=client
-    )
-    coordinator.async_request_refresh = AsyncMock()
-
-    await DimplexClimate(coordinator).async_set_temperature(
-        temperature=22, hvac_mode=HVACMode.HEAT
-    )
-
-    assert client.async_write_raw.await_args_list[0].args == (
-        0,
-        0x1001,
-        b"\x02\x00\x00\x00\x00\x00",
-    )
-    assert client.async_write_raw.await_args_list[1].args == (
-        0,
-        0x1023,
-        b"\x16\x00",
-    )
-
-
-async def test_rule_climate_rejects_temperature_in_auto(hass) -> None:
-    client = SimpleNamespace(async_write_raw=AsyncMock())
-    _, coordinator = make_coordinator(
-        hass, data=snapshot(mode_hex="010300000000"), client=client
-    )
-
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
-
-    assert err.value.translation_key == "temperature_not_allowed_in_auto"
-    client.async_write_raw.assert_not_awaited()
-
-    _, heat_coordinator = make_coordinator(
-        hass, data=snapshot(mode_hex="020000000000"), client=client
-    )
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(heat_coordinator).async_set_temperature(
-            temperature=22, hvac_mode=HVACMode.COOL
-        )
-    assert err.value.translation_key == "invalid_hvac_mode"
-
-
-def test_rule_climate_ignores_malformed_reported_modes(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot(mode_hex="not-hex"))
-    entity = DimplexClimate(coordinator)
-    assert entity.hvac_mode is None
-    assert entity.preset_mode is None
-    _, unknown_coordinator = make_coordinator(
-        hass, data=snapshot(mode_hex="fe0000000000")
-    )
-    assert DimplexClimate(unknown_coordinator).hvac_mode is None
-    _, empty_coordinator = make_coordinator(hass)
-    assert DimplexClimate(empty_coordinator).preset_mode is None
-
-
-async def test_rule_climate_translates_preset_write_failures(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(side_effect=DimplexConnectionError("offline"))
-    )
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    with pytest.raises(HomeAssistantError) as err:
-        await DimplexClimate(coordinator).async_set_preset_mode("eco")
-    assert err.value.translation_key == "cannot_connect"
-    assert err.value.translation_domain == DOMAIN
-    assert isinstance(err.value.__cause__, DimplexConnectionError)
-
-
-async def test_rule_climate_translates_protocol_preset_write_failures(hass):
-    from custom_components.dimplex_ble.protocol import DimplexProtocolError
-
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(side_effect=DimplexProtocolError("invalid"))
-    )
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_preset_mode("eco")
-
-    assert err.value.translation_key == "invalid_gatt_request"
-
-async def test_rule_climate_writes_verified_preset_mode(hass):
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x03"))
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    coordinator.async_request_refresh = AsyncMock()
-
-    await DimplexClimate(coordinator).async_set_preset_mode("eco")
-
-    assert client.async_write_raw.await_args == (
-        (0, 0x1001, b"\x03\x00\x00\x00\x00\x00"),
-    )
-    coordinator.async_request_refresh.assert_awaited_once()
-
-
-async def test_rule_climate_rejects_unverified_preset_mode(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot())
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_preset_mode("boost")
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "invalid_preset"
-
-@pytest.mark.parametrize(
-    "data",
-    [None, snapshot(minimum=None), snapshot(maximum=None)],
-)
-def test_rule_climate_is_unavailable_without_snapshot_or_reported_range(hass, data):
-    _, coordinator = make_coordinator(hass, data=data)
-    assert DimplexClimate(coordinator).available is False
-
-
-async def test_rule_climate_rejects_invalid_and_unavailable_setpoints(hass):
-    _, coordinator = make_coordinator(hass, data=snapshot())
-    entity = DimplexClimate(coordinator)
-    for value in (True, "21", 20.5, float("nan"), float("inf"), 4, 31):
-        with pytest.raises(ServiceValidationError) as err:
-            await entity.async_set_temperature(temperature=value)
-        assert err.value.translation_domain == DOMAIN
-        assert err.value.translation_key == "invalid_setpoint"
-
-    with pytest.raises(ServiceValidationError) as err:
-        await entity.async_set_temperature()
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "invalid_setpoint"
-    for missing_bound in (snapshot(minimum=None), snapshot(maximum=None)):
-        coordinator.data = missing_bound
-        with pytest.raises(ServiceValidationError) as err:
-            await entity.async_set_temperature(temperature=21)
-        assert err.value.translation_domain == DOMAIN
-        assert err.value.translation_key == "setpoint_unavailable"
-    coordinator.data = None
-    with pytest.raises(ServiceValidationError) as err:
-        await entity.async_set_temperature(temperature=21)
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "setpoint_unavailable"
-
-
-async def test_rule_climate_writes_inclusive_reported_boundaries(hass):
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x16\x00"))
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    coordinator.async_request_refresh = AsyncMock()
-    entity = DimplexClimate(coordinator)
-    for temperature, payload in ((5, b"\x05\x00"), (30, b"\x1e\x00")):
-        await entity.async_set_temperature(temperature=temperature)
-        assert client.async_write_raw.await_args_list[-1].args == (0, 0x1023, payload)
-    assert client.async_write_raw.await_count == 2
-    assert coordinator.async_request_refresh.await_count == 2
-
-
-async def test_rule_climate_translates_ble_write_failures(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(
-            side_effect=DimplexConnectionError("offline")
-        )
-    )
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    with pytest.raises(HomeAssistantError) as err:
-        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
-    assert err.value.translation_key == "cannot_connect"
-    assert err.value.translation_domain == DOMAIN
-    assert isinstance(err.value.__cause__, DimplexConnectionError)
-
-
-async def test_rule_select_preserves_reported_unit_and_validates_writes(hass):
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01"))
-    _, coordinator = make_coordinator(hass, data=snapshot(unit=1), client=client)
-    coordinator.async_request_refresh = AsyncMock()
-    entity = DimplexDisplayUnitSelect(coordinator)
-    assert entity.current_option == "fahrenheit"
-    assert entity.options == ["celsius", "fahrenheit"]
-    assert entity.entity_category == EntityCategory.CONFIG
-    await entity.async_select_option("celsius")
-    client.async_write_raw.assert_awaited_once_with(0, 0x1005, b"\x00")
-    coordinator.async_request_refresh.assert_awaited_once_with()
-
-    for invalid in (None, "kelvin"):
-        with pytest.raises(ServiceValidationError) as err:
-            await entity.async_select_option(invalid)
-        assert err.value.translation_key == "invalid_temperature_unit"
-        assert err.value.translation_domain == DOMAIN
-
-
-@pytest.mark.parametrize(
-    "unit, expected",
-    [
-        (None, None),
-        (2, None),
-        (0, "celsius"),
-        (1, "fahrenheit"),
-    ],
-)
-def test_rule_select_uses_only_known_reported_units(hass, unit, expected):
-    data = snapshot(unit=unit) if unit is not None else None
-    _, coordinator = make_coordinator(hass, data=data)
-    if unit == 2:
-        coordinator.data = snapshot(unit=2)
-    assert DimplexDisplayUnitSelect(coordinator).current_option == expected
-
-
-async def test_rule_select_translates_ble_write_failures(hass):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_write_raw=AsyncMock(
-            side_effect=DimplexConnectionError("offline")
-        )
-    )
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    with pytest.raises(HomeAssistantError) as err:
-        await DimplexDisplayUnitSelect(coordinator).async_select_option("fahrenheit")
-    assert err.value.translation_key == "cannot_connect"
-    assert err.value.translation_domain == DOMAIN
-
-
-async def test_rule_select_preserves_characteristic_error_translation(hass):
-    from custom_components.dimplex_ble.client import DimplexCharacteristicError
-
-    failure = DimplexCharacteristicError("missing")
-    client = SimpleNamespace(async_write_raw=AsyncMock(side_effect=failure))
-    _, coordinator = make_coordinator(hass, data=snapshot(), client=client)
-    with pytest.raises(ServiceValidationError) as err:
-        await DimplexDisplayUnitSelect(coordinator).async_select_option("fahrenheit")
-    assert err.value.translation_domain == DOMAIN
-    assert err.value.translation_key == "characteristic_unavailable"
-    assert err.value.__cause__ is failure
-
-
-def test_rule_diagnostic_sensors_preserve_unknown_error_and_raw_mode(hass):
-    _, coordinator = make_coordinator(
-        hass,
-        data=snapshot(error=64206, error_hex="ee fa", mode_hex="fe01"),
-    )
-    error_sensor = DimplexErrorCodeSensor(coordinator)
-    mode_sensor = DimplexOperatingModeSensor(coordinator)
-    assert error_sensor.native_value == 64206
-    assert error_sensor.extra_state_attributes == {"raw_bytes": "ee fa"}
-    assert error_sensor.entity_category == EntityCategory.DIAGNOSTIC
-    assert mode_sensor.native_value == "fe01"
-    assert mode_sensor.entity_category == EntityCategory.DIAGNOSTIC
-    rated_sensor = DimplexRatedPowerSensor(
-        make_coordinator(
-            hass,
-            data=snapshot(rated_power=500, power_loading_hex="f401980800000000"),
-        )[1]
-    )
-    assert rated_sensor.native_value == 500
-    assert rated_sensor.extra_state_attributes == {
-        "power_loading_raw": "f401980800000000"
-    }
-    assert rated_sensor.device_class == "power"
-    assert rated_sensor.native_unit_of_measurement == "W"
-    assert rated_sensor.entity_category == EntityCategory.DIAGNOSTIC
-    assert rated_sensor.entity_registry_enabled_default is False
-    assert mode_sensor.entity_registry_enabled_default is False
-
-
-def test_rule_operating_mode_sensor_decodes_known_mode(hass):
-    _, coordinator = make_coordinator(
-        hass,
-        data=snapshot(mode_hex="040000000000"),
-    )
-    assert DimplexOperatingModeSensor(coordinator).native_value == "Frost Protect"
-
-
-def test_rule_diagnostic_sensors_are_empty_before_first_snapshot(hass):
-    _, coordinator = make_coordinator(hass)
-    assert DimplexErrorCodeSensor(coordinator).native_value is None
-    assert DimplexErrorCodeSensor(coordinator).extra_state_attributes is None
-    assert DimplexOperatingModeSensor(coordinator).native_value is None
-
-
-@pytest.mark.parametrize(
-    "entity_type",
-    [DimplexRatedPowerSensor, DimplexOutputPowerSensor],
-)
-def test_rule_diagnostic_sensor_raw_attributes_are_empty_without_payload(
-    hass, entity_type
-):
-    _, coordinator = make_coordinator(hass, data=snapshot())
-    assert entity_type(coordinator).extra_state_attributes is None
-
-
-@pytest.mark.parametrize(
-    "data",
-    [None, snapshot(rated_power=500), snapshot(trac_output_power_percent=100)],
-)
-def test_rule_calculated_power_requires_both_source_values(hass, data):
-    _, coordinator = make_coordinator(hass, data=data)
-    assert DimplexCalculatedPowerSensor(coordinator).native_value is None
-
-
-async def test_rule_diagnostics_redact_addresses_and_report_bond_owner_health(
-    hass, monkeypatch
-):
-    entry, coordinator = make_coordinator(
-        hass,
-        data=snapshot(),
-        entry=MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_ADDRESS: ADDRESS,
-                CONF_PROXY_SOURCE: PROXY,
-                CONF_PASSKEY: "123456",
-            },
-        ),
-    )
+    coordinator = DimplexCoordinator(hass, entry, link)
+    coordinator.sound_value = b"\x01\x00\x00"
+
+    await coordinator.async_refresh_settings()
+    await coordinator.async_refresh_settings()
     coordinator.last_update_success = False
-    entry.runtime_data = coordinator
-    find_proxy_mock = Mock(return_value=object())
-    route_mock = Mock(return_value=object())
-    passkey_mock = Mock(return_value=True)
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.find_proxy_entry",
-        find_proxy_mock,
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.ble_device_from_source",
-        route_mock,
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.proxy_supports_passkey",
-        passkey_mock,
-    )
+    await coordinator.async_refresh_settings()
+
+    assert coordinator.sound_value == b"\x01\x00\x00"
+    # A failure ends that round; the next round reads every slow setting.
+    assert link.async_read.await_count == 4
+
+
+async def test_diagnostics_redact_the_pin_and_addresses(hass, fake_bt) -> None:
+    fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
 
     result = await async_get_config_entry_diagnostics(hass, entry)
 
-    expected_snapshot = asdict(snapshot())
-    expected_snapshot["model"] = "REDACTED"
-    assert result == {
-        "entry": {"address": "REDACTED", "proxy_source": "REDACTED"},
-        "bond_owner": {
-            "configured": True,
-            "proxy_entry_loaded": True,
-            "route_available": True,
-            "passkey_relay_supported": True,
-        },
-        "coordinator": {
-            "last_update_success": False,
-            "data": expected_snapshot,
-        },
+    text = str(result)
+    for secret in (PIN, ADDRESS, ADDRESS.lower(), PROXY):
+        assert secret not in text
+    # The model is not personal data; support needs it.
+    assert result["coordinator"]["data"]["model"] == "QRAD100E"
+    # Raw payloads are kept here instead of in entity attributes.
+    assert result["coordinator"]["data"]["operating_mode_hex"] == "020000000000"
+    assert result["link"] == {
+        "route_seen": True,
+        "connected": True,
+        "mode": "persistent",
+        "responder": True,
     }
-    assert ADDRESS not in str(result)
-    find_proxy_mock.assert_called_once_with(hass, PROXY)
-    route_mock.assert_called_once_with(hass, ADDRESS, PROXY)
-    passkey_mock.assert_called_once_with(hass, PROXY)
-    assert PROXY not in str(result)
+    assert result["coordinator"]["last_exception"] is None
+    assert result["coordinator"]["data"]["setpoint_c"] == 21
 
 
-async def test_rule_diagnostics_report_missing_snapshot_without_bond_route(hass):
-    entry, coordinator = make_coordinator(
-        hass, entry=MockConfigEntry(domain=DOMAIN, data={})
-    )
-    entry.runtime_data = coordinator
+async def test_diagnostics_before_the_first_snapshot(hass, fake_bt) -> None:
+    fake_bt.add(FakeProxy(responder=False))
+    entry = make_entry(hass)
+    await setup(hass, entry)
 
     result = await async_get_config_entry_diagnostics(hass, entry)
 
-    assert result["bond_owner"] == {
-        "configured": False,
-        "proxy_entry_loaded": False,
-        "route_available": False,
-        "passkey_relay_supported": False,
-    }
     assert result["coordinator"]["data"] is None
+    assert result["coordinator"]["last_exception"] == "UpdateFailed"
+    assert result["link"]["responder"] is False
 
 
-async def test_rule_diagnostics_reject_non_string_proxy_source(hass, monkeypatch):
-    entry, coordinator = make_coordinator(
-        hass,
-        entry=MockConfigEntry(
-            domain=DOMAIN,
-            data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: 123},
-        ),
-    )
-    entry.runtime_data = coordinator
-    find_proxy_mock = Mock()
-    route_mock = Mock()
-    passkey_mock = Mock()
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.find_proxy_entry",
-        find_proxy_mock,
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.ble_device_from_source",
-        route_mock,
-    )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.diagnostics.proxy_supports_passkey",
-        passkey_mock,
+async def test_get_gatt_services_action(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, ADDRESS.lower()), entry.entry_id
     )
 
-    result = await async_get_config_entry_diagnostics(hass, entry)
-
-    assert result["bond_owner"] == {
-        "configured": False,
-        "proxy_entry_loaded": False,
-        "route_available": False,
-        "passkey_relay_supported": False,
-    }
-    find_proxy_mock.assert_not_called()
-    route_mock.assert_not_called()
-    passkey_mock.assert_not_called()
-
-
-async def test_rule_raw_gatt_services_are_response_actions(hass, monkeypatch):
-    client = SimpleNamespace(
-        async_get_gatt_services=AsyncMock(return_value=[{"uuid": "service"}])
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
     response = await hass.services.async_call(
         DOMAIN,
         "get_gatt_services",
-        {"device_id": "registry-device"},
+        {"device_id": device.id},
         blocking=True,
         return_response=True,
     )
-    assert response == {"services": [{"uuid": "service"}]}
-    client.async_get_gatt_services.assert_awaited_once_with()
+    assert response["services"][0]["uuid"] == "00000000-0003-1000-8000-00805f9b34fb"
 
-
-async def test_rule_raw_gatt_read_returns_hex_bytes(hass, monkeypatch):
-    client = SimpleNamespace(async_read_raw=AsyncMock(return_value=b"\x00\xa5\xff"))
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    response = await hass.services.async_call(
-        DOMAIN,
-        "read_gatt",
-        {"device_id": "registry-device", "service_group": 0, "characteristic": 4113},
-        blocking=True,
-        return_response=True,
-    )
-    assert response == {"service_group": 0, "characteristic": 4113, "value": "00a5ff"}
-    client.async_read_raw.assert_awaited_once_with(0, 4113)
-
-
-async def test_rule_raw_gatt_write_parses_and_returns_written_and_readback(
-    hass, monkeypatch
-):
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=b"\x01"))
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    response = await hass.services.async_call(
-        DOMAIN,
-        "write_gatt",
-        {
-            "device_id": "registry-device",
-            "service_group": 0,
-            "characteristic": 4101,
-            "payload": "01",
-        },
-        blocking=True,
-        return_response=True,
-    )
-    assert response == {
-        "service_group": 0,
-        "characteristic": 4101,
-        "written": "01",
-        "readback": "01",
-    }
-    client.async_write_raw.assert_awaited_once_with(0, 4101, b"\x01")
-
-
-async def test_rule_raw_gatt_write_allows_missing_readback(hass, monkeypatch):
-    client = SimpleNamespace(async_write_raw=AsyncMock(return_value=None))
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    response = await hass.services.async_call(
-        DOMAIN,
-        "write_gatt",
-        {
-            "device_id": "registry-device",
-            "service_group": 1,
-            "characteristic": 8,
-            "payload": "a0",
-        },
-        blocking=True,
-        return_response=True,
-    )
-    assert response["readback"] is None
-
-
-def _install_service_entry_lookup(hass, monkeypatch, entry):
-    from custom_components.dimplex_ble import services
-
-    monkeypatch.setattr(
-        services.service,
-        "async_get_device_and_config_entry",
-        lambda *_args, **_kwargs: (None, entry),
-    )
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"device_id": "dev", "service_group": 4, "characteristic": 1},
-        {"device_id": "dev", "service_group": 0, "characteristic": 65536},
-    ],
-)
-async def test_rule_raw_read_rejects_out_of_range_gatt_addresses(hass, data):
-    integration_services.async_setup_services(hass)
-    with pytest.raises(probatio.error.MultipleInvalid):
-        await hass.services.async_call(
-            DOMAIN, "read_gatt", data, blocking=True, return_response=True
-        )
-
-
-@pytest.mark.parametrize("payload", ["", "xyz", "00" * 513])
-async def test_rule_raw_write_rejects_invalid_payloads_before_io(
-    hass, monkeypatch, payload
-):
-    client = SimpleNamespace(async_write_raw=AsyncMock())
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    with pytest.raises(ServiceValidationError):
-        await hass.services.async_call(
-            DOMAIN,
-            "write_gatt",
-            {
-                "device_id": "registry-device",
-                "service_group": 0,
-                "characteristic": 1,
-                "payload": payload,
-            },
-            blocking=True,
-            return_response=True,
-        )
-    client.async_write_raw.assert_not_awaited()
-
-
-@pytest.mark.parametrize(
-    "service_name",
-    ["get_gatt_services", "read_gatt", "write_gatt"],
-)
-async def test_rule_raw_services_translate_client_failures(
-    hass, monkeypatch, service_name
-):
-    from custom_components.dimplex_ble.client import DimplexConnectionError
-
-    client = SimpleNamespace(
-        async_get_gatt_services=AsyncMock(side_effect=DimplexConnectionError("offline")),
-        async_read_raw=AsyncMock(side_effect=DimplexConnectionError("offline")),
-        async_write_raw=AsyncMock(side_effect=DimplexConnectionError("offline")),
-    )
-    _, coordinator = make_coordinator(hass, client=client)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    entry.runtime_data = coordinator
-    _install_service_entry_lookup(hass, monkeypatch, entry)
-    integration_services.async_setup_services(hass)
-    args = {"device_id": "registry-device"}
-    if service_name != "get_gatt_services":
-        args.update(service_group=0, characteristic=1)
-    if service_name == "write_gatt":
-        args["payload"] = "01"
+    proxy.clients[0].is_connected = False
+    proxy.connect_error = TimeoutError()
     with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
             DOMAIN,
-            service_name,
-            args,
+            "get_gatt_services",
+            {"device_id": device.id},
             blocking=True,
             return_response=True,
         )
     assert err.value.translation_key == "cannot_connect"
 
 
-async def test_rule_global_shutdown_isolates_client_cleanup_errors(hass, monkeypatch):
+@pytest.mark.parametrize(("present", "allowed"), [(True, False), (False, True)])
+async def test_device_removal_only_when_absent(
+    hass, monkeypatch, present, allowed
+) -> None:
+    present_mock = Mock(return_value=present)
     monkeypatch.setattr(
-        "custom_components.dimplex_ble.bluetooth.async_register_callback",
-        Mock(return_value=Mock()),
+        "homeassistant.components.bluetooth.async_address_present", present_mock
     )
-    monkeypatch.setattr(
-        "custom_components.dimplex_ble.async_setup_services", Mock()
-    )
-    await async_setup(hass, {})
-    failed = SimpleNamespace(async_shutdown=AsyncMock(side_effect=RuntimeError))
-    healthy = SimpleNamespace(async_shutdown=AsyncMock())
-    hass.data[DOMAIN][CLIENTS].extend([failed, healthy])
+    entry = make_entry(hass)
 
-    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
-    await hass.async_block_till_done()
-
-    failed.async_shutdown.assert_awaited_once()
-    healthy.async_shutdown.assert_awaited_once()
+    assert await async_remove_config_entry_device(hass, entry, Mock()) is allowed
+    present_mock.assert_called_once_with(hass, ADDRESS, connectable=True)
 
 
-async def test_rule_unload_entry_shutdowns_runtime_without_registered_client(
-    hass, monkeypatch
-):
-    monkeypatch.setattr(
-        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)
-    )
-    entry = MockConfigEntry(
+@pytest.mark.parametrize("code", [78, 80, 88])
+async def test_unconfirmed_smp_codes_at_setup_do_not_start_reauth(
+    hass, fake_bt, code
+) -> None:
+    """Only 81 is a hardware-confirmed wrong PIN (ledger H8)."""
+    proxy = fake_bt.add()
+    proxy.pair_errors = [pair_failure(code)]
+    entry = make_entry(hass)
+
+    await setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert reauth_flows(hass) == []
+
+
+async def test_esphome_connection_debug_logging_warns_once_without_the_pin(
+    hass, fake_bt, caplog, esphome_connection_logger_at_info
+) -> None:
+    fake_bt.add()
+    esphome_connection_logger_at_info.setLevel(logging.DEBUG)
+    first = make_entry(hass)
+    second = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+        title="Dimplex Panel Heater AM6533",
+        unique_id="aa:bb:cc:dd:ee:21",
+        data={
+            CONF_ADDRESS: "AA:BB:CC:DD:EE:21",
+            CONF_PROXY_SOURCE: PROXY,
+            CONF_PASSKEY: "654321",
+        },
     )
-    shutdown = AsyncMock()
-    entry.runtime_data = SimpleNamespace(client=object(), async_shutdown=shutdown)
-    hass.data[DOMAIN] = {CLIENTS: []}
+    second.add_to_hass(hass)
 
-    assert await async_unload_entry(hass, entry) is False
+    await setup(hass, first)  # sets up every entry of the integration
 
-    shutdown.assert_awaited_once()
+    assert second.state is ConfigEntryState.LOADED
 
-
-async def test_rule_unload_entry_handles_runtime_without_client(hass, monkeypatch):
-    monkeypatch.setattr(
-        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    shutdown = AsyncMock()
-    entry.runtime_data = SimpleNamespace(async_shutdown=shutdown)
-    hass.data.clear()
-
-    assert await async_unload_entry(hass, entry) is True
-    shutdown.assert_awaited_once()
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "aioesphomeapi.connection" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "PIN sent to the proxy may appear" in warnings[0]
+    assert PIN not in warnings[0] and "654321" not in warnings[0]
 
 
-async def test_rule_unload_entry_handles_missing_client_registry(hass, monkeypatch):
-    monkeypatch.setattr(
-        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
-    )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-    )
-    shutdown = AsyncMock()
-    entry.runtime_data = SimpleNamespace(client=object(), async_shutdown=shutdown)
-    hass.data.clear()
+async def test_no_pin_logging_warning_at_info(hass, fake_bt, caplog) -> None:
+    fake_bt.add()
 
-    assert await async_unload_entry(hass, entry) is True
-    shutdown.assert_awaited_once()
+    await setup(hass, make_entry(hass))
+
+    assert "aioesphomeapi.connection" not in caplog.text

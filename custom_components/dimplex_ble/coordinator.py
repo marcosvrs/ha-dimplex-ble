@@ -3,287 +3,365 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
-import time
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
-from datetime import datetime
-from typing import cast
+from collections.abc import Callable
+from datetime import datetime, timedelta
 
-from homeassistant.components.bluetooth import (
-    BluetoothChange,
-    BluetoothServiceInfoBleak,
-)
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers.update_coordinator import (
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
+from homeassistant.exceptions import ConfigEntryAuthFailed, ServiceValidationError
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
-from .client import (
-    DimplexAuthenticationError,
-    DimplexBluetoothClient,
-    DimplexConnectionError,
-    DimplexError,
-)
-from .commissioning import async_pair_with_passkey
 from .const import (
-    CONF_ADDRESS,
-    CONF_PASSKEY,
-    CONF_PROXY_SOURCE,
+    CONF_KEEP_CONNECTED,
+    DEFAULT_KEEP_CONNECTED,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
-    SOUND_UPDATE_INTERVAL,
+    POLL_INTERVAL_PER_POLL,
 )
+from .errors import DimplexError, HeaterAuthError, to_homeassistant_error
+from .link import HeaterLink
 from .protocol import (
-    EXPERIMENTAL_RAW_FIELDS,
+    AWAY_MODE,
+    AWAY_TEMPERATURE_MAX_C,
+    AWAY_TEMPERATURE_MIN_C,
+    ROOM_TEMPERATURE_OFFSET,
+    SETBACK,
     SOUND,
+    TEMPERATURE_OFFSET_LIMIT_C,
+    DimplexProtocolError,
     GattAddress,
     HeaterSnapshot,
+    encode_away_mode,
+    encode_setback,
     encode_sound,
+    encode_temperature_offset,
+    parse_setback,
     parse_sound_enabled,
+    parse_temperature_offset,
 )
+from .stall import StallMonitor
 
 _LOGGER = logging.getLogger(__name__)
-_AUTHENTICATION_FAILURE_THRESHOLD = 3
-_EXPERIMENTAL_FIELDS_PER_POLL = 3
-_AUTOMATIC_REPAIR_TIMEOUT = 30.0
-_AUTOMATIC_REPAIR_COOLDOWN = 300.0
-
 
 type DimplexConfigEntry = ConfigEntry[DimplexCoordinator]
 
+# Settings that only change when someone changes them: read on the slow
+# schedule, each with the decoder that accepts its value.
+SLOW_SETTINGS: dict[GattAddress, Callable[[bytes | None], object | None]] = {
+    SOUND: parse_sound_enabled,
+    SETBACK: parse_setback,
+    ROOM_TEMPERATURE_OFFSET: parse_temperature_offset,
+}
+
+
+def keep_connected(entry: ConfigEntry) -> bool:
+    """Return the entry's connection mode option (persistent by default)."""
+    return bool(entry.options.get(CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED))
+
 
 class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
-    """Fetch and share the latest mapped panel heater values."""
+    """Poll the heater through its link and map failures once."""
 
     config_entry: DimplexConfigEntry
 
     def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: DimplexConfigEntry,
-        client: DimplexBluetoothClient,
+        self, hass: HomeAssistant, entry: DimplexConfigEntry, link: HeaterLink
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
             _LOGGER,
             config_entry=entry,
-            name=DOMAIN,
-            update_interval=DEFAULT_UPDATE_INTERVAL,
+            name=entry.title,
+            update_interval=DEFAULT_UPDATE_INTERVAL
+            if keep_connected(entry)
+            else timedelta(seconds=POLL_INTERVAL_PER_POLL),
             always_update=False,
         )
-        self.client = client
-        self._cancel_advertisement_callback: Callable[[], None] | None = None
-        self._cancel_sound_poll: Callable[[], None] | None = None
-        self._sound_refresh_task: asyncio.Task[None] | None = None
-        self._authentication_failures = 0
-        self._automatic_repair_until = 0.0
-        self._raw_field_offset = 0
-        self.raw_fields: dict[GattAddress, bytes] = {}
-        self.sound_value: bytes | None = None
+        self.link = link
+        # Last verified raw value of each slow setting.
+        self.settings: dict[GattAddress, bytes] = {}
+        # Per-poll mode only: the settings read is due on the next poll's connection.
+        self._settings_due = True
+        # Serializes every Away check-and-write with the writes that leave Away:
+        # ANY write of the Away record makes the heater enter Away (ledger,
+        # 2026-11-24 18:44/18:48), so a stale "active" check must never write
+        # after Away was left. Never held across polls.
+        self._away_lock = asyncio.Lock()
+        self.stall = StallMonitor(
+            hass, entry.entry_id, entry.title, link.address, link.source
+        )
+        link.on_link_lost = self.stall.async_link_lost
 
-    @callback
-    def set_advertisement_callback_canceller(
-        self, cancel_callback: Callable[[], None]
-    ) -> None:
-        """Store the targeted Bluetooth advertisement callback cleanup."""
-        self._cancel_advertisement_callback = cancel_callback
+    async def _async_update_data(self) -> HeaterSnapshot:
+        """Read one snapshot; a rejected PIN starts reauth and stops polling."""
+        try:
+            if self.link.keep_connected or not self._settings_due:
+                snapshot = await self.link.async_snapshot()
+            else:
+                snapshot, settings = await self.link.async_snapshot_with_settings(
+                    tuple(SLOW_SETTINGS)
+                )
+                self._settings_due = False
+                self._apply_settings(settings)
+        except HeaterAuthError as err:
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN, translation_key=err.translation_key
+            ) from err
+        except DimplexError as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN, translation_key=err.translation_key
+            ) from err
+        self.stall.async_heard()
+        return snapshot
+
+    async def async_shutdown(self) -> None:
+        """Cancel the stall window, then stop polling."""
+        self.stall.async_stop()
+        await super().async_shutdown()
 
     @callback
     def async_handle_advertisement(
-        self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
+        self, service_info: BluetoothServiceInfoBleak
     ) -> None:
-        """Request recovery when an unavailable panel heater reappears."""
-        del service_info, change
-        if self.last_update_success:
+        """Refresh at once when the pinned proxy sees an unavailable heater again.
+
+        Registered for every advertisement: a released heater re-sends identical
+        data, which change-driven callbacks never report. Any scanner hearing it
+        also proves the heater's radio has not stalled.
+        """
+        self.stall.async_heard()
+        if (
+            self.last_update_success
+            or service_info.source != self.link.source
+            or isinstance(self.last_exception, ConfigEntryAuthFailed)
+        ):
             return
+        # The native debouncer coalesces bursts of advertisements.
         self.hass.async_create_task(self.async_request_refresh())
 
-    @callback
-    def async_start_sound_polling(self) -> None:
-        """Start the low-frequency sound-setting refresh."""
-        if self._cancel_sound_poll is None:
-            self._cancel_sound_poll = async_track_time_interval(
-                self.hass,
-                self._async_schedule_sound_refresh,
-                SOUND_UPDATE_INTERVAL,
-            )
-        self._async_schedule_sound_refresh(None)
-
-    @callback
-    def _async_schedule_sound_refresh(self, now: datetime | None) -> None:
-        """Schedule one sound read without adding it to the main poll."""
-        del now
-        if self._sound_refresh_task is None or self._sound_refresh_task.done():
-            self._sound_refresh_task = self.hass.async_create_task(
-                self.async_refresh_sound()
-            )
-
-    async def async_refresh_sound(self) -> None:
-        """Read the sound setting on its independent slow schedule."""
-        read_raw_fields = getattr(self.client, "async_read_raw_fields", None)
-        if read_raw_fields is None:
-            return
+    async def async_write(
+        self, address: GattAddress, payload: bytes, *, refresh: bool = True
+    ) -> None:
+        """Write a setting, mapping failures to Home Assistant errors."""
         try:
-            values = await read_raw_fields((SOUND,))
-        except DimplexError as err:
-            _LOGGER.debug(
-                "Optional sound-setting read failed for %s (%s)",
-                self.config_entry.title,
-                type(err).__name__,
-            )
+            await self.link.async_write(address, payload)
+        except HeaterAuthError as err:
+            self.config_entry.async_start_reauth(self.hass)
+            raise to_homeassistant_error(err) from err
+        except (DimplexError, DimplexProtocolError) as err:
+            raise to_homeassistant_error(err) from err
+        if refresh:
+            await self.async_request_refresh()
+
+    @property
+    def sound_value(self) -> bytes | None:
+        """Return the last verified Sound payload."""
+        return self.settings.get(SOUND)
+
+    @sound_value.setter
+    def sound_value(self, value: bytes | None) -> None:
+        """Replace the cached Sound payload."""
+        if value is None:
+            self.settings.pop(SOUND, None)
+        else:
+            self.settings[SOUND] = value
+
+    async def async_refresh_settings(self, now: datetime | None = None) -> None:
+        """Read the slow settings on their own slow schedule."""
+        del now
+        if not self.link.keep_connected:
+            # Never open a second connection: the next poll reads them.
+            self._settings_due = True
             return
-        value = values.get(SOUND)
-        if value is None or parse_sound_enabled(value) is None:
+        if not self.last_update_success:
             return
-        if value != self.sound_value:
-            self.sound_value = value
+        await self._async_read_settings(tuple(SLOW_SETTINGS))
+
+    async def _async_read_settings(self, addresses: tuple[GattAddress, ...]) -> None:
+        """Read settings over the held link; stop at the first failure."""
+        values: dict[GattAddress, bytes | None] = {}
+        for address in addresses:
+            try:
+                values[address] = await self.link.async_read(address)
+            except DimplexError as err:
+                _LOGGER.debug("Setting read failed for %s: %s", self.link.address, err)
+                break
+        self._apply_settings(values)
+
+    def _apply_settings(self, values: dict[GattAddress, bytes | None]) -> None:
+        """Store verified setting values and notify listeners on change."""
+        changed = False
+        for address, value in values.items():
+            if (
+                value is not None
+                and SLOW_SETTINGS[address](value) is not None
+                and value != self.settings.get(address)
+            ):
+                self.settings[address] = value
+                changed = True
+        if changed:
             self.async_update_listeners()
 
-    async def async_set_sound(self, enabled: bool) -> None:
-        """Write the sound setting and retain its verified readback."""
-        payload = encode_sound(enabled)
-        readback = await self.client.async_write_raw(*SOUND, payload)
-        value = readback if readback is not None else payload
-        if parse_sound_enabled(value) is None:
-            raise DimplexError("Panel heater returned an invalid sound value")
-        self.sound_value = value
+    async def async_write_setting(self, address: GattAddress, payload: bytes) -> None:
+        """Write a slow setting, show it at once, then read it back.
+
+        The persistent link reads it back immediately; per-poll mode reads it
+        inside the next poll's connection instead of opening another one.
+        """
+        await self.async_write(address, payload, refresh=False)
+        self.settings[address] = payload
         self.async_update_listeners()
-
-    async def async_shutdown(self) -> None:
-        """Stop coordinator refreshes before releasing the panel heater connection."""
-        if self._cancel_sound_poll is not None:
-            self._cancel_sound_poll()
-            self._cancel_sound_poll = None
-        if self._sound_refresh_task is not None and not self._sound_refresh_task.done():
-            self._sound_refresh_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._sound_refresh_task
-        await super().async_shutdown()
-        if self._cancel_advertisement_callback is not None:
-            self._cancel_advertisement_callback()
-            self._cancel_advertisement_callback = None
-        shutdown = getattr(self.client, "async_shutdown", None)
-        if shutdown is not None:
-            await shutdown()
-
-    async def _async_repair_authentication(self) -> bool:
-        """Restore a missing proxy bond once with the saved panel heater passkey."""
-        passkey = self.config_entry.data.get(CONF_PASSKEY)
-        if (
-            not isinstance(passkey, str)
-            or len(passkey) != 6
-            or not all("0" <= digit <= "9" for digit in passkey)
-        ):
-            return False
-        now = time.monotonic()
-        if now < self._automatic_repair_until:
-            return False
-        self._automatic_repair_until = now + _AUTOMATIC_REPAIR_COOLDOWN
-        try:
-            await async_pair_with_passkey(
-                self.hass,
-                self.config_entry.data[CONF_PROXY_SOURCE],
-                self.config_entry.data[CONF_ADDRESS],
-                passkey,
-                self.client.async_pair,
-                repair_timeout=_AUTOMATIC_REPAIR_TIMEOUT,
-            )
-        except Exception:
-            _LOGGER.debug(
-                "Automatic authentication repair failed for %s",
-                self.config_entry.title,
-                exc_info=True,
-            )
-            return False
-        self._automatic_repair_until = 0.0
-        return True
-
-    async def _async_refresh_experimental_fields(self) -> None:
-        """Refresh a small raw-field batch without blocking climate recovery."""
-        read_raw_fields = getattr(self.client, "async_read_raw_fields", None)
-        if read_raw_fields is None:
-            return
-        field_count = len(EXPERIMENTAL_RAW_FIELDS)
-        start = self._raw_field_offset
-        batch = tuple(
-            EXPERIMENTAL_RAW_FIELDS[(start + index) % field_count]
-            for index in range(min(_EXPERIMENTAL_FIELDS_PER_POLL, field_count))
-        )
-        self._raw_field_offset = (start + len(batch)) % field_count
-        try:
-            values = await read_raw_fields(batch)
-        except DimplexError as err:
-            _LOGGER.debug(
-                "Optional experimental read failed for %s (%s)",
-                self.config_entry.title,
-                type(err).__name__,
-            )
-            return
-        self.raw_fields.update(values)
-
-    async def _async_update_data(self) -> HeaterSnapshot:
-        """Read the panel heater, retrying one clean authenticated connection."""
-        try:
-            snapshot = await self.client.async_read_snapshot()
-        except DimplexAuthenticationError as err:
-            if await self._async_repair_authentication():
-                try:
-                    snapshot = await self.client.async_read_snapshot()
-                except DimplexError as repair_err:
-                    err = (
-                        repair_err
-                        if isinstance(repair_err, DimplexAuthenticationError)
-                        else err
-                    )
-                else:
-                    await self._async_refresh_experimental_fields()
-                    self._authentication_failures = 0
-                    return snapshot
-            self._authentication_failures += 1
-            if self._authentication_failures >= _AUTHENTICATION_FAILURE_THRESHOLD:
-                raise ConfigEntryAuthFailed(
-                    translation_domain=DOMAIN,
-                    translation_key="authentication_failed",
-                ) from err
-            _LOGGER.debug(
-                "Authentication failed for %s (%d/%d); retrying on the next poll",
-                self.config_entry.title,
-                self._authentication_failures,
-                _AUTHENTICATION_FAILURE_THRESHOLD,
-            )
-            raise UpdateFailed(
-                translation_domain=DOMAIN,
-                translation_key="cannot_connect",
-            ) from err
-        except DimplexConnectionError as err:
-            retry = cast(
-                Callable[[], Awaitable[HeaterSnapshot]] | None,
-                getattr(self.client, "async_retry_connection", None),
-            )
-            if retry is None:
-                self._authentication_failures = 0
-                raise UpdateFailed(
-                    translation_domain=DOMAIN,
-                    translation_key="cannot_connect",
-                ) from err
-            try:
-                snapshot = await retry()
-            except DimplexError as retry_err:
-                self._authentication_failures = 0
-                raise UpdateFailed(
-                    translation_domain=DOMAIN,
-                    translation_key="cannot_connect",
-                ) from retry_err
-            await self._async_refresh_experimental_fields()
-            self._authentication_failures = 0
-            return snapshot
+        if self.link.keep_connected:
+            await self._async_read_settings((address,))
         else:
-            await self._async_refresh_experimental_fields()
-            self._authentication_failures = 0
-            return snapshot
+            self._settings_due = True
+
+    async def async_set_sound(self, enabled: bool) -> None:
+        """Write the sound setting."""
+        await self.async_write_setting(SOUND, encode_sound(enabled))
+
+    async def async_set_setback(self, enabled: bool) -> None:
+        """Switch Setback, keeping the heater's Setback temperature."""
+        try:
+            payload = encode_setback(enabled, self.settings.get(SETBACK))
+        except DimplexProtocolError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="setting_unavailable"
+            ) from err
+        await self.async_write_setting(SETBACK, payload)
+
+    async def async_set_temperature_offset(self, offset_c: float) -> None:
+        """Write the room-temperature offset in 0.1 degC steps."""
+        try:
+            payload = encode_temperature_offset(offset_c)
+        except DimplexProtocolError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_temperature_offset",
+                translation_placeholders={
+                    "min": f"{-TEMPERATURE_OFFSET_LIMIT_C:g}",
+                    "max": f"{TEMPERATURE_OFFSET_LIMIT_C:g}",
+                },
+            ) from err
+        await self.async_write_setting(ROOM_TEMPERATURE_OFFSET, payload)
+
+    async def async_set_away_temperature(self, temperature_c: float) -> None:
+        """Change the Away target, keeping Away's state and return time."""
+        value = float(temperature_c)
+        if (
+            not value.is_integer()
+            or not AWAY_TEMPERATURE_MIN_C <= value <= AWAY_TEMPERATURE_MAX_C
+        ):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "min": str(AWAY_TEMPERATURE_MIN_C),
+                    "max": str(AWAY_TEMPERATURE_MAX_C),
+                },
+            )
+        async with self._away_lock:
+            data = self.data
+            if (
+                data is None
+                or data.away_active is None
+                or (data.away_active and data.away_until is None)
+            ):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="setting_unavailable"
+                )
+            # Writing the Away record always makes the heater enter Away, whatever
+            # the active byte or deadline (hardware 2026-11-24 18:44 and 18:48,
+            # AM2086). Only an active Away can have its temperature changed.
+            until = data.away_until
+            if not data.away_active or until is None:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="away_temperature_needs_away",
+                )
+            await self.async_write(
+                AWAY_MODE,
+                encode_away_mode(data.away_active, until, int(value)),
+                refresh=False,
+            )
+        await self.async_request_refresh()
+
+    async def async_set_away_mode(
+        self,
+        active: bool,
+        *,
+        until: datetime | None = None,
+        refresh: bool = True,
+    ) -> None:
+        """Write Away Mode with an explicit future deadline when activating."""
+        async with self._away_lock:
+            await self._async_write_away_mode(active, until)
+        if refresh:
+            await self.async_request_refresh()
+
+    async def async_write_mode(
+        self,
+        address: GattAddress,
+        payload: bytes,
+        *,
+        leave_away: Callable[[], bool],
+    ) -> None:
+        """Leave Away first when ``leave_away()``, then write a mode, as one sequence.
+
+        ``leave_away`` is evaluated under the Away lock, and holding the lock
+        across both writes keeps an Away temperature change from re-entering
+        Away between them.
+        """
+        async with self._away_lock:
+            if leave_away():
+                await self._async_write_away_mode(False, None)
+            await self.async_write(address, payload, refresh=False)
+        await self.async_request_refresh()
+
+    async def _async_write_away_mode(
+        self, active: bool, until: datetime | None
+    ) -> None:
+        """Write the Away record; the caller holds the Away lock."""
+        now = dt_util.now().replace(tzinfo=None)
+        data = self.data
+        if until is not None and until.tzinfo is not None:
+            until = dt_util.as_local(until).replace(tzinfo=None)
+        if active:
+            if until is None and data is not None and data.away_until is not None:
+                if data.away_until > now:
+                    until = data.away_until
+            if until is None:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="away_until_required"
+                )
+            if until <= now:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="invalid_away_until"
+                )
+        elif until is None:
+            until = (
+                data.away_until
+                if data is not None and data.away_until is not None
+                else now
+            )
+        target_temperature = (
+            data.away_target_temperature_c
+            if data is not None and data.away_target_temperature_c is not None
+            else 7
+        )
+        await self.async_write(
+            AWAY_MODE,
+            encode_away_mode(active, until, target_temperature),
+            refresh=False,
+        )
+        if isinstance(self.data, HeaterSnapshot):
+            # Until the next poll reads it back, later Away checks must see
+            # what was just written, not the snapshot from before it.
+            self.data = dataclasses.replace(
+                self.data, away_active=active, away_until=until
+            )

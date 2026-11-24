@@ -6,25 +6,101 @@
         "state_attributes": {
           "preset_mode": {
             "state": {
-              "manual": "mdi:hand",
+              "manual": "mdi:hand-back-right",
+              "user_timer": "mdi:calendar-clock",
+              "home_all_day": "mdi:home-clock",
+              "out_all_day": "mdi:home-export-outline",
+              "away": "mdi:calendar-arrow-right",
+              "eco": "mdi:leaf",
               "frost_protect": "mdi:snowflake-thermometer"
             }
           }
         }
       }
     },
+    "datetime": {
+      "away_until": {
+        "default": "mdi:calendar-arrow-right"
+      }
+    },
+    "number": {
+      "away_temperature": {
+        "default": "mdi:thermometer-low"
+      },
+      "temperature_offset": {
+        "default": "mdi:thermometer-lines"
+      }
+    },
     "select": {
       "temperature_unit": {
-        "default": "mdi:temperature-celsius"
+        "default": "mdi:temperature-celsius",
+        "state": {
+          "celsius": "mdi:temperature-celsius",
+          "fahrenheit": "mdi:temperature-fahrenheit"
+        }
       }
     },
     "sensor": {
       "error_code": {
-        "default": "mdi:alert-circle-outline"
+        "default": "mdi:alert-circle-outline",
+        "state": {
+          "no_error": "mdi:check-circle-outline",
+          "code_50": "mdi:window-open-variant"
+        }
       },
-      "operating_mode_raw": {
-        "default": "mdi:state-machine"
+      "operating_mode": {
+        "default": "mdi:state-machine",
+        "state": {
+          "manual": "mdi:hand",
+          "user_timer": "mdi:calendar-clock",
+          "home_all_day": "mdi:home-clock",
+          "out_all_day": "mdi:home-export-outline",
+          "away": "mdi:calendar-arrow-right",
+          "timer": "mdi:calendar-clock",
+          "eco": "mdi:leaf",
+          "frost_protect": "mdi:snowflake-thermometer"
+        }
+      },
+      "output_power": {
+        "default": "mdi:gauge"
       }
+    },
+    "switch": {
+      "sound": {
+        "default": "mdi:volume-high",
+        "state": {
+          "off": "mdi:volume-off"
+        }
+      },
+      "open_window_detection": {
+        "default": "mdi:window-open-variant",
+        "state": {
+          "off": "mdi:window-closed-variant"
+        }
+      },
+      "preemptive_heating": {
+        "default": "mdi:heat-wave",
+        "state": {
+          "off": "mdi:thermometer-off"
+        }
+      },
+      "setback": {
+        "default": "mdi:home-thermometer",
+        "state": {
+          "off": "mdi:home-thermometer-outline"
+        }
+      },
+      "advance": {
+        "default": "mdi:skip-next-circle",
+        "state": {
+          "off": "mdi:skip-next-circle-outline"
+        }
+      }
+    }
+  },
+  "services": {
+    "get_gatt_services": {
+      "service": "mdi:bluetooth-settings"
     }
   }
 }

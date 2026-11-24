@@ -8,7 +8,9 @@ repos:
     hooks:
       - id: check-json
       - id: check-yaml
-        exclude: ^esphome_proxy\.yaml$
+        # ESPHome YAML uses custom tags (!lambda, !include, !secret); --unsafe
+        # keeps the syntax check without constructing those tags.
+        args: [--unsafe]
       - id: check-merge-conflict
       - id: detect-private-key
   - repo: local
