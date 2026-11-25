@@ -262,7 +262,7 @@
         },
         "periods": {
           "name": "Periods",
-          "description": "Up to 4 heating periods. Leave empty for no heating periods that day."
+          "description": "Up to 4 heating periods. To remove all heating periods from the chosen days, give an empty list ([])."
         }
       }
     },

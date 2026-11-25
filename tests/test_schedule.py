@@ -360,7 +360,7 @@ async def test_set_schedule_without_periods_empties_the_days(hass, fake_bt) -> N
     entry = make_entry(hass)
     coordinator = await setup(hass, entry)
 
-    await set_schedule(hass, entry, programme="home_all_day", days=["sun"])
+    await set_schedule(hass, entry, programme="home_all_day", days=["sun"], periods=[])
 
     assert coordinator.schedules["home_all_day"][6] == ()
     assert proxy.schedule[(2, 6)][3:] == bytes.fromhex("000000001500" * 4 + "00000000")
@@ -395,7 +395,7 @@ async def test_set_schedule_on_a_heater_without_schedules(hass, fake_bt) -> None
     coordinator = await setup(hass, entry)
     coordinator.schedules = {}
 
-    await set_schedule(hass, entry, programme="user_timer", days=["tue"])
+    await set_schedule(hass, entry, programme="user_timer", days=["tue"], periods=[])
 
     assert coordinator.schedules["user_timer"][1] == ()
     assert coordinator.schedules["user_timer"][0] is None
@@ -454,9 +454,10 @@ async def test_set_schedule_validates_its_fields(hass, fake_bt) -> None:
     entry = make_entry(hass)
     await setup(hass, entry)
     for bad in (
-        {"programme": "away", "days": ["mon"]},
-        {"programme": "user_timer", "days": []},
-        {"programme": "user_timer", "days": ["monday"]},
+        {"programme": "user_timer", "days": ["mon"]},  # periods left out
+        {"programme": "away", "days": ["mon"], "periods": []},
+        {"programme": "user_timer", "days": [], "periods": []},
+        {"programme": "user_timer", "days": ["monday"], "periods": []},
     ):
         with pytest.raises(vol.Invalid):
             await set_schedule(hass, entry, **bad)
@@ -504,7 +505,9 @@ async def test_a_failure_on_the_first_day_reports_the_link_error(hass, fake_bt) 
     fail_saving(proxy, day=0)
 
     with pytest.raises(HomeAssistantError) as err:
-        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon"], periods=[]
+        )
     assert err.value.translation_key == "cannot_connect"
 
 

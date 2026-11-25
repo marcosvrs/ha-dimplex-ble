@@ -185,8 +185,8 @@ reports `PLX050E;C;`; reading `C` as the series is an inference).
 
 **Set schedule** (`dimplex_ble.set_schedule`) replaces the heating periods of
 one programme on the chosen days: pick the heater, the programme, the days and
-up to 4 periods (start, end, temperature). No periods means no heating periods
-that day. Each day is read back from the heater afterwards; the action fails if
+up to 4 periods (start, end, temperature). `periods` is required; an empty
+list (`periods: []`) removes all heating periods from those days. Each day is read back from the heater afterwards; the action fails if
 the heater did not keep it. Example:
 
 ```yaml

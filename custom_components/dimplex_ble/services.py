@@ -41,7 +41,8 @@ _SET_SCHEDULE_SCHEMA = probatio.Schema(
         probatio.Required("days"): probatio.All(
             cv.ensure_list, [probatio.In(DAYS)], probatio.Length(min=1)
         ),
-        probatio.Optional("periods", default=[]): probatio.All(
+        # Required: leaving it out must not wipe the days; [] clears them.
+        probatio.Required("periods"): probatio.All(
             cv.ensure_list,
             [_PERIOD_SCHEMA],
             probatio.Length(max=SCHEDULE_PERIODS),

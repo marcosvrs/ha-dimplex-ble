@@ -23,7 +23,7 @@ set_schedule:
           multiple: true
           options: [mon, tue, wed, thu, fri, sat, sun]
     periods:
-      required: false
+      required: true
       example: |
         - start: "06:30"
           end: "08:00"
