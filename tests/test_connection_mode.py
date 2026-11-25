@@ -789,3 +789,65 @@ async def test_a_link_dropped_by_the_heater_mid_update_raises_the_repair(
     await advance(hass, STALL_WINDOW + 1)
 
     assert issue(hass, entry) is not None
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_a_heater_silent_through_setup_retries_raises_the_repair(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """AM6532 2026-11-25 12:23: stalled in the first update after a restart.
+
+    Every setup retry builds a new monitor; the silence start must survive.
+    """
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert issue(hass, entry) is None
+
+    clock.now += STALL_WINDOW + 1
+    await advance(hass, 700)  # the next setup retry runs
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert issue(hass, entry) is not None
+
+
+async def test_a_heater_back_before_the_window_ends_raises_nothing(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """The next retry finds the heater: setup loads and the silence is over."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    proxy.sees_heater = True  # power-cycled within the minute
+    await hass.config_entries.async_reload(entry.entry_id)  # the next retry
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert not stall.silent_since(hass)
+
+    proxy.sees_heater = False  # a later, separate silence starts afresh
+    await entry.runtime_data.async_refresh()
+    clock.now += STALL_WINDOW - 1
+    await advance(hass, 1)
+    assert issue(hass, entry) is None
+    assert stall.silent_since(hass)

@@ -374,7 +374,7 @@
   "issues": {
     "heater_stalled": {
       "title": "{name} stopped responding",
-      "description": "Home Assistant hasn't heard the heater for over a minute while its Bluetooth proxy is online. If the Dimplex app is open and connected to the heater, close it: the heater accepts one connection at a time. Otherwise its Bluetooth has most likely stopped. If your installation has a mains isolator switch: switch it off, wait at least 5 seconds, then switch it on. If there is no isolator switch: switch off the circuit breaker or remove the fuse supplying the unit, wait at least 5 seconds, then switch it on. Home Assistant reconnects automatically."
+      "description": "Home Assistant hasn't heard the heater for over a minute while its Bluetooth proxy is online: its Bluetooth has most likely stopped, and only a power cycle restarts it. If your installation has a mains isolator switch: switch it off, wait at least 5 seconds, then switch it on. If there is no isolator switch: switch off the circuit breaker or remove the fuse supplying the unit, wait at least 5 seconds, then switch it on. Home Assistant reconnects automatically. (A phone app connected to the heater also blocks it: the heater accepts one connection at a time.)"
     },
     "schedule_pending": {
       "title": "{name}: schedule change waiting",

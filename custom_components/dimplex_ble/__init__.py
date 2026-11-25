@@ -36,7 +36,7 @@ from .entity import device_info_for_coordinator, unique_id
 from .link import HeaterLink
 from .schedule_keeper import STORAGE_VERSION, pending_issue_id
 from .services import async_setup_services
-from .stall import stall_issue_id
+from .stall import silent_since, stall_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +163,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> 
 async def async_remove_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
     """Drop the entry's repairs and its schedule backup together with the entry."""
     ir.async_delete_issue(hass, DOMAIN, stall_issue_id(entry.entry_id))
+    silent_since(hass).pop(stall_issue_id(entry.entry_id), None)
     ir.async_delete_issue(hass, DOMAIN, pending_issue_id(entry.entry_id))
     await Store(
         hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.schedules"

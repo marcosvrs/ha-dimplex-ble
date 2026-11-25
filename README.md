@@ -263,9 +263,8 @@ problem.
   receiver hears it until it is switched off and on at the wall. Home Assistant
   then raises the repair "*Heater* stopped responding" (after 60 s of silence;
   not when the proxy itself is offline) and clears it once the heater is heard
-  again. An open Dimplex app connected to the heater also silences it (one
-  connection at a time): close the app first. To power-cycle it, as the
-  Dimplex app words it: "If your installation
+  again. No app is needed, and no app can reach a stalled heater either. To
+  power-cycle it, as the Dimplex app words it: "If your installation
   has a mains isolator switch: switch it off, wait at least 5 seconds, then
   switch it on. If there is no isolator switch: switch off the circuit breaker
   or remove the fuse supplying the unit, wait at least 5 seconds, then switch it
