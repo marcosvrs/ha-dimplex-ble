@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import probatio
 from homeassistant.core import (
@@ -27,24 +27,11 @@ _DEVICE_SCHEMA = probatio.Schema({probatio.Required(_DEVICE_ID): cv.string})
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
-def _whole_degrees(value: Any) -> int:
-    """Accept 21 or 21.0 but reject 21.9: the heater stores whole degrees."""
-    if isinstance(value, bool):
-        raise probatio.Invalid("expected a whole number of degrees")
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as err:
-        raise probatio.Invalid("expected a whole number of degrees") from err
-    if not number.is_integer():
-        raise probatio.Invalid("expected a whole number of degrees")
-    return int(number)
-
-
 _PERIOD_SCHEMA = probatio.Schema(
     {
         probatio.Required("start"): cv.time,
         probatio.Required("end"): cv.time,
-        probatio.Required("temperature"): _whole_degrees,
+        probatio.Required("temperature"): probatio.Coerce(float),
     }
 )
 _SET_SCHEDULE_SCHEMA = probatio.Schema(
@@ -86,12 +73,13 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def async_set_schedule(call: ServiceCall) -> None:
         """Save the same periods to the chosen days of one programme."""
         coordinator = _get_entry(call).runtime_data
+        # Whole degrees within the heater's range, as for the climate target.
         periods = tuple(
-            SchedulePeriod(p["start"], p["end"], p["temperature"])
+            SchedulePeriod(
+                p["start"], p["end"], coordinator.check_setpoint(p["temperature"])
+            )
             for p in call.data["periods"]
         )
-        for period in periods:
-            coordinator.check_setpoint(period.temperature_c)
         await coordinator.async_save_schedule(
             call.data["programme"],
             {DAYS.index(day): periods for day in call.data["days"]},

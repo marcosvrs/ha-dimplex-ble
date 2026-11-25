@@ -79,8 +79,6 @@ PRESET_USER_TIMER = "user_timer"
 PRESET_FROST_PROTECT = "frost_protect"
 PRESET_BOOST = "boost"
 
-DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
-
 
 class DimplexProtocolError(ValueError):
     """A requested GATT value or payload is invalid."""
@@ -118,25 +116,14 @@ class HeaterSnapshot:
     boost_temperature_c: int | None = None
 
 
-def service_uuid(group: int) -> str:
-    """Return the 128-bit UUID for a Dimplex service group."""
-    if group not in DIMPLEX_GROUPS:
-        raise DimplexProtocolError("Service group must be between 0 and 3")
-    return f"00000000-000{group}-1000-8000-00805f9b34fb"
-
-
-def characteristic_uuid(characteristic: int) -> str:
-    """Return the Bluetooth-base UUID for a 16-bit characteristic identifier."""
-    if not 0 <= characteristic <= 0xFFFF:
-        raise DimplexProtocolError("Characteristic ID must be between 0 and 65535")
-    return f"0000{characteristic:04x}-0000-1000-8000-00805f9b34fb"
-
-
 def gatt_uuid_candidates(
     group: int, characteristic: int
 ) -> tuple[tuple[str, str], tuple[str, str]]:
     """Return standard and GDHV UUID pairs, preferring the Bluetooth SIG base."""
-    standard = (service_uuid(group), characteristic_uuid(characteristic))
+    standard = (
+        f"00000000-000{group}-1000-8000-00805f9b34fb",
+        f"0000{characteristic:04x}-0000-1000-8000-00805f9b34fb",
+    )
     vendor_base = "474c-4e44-494d504c4558"
     service_group = f"000{group}"
     gdhv = (

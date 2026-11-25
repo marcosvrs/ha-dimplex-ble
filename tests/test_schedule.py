@@ -517,7 +517,8 @@ async def test_set_schedule_refuses_fractional_temperatures(
     await setup(hass, entry)
     proxy.events.clear()
 
-    with pytest.raises(vol.Invalid):
+    # Text fails the schema; numbers get the climate's translated error.
+    with pytest.raises((vol.Invalid, ServiceValidationError)) as err:
         await set_schedule(
             hass,
             entry,
@@ -525,6 +526,8 @@ async def test_set_schedule_refuses_fractional_temperatures(
             days=["mon"],
             periods=[{"start": "07:00", "end": "09:00", "temperature": temperature}],
         )
+    if isinstance(err.value, ServiceValidationError):
+        assert err.value.translation_key == "invalid_setpoint"
     assert schedule_writes(proxy) == []
 
 

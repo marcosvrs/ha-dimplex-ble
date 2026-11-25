@@ -5,13 +5,11 @@ from datetime import datetime
 import pytest
 
 from custom_components.dimplex_ble.protocol import (
-    DIMPLEX_GROUPS,
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
     DimplexProtocolError,
     HeaterSnapshot,
     _parse_selected_version,
-    characteristic_uuid,
     encode_away_mode,
     encode_preset_mode,
     encode_setback,
@@ -29,7 +27,6 @@ from custom_components.dimplex_ble.protocol import (
     parse_snapshot,
     parse_sound_enabled,
     parse_temperature_offset,
-    service_uuid,
 )
 
 
@@ -39,42 +36,11 @@ def test_parse_selected_version_requires_selector_and_complete_payload() -> None
     assert _parse_selected_version(b"\x01\x07", 1) is None
 
 
-@pytest.mark.parametrize("group", sorted(DIMPLEX_GROUPS))
-def test_service_uuid_formats_each_supported_group(group: int) -> None:
-    assert service_uuid(group) == (f"00000000-000{group}-1000-8000-00805f9b34fb")
-
-
-@pytest.mark.parametrize("group", [-1, 4, 255])
-def test_service_uuid_rejects_groups_outside_dimplex_services(group: int) -> None:
-    with pytest.raises(DimplexProtocolError) as err:
-        service_uuid(group)
-    assert str(err.value) == "Service group must be between 0 and 3"
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (0, "00000000-0000-1000-8000-00805f9b34fb"),
-        (0x1023, "00001023-0000-1000-8000-00805f9b34fb"),
-        (65535, "0000ffff-0000-1000-8000-00805f9b34fb"),
-    ],
-)
-def test_characteristic_uuid_formats_16_bit_ids(value: int, expected: str) -> None:
-    assert characteristic_uuid(value) == expected
-
-
-@pytest.mark.parametrize("value", [-1, 65536])
-def test_characteristic_uuid_rejects_out_of_range_ids(value: int) -> None:
-    with pytest.raises(DimplexProtocolError) as err:
-        characteristic_uuid(value)
-    assert str(err.value) == "Characteristic ID must be between 0 and 65535"
-
-
-@pytest.mark.parametrize("group", sorted(DIMPLEX_GROUPS))
+@pytest.mark.parametrize("group", range(4))
 def test_gatt_uuid_candidates_include_sig_and_gdhv_bases(group: int) -> None:
     assert gatt_uuid_candidates(group, 0x1023) == (
         (
-            service_uuid(group),
+            f"00000000-000{group}-1000-8000-00805f9b34fb",
             "00001023-0000-1000-8000-00805f9b34fb",
         ),
         (
