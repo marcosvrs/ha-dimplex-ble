@@ -502,7 +502,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 ) from err
             return written[0]
 
-        kept = await self.async_command(self.link.async_read_then_write(SETBACK, build))
+        kept = await self.async_command(
+            self.link.async_read_then_write(SETBACK, build, read_back=True)
+        )
         if kept is not None:  # an unreadable record keeps the last known value
             self.settings[SETBACK] = kept
             self.async_update_listeners()

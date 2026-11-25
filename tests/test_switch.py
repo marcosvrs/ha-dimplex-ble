@@ -34,7 +34,7 @@ def _link(client):
     async def async_read(address):
         return await client.async_read_raw(*address)
 
-    async def async_read_then_write(address, build):
+    async def async_read_then_write(address, build, *, read_back=False):
         payload = build(await client.async_read_raw(*address))
         await client.async_write_raw(*address, payload)
         return payload

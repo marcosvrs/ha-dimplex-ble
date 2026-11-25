@@ -625,16 +625,28 @@ async def test_setback_temperature_keeps_setback_on_in_one_operation(
     assert coordinator.settings[SETBACK] == b"\x01\x0f"
 
 
-async def test_setback_temperature_refuses_values_outside_7_to_18(
-    hass, fake_bt
-) -> None:
+async def test_setback_temperature_is_8_to_19(hass, fake_bt) -> None:
+    """Heater menu 8-19 degC; AM2086 kept a written 19 (2026-11-25)."""
     from homeassistant.exceptions import ServiceValidationError
 
-    fake_bt.add()
+    from custom_components.dimplex_ble.protocol import SETBACK
+
+    proxy = fake_bt.add()
+    proxy.services.add(SETBACK)
+    proxy.on_write = _keep_setback(proxy)
+    proxy.values[SETBACK] = b"\x00\x08"
     coordinator = await setup(hass, make_entry(hass))
-    for bad in (6, 19, 15.5):
+    proxy.events.clear()
+
+    await coordinator.async_set_setback_temperature(19)
+
+    assert [e[2] for e in proxy.events if e[0] == "write"] == [b"\x00\x13"]
+    assert coordinator.settings[SETBACK] == b"\x00\x13"
+    proxy.events.clear()
+    for bad in (7, 20, 15.5):
         with pytest.raises(ServiceValidationError):
             await coordinator.async_set_setback_temperature(bad)
+    assert not [e for e in proxy.events if e[0] == "write"]
 
 
 async def test_per_poll_releases_the_link_after_a_refused_write(hass, fake_bt) -> None:

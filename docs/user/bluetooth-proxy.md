@@ -7,7 +7,7 @@ Home Assistant reaches each heater through an ESP32 running ESPHome as a Bluetoo
 The proxy runs stock ESPHome plus a small package that answers the heater's PIN request on Home Assistant's behalf.
 
 1. Copy [`firmware/example-bluetooth-proxy.yaml`](../../firmware/example-bluetooth-proxy.yaml) and [`firmware/dimplex_pin_responder.yaml`](../../firmware/dimplex_pin_responder.yaml) into the same folder of your ESPHome configuration.
-2. Add `api_encryption_key`, `wifi_ssid` and `wifi_password` to your ESPHome secrets. The key protects the PIN that Home Assistant sends to the proxy, and the package makes firmware uploads require it too. A key that Home Assistant provisions at adoption doesn't work: the package needs it in the YAML.
+2. Add `api_encryption_key`, `wifi_ssid` and `wifi_password` to your ESPHome secrets. The key protects the PIN that Home Assistant sends to the proxy, and the package makes firmware uploads require it too. For a proxy already in Home Assistant, copy its existing key into the YAML: a new key stops Home Assistant from connecting until you enter it there too.
 3. If your board isn't an ESP32-S3, replace `esp32-generic-s3.yaml` in the package URL with the matching file from [esphome/bluetooth-proxies](https://github.com/esphome/bluetooth-proxies).
 4. Install the firmware from the ESPHome dashboard.
 

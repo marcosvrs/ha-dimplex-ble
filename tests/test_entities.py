@@ -104,7 +104,7 @@ def make_coordinator(hass, *, data=None, client=None, entry=None):
         for address, payload in writes:
             await client.async_write_raw(*address, payload)
 
-    async def async_read_then_write(address, build):
+    async def async_read_then_write(address, build, *, read_back=False):
         read = getattr(client, "async_read_raw", None)
         payload = build(await read(*address) if read is not None else None)
         await client.async_write_raw(*address, payload)
