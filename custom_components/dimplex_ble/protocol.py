@@ -218,9 +218,6 @@ _PRESET_MODE_CODES: Final[dict[str, int]] = {
     "eco": HEATING_MODE_ECO,
     PRESET_FROST_PROTECT: HEATING_MODE_FROST_PROTECT,
 }
-_PRESET_MODES_BY_CODE: Final[dict[int, str]] = {
-    code: preset for preset, code in _PRESET_MODE_CODES.items()
-}
 
 
 # Error codes with a documented meaning: 0 read live as "no error" on the
@@ -260,6 +257,16 @@ def heating_mode_key(value: bytes | None) -> str | None:
         if submode is not None:
             return submode
     return _HEATING_MODE_NAMES[mode_code]
+
+
+def heating_mode_of(operating_mode_hex: str | None) -> str | None:
+    """Return :func:`heating_mode_key` of a snapshot's operating-mode hex."""
+    if operating_mode_hex is None:
+        return None
+    try:
+        return heating_mode_key(bytes.fromhex(operating_mode_hex))
+    except ValueError:
+        return None
 
 
 def parse_model(value: str | None) -> str | None:
@@ -307,14 +314,6 @@ def encode_preset_mode(preset: str) -> bytes:
     except KeyError as err:
         raise DimplexProtocolError("Unsupported preset mode") from err
     return encode_heating_mode(code)
-
-
-def parse_preset_mode(value: bytes | None) -> str | None:
-    """Return a known non-scheduled preset from the operating-mode payload."""
-    mode_code = parse_heating_mode_code(value)
-    if mode_code is None or mode_code == HEATING_MODE_TIMER:
-        return None
-    return _PRESET_MODES_BY_CODE.get(mode_code)
 
 
 def parse_sound_enabled(value: bytes | None) -> bool | None:

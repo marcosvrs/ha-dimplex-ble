@@ -23,10 +23,10 @@ from custom_components.dimplex_ble.protocol import (
     error_code_state,
     gatt_uuid_candidates,
     heating_mode_key,
+    heating_mode_of,
     parse_advance,
     parse_away_mode,
     parse_model,
-    parse_preset_mode,
     parse_setback,
     parse_snapshot,
     parse_sound_enabled,
@@ -207,7 +207,7 @@ def test_preset_mode_encoding_matches_verified_commands(
     preset: str, payload: bytes
 ) -> None:
     assert encode_preset_mode(preset) == payload
-    assert parse_preset_mode(payload) == preset
+    assert heating_mode_key(payload) == preset
 
 
 def test_home_all_day_preset_encoding() -> None:
@@ -216,11 +216,13 @@ def test_home_all_day_preset_encoding() -> None:
     assert encode_preset_mode("home_all_day") == b"\x01\x02\x00\x00\x00\x00"
 
 
-def test_preset_mode_parser_ignores_unknown_and_scheduled_values() -> None:
-    assert parse_preset_mode(None) is None
-    assert parse_preset_mode(b"") is None
-    assert parse_preset_mode(b"\x01\x03\x00\x00\x00\x00") is None
-    assert parse_preset_mode(b"\xfe\x00\x00\x00\x00\x00") is None
+def test_heating_mode_of_a_snapshot_hex() -> None:
+    assert heating_mode_of(None) is None
+    assert heating_mode_of("not hex") is None
+    assert heating_mode_of("") is None
+    assert heating_mode_of("010300000000") == "user_timer"
+    assert heating_mode_of("01") == "timer"
+    assert heating_mode_of("fe0000000000") is None
 
 
 def test_preset_mode_encoding_rejects_unverified_modes() -> None:
@@ -431,8 +433,6 @@ def test_out_all_day_preset_round_trips_the_timer_submode() -> None:
     payload = encode_preset_mode("out_all_day")
     assert payload == b"\x01\x01\x00\x00\x00\x00"
     assert heating_mode_key(payload) == "out_all_day"
-    # A timer profile, not a continuous preset.
-    assert parse_preset_mode(payload) is None
 
 
 @pytest.mark.parametrize(("payload", "active"), [(b"\x00", False), (b"\x01", True)])

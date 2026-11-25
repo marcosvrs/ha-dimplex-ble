@@ -16,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
-from .protocol import HEATING_MODE_KEYS, PRESET_AWAY, error_code_state, heating_mode_key
+from .protocol import HEATING_MODE_KEYS, PRESET_AWAY, error_code_state, heating_mode_of
 
 PARALLEL_UPDATES = 1
 
@@ -72,9 +72,7 @@ class DimplexOperatingModeSensor(DimplexEntity, SensorEntity):
             return None
         if data.away_active:
             return PRESET_AWAY
-        if data.operating_mode_hex is None:
-            return None
-        return heating_mode_key(bytes.fromhex(data.operating_mode_hex))
+        return heating_mode_of(data.operating_mode_hex)
 
 
 class DimplexRatedPowerSensor(DimplexEntity, SensorEntity):

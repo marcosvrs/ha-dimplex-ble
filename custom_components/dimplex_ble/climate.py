@@ -28,21 +28,17 @@ from .entity import DimplexEntity
 from .protocol import (
     HEATING_MODE,
     HEATING_MODE_MANUAL,
-    HEATING_MODE_TIMER,
     PRESET_FROST_PROTECT,
     PRESET_HOME_ALL_DAY,
     PRESET_MANUAL,
     PRESET_OUT_ALL_DAY,
     PRESET_USER_TIMER,
     SETPOINT,
-    TIMER_SUBMODE_AWAY,
-    TIMER_SUBMODE_HOME,
-    TIMER_SUBMODE_OUT,
-    TIMER_SUBMODE_USER_TIMER,
+    TIMER_MODE_KEYS,
     encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
-    parse_preset_mode,
+    heating_mode_of,
 )
 
 PARALLEL_UPDATES = 1
@@ -119,7 +115,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         if self._boosting:
             data = self.coordinator.data
             assert data is not None
-            timer = (data.operating_mode_hex or "")[:2] == f"{HEATING_MODE_TIMER:02x}"
+            timer = heating_mode_of(data.operating_mode_hex) in TIMER_MODE_KEYS
             return HVACMode.AUTO if timer else HVACMode.HEAT
         preset = self.preset_mode
         if preset is None:
@@ -205,25 +201,10 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             return PRESET_BOOST
         if data.away_active:
             return PRESET_AWAY
-        if data.operating_mode_hex is None:
-            return None
-        try:
-            payload = bytes.fromhex(data.operating_mode_hex)
-            if payload and payload[0] == HEATING_MODE_TIMER:
-                if len(payload) > 1:
-                    if payload[1] == TIMER_SUBMODE_AWAY:
-                        return PRESET_AWAY
-                    if payload[1] == TIMER_SUBMODE_HOME:
-                        return PRESET_HOME_ALL_DAY
-                    if payload[1] == TIMER_SUBMODE_OUT:
-                        return PRESET_OUT_ALL_DAY
-                    if payload[1] == TIMER_SUBMODE_USER_TIMER:
-                        return PRESET_USER_TIMER
-                return PRESET_USER_TIMER
-            preset = parse_preset_mode(payload)
-            return preset if preset in PRESET_MODES else None
-        except ValueError:
-            return None
+        mode = heating_mode_of(data.operating_mode_hex)
+        if mode == "timer":  # a timer submode this integration does not know
+            return PRESET_USER_TIMER
+        return mode if mode in PRESET_MODES else None
 
     @property
     def extra_state_attributes(self) -> dict[str, str | int] | None:

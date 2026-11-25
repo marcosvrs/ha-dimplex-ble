@@ -22,7 +22,7 @@ from .protocol import (
     TIMER_MODE_KEYS,
     GattAddress,
     encode_advance,
-    heating_mode_key,
+    heating_mode_of,
     parse_setback,
     parse_sound_enabled,
 )
@@ -186,9 +186,7 @@ class DimplexAdvanceSwitch(_DimplexBooleanSettingSwitch):
         """Start Advance; the heater supports it only in a timer preset."""
         del kwargs
         data = self.coordinator.data
-        mode = None
-        if data is not None and data.operating_mode_hex is not None:
-            mode = heating_mode_key(bytes.fromhex(data.operating_mode_hex))
+        mode = heating_mode_of(data.operating_mode_hex) if data is not None else None
         if data is None or data.away_active or mode not in TIMER_MODE_KEYS:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="advance_requires_timer"
