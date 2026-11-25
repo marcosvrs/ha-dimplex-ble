@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, TypedDict
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -420,7 +420,16 @@ class HeaterLink:
                     await client.write_gatt_char(target, data, response=True)
 
                 async def reply(wait_s: float) -> bytes:
-                    return await asyncio.wait_for(replies.get(), wait_s)
+                    # Notice a dropped link within a second, not after wait_s.
+                    deadline = asyncio.get_running_loop().time() + wait_s
+                    while True:
+                        if not client.is_connected:
+                            raise ota.UpdateError("The heater dropped the link")
+                        left = deadline - asyncio.get_running_loop().time()
+                        if left <= 0:
+                            raise TimeoutError
+                        with suppress(TimeoutError):
+                            return await asyncio.wait_for(replies.get(), min(left, 1.0))
 
                 _LOGGER.info(
                     "Updating %s to %s %s (MTU %d)",

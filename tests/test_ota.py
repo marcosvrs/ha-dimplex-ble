@@ -184,3 +184,23 @@ async def test_the_real_release_is_accepted_when_present() -> None:
         pytest.skip("release not downloaded")
     image = ota.load_release(path.read_bytes(), "EP4213")
     assert (image.version, len(image.data), image.crc) == ("5.0", 906848, 0x37E5)
+
+
+async def test_a_failing_cleanup_never_hides_why_the_update_stopped() -> None:
+    """Rehearsal 2026-11-25 attempt 3: the link was gone, cleanup failed too."""
+    image = ota.Image("EP4213", "5.0", bytes(10))
+    heater = FakeHeater([OK, BAD])
+    modes: list[bool] = []
+
+    async def set_mode(on: bool) -> None:
+        if not on:
+            raise OSError("Characteristic was not found")
+        modes.append(on)
+
+    async def send(data: bytes) -> None:
+        if data == ota.frame(ota.EXIT):
+            raise OSError("not connected")
+        heater.sent.append(data)
+
+    with pytest.raises(ota.UpdateError, match="refused row"):
+        await ota.async_flash(ota.Transport(set_mode, send, heater.reply), image, 236)

@@ -19,6 +19,7 @@ import json
 import re
 import zipfile
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 
 ENTER = 0x38
@@ -167,9 +168,11 @@ async def async_flash(
                 progress(index / len(rows))
         await step("verify", frame(VERIFY, image.crc.to_bytes(2, "little")))
     except BaseException:
-        try:
+        # Best effort: on a lost link these fail too, and must not replace the
+        # reason the update stopped (rehearsal 2026-11-25, attempt 3).
+        with suppress(Exception):
             await transport.send(frame(EXIT))
-        finally:
+        with suppress(Exception):
             await transport.set_ota_mode(False)
         raise
     # Verified: the heater may reboot into the new image on exit, so neither

@@ -133,3 +133,30 @@ async def test_a_lost_link_during_the_update_is_an_update_error(hass, fake_bt) -
     with pytest.raises(BleakError):
         await coordinator.link.async_flash(IMAGE)
     assert proxy.events[-1] == "disconnect"
+
+
+async def test_a_dropped_link_is_noticed_within_a_second(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Rehearsal 2026-11-25 attempt 3: the heater rebooted mid-update."""
+    import time
+
+    monkeypatch.setattr(ota, "REPLY_TIMEOUT", 30)
+    proxy = ota_heater(fake_bt.add())
+
+    original = proxy.on_write
+
+    def on_write(address, data):
+        if address is None and len(data) >= 6 and data[1] == ota.ROW:
+            proxy.clients[-1].is_connected = False
+            return
+        original(address, data)
+
+    proxy.on_write = on_write
+    coordinator = await setup(hass)
+    started = time.monotonic()
+
+    with pytest.raises(ota.UpdateError, match="dropped the link"):
+        await coordinator.link.async_flash(IMAGE)
+
+    assert time.monotonic() - started < 5
