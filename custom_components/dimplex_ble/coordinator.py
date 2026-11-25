@@ -486,11 +486,16 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 # Boost during Away was never tested: end Boost first (only once
                 # the request is known to be valid, so a refused one keeps it).
                 await self._async_end_boost()
-            await self.async_command(
-                self.link.async_write(
-                    AWAY_MODE, encode_away_mode(True, until, self._away_target())
-                )
-            )
+            start = until
+
+            def build(current: bytes | None) -> bytes:
+                # Keep the Away temperature the heater holds now (it may have
+                # changed on the heater since the last poll).
+                live = parse_away_mode(current)
+                target = live[2] if live is not None else self._away_target()
+                return encode_away_mode(True, start, target)
+
+            await self.async_command(self.link.async_read_then_write(AWAY_MODE, build))
             # Later Away checks must see what was just written.
             self._apply_written(away_active=True, away_until=until)
         await self.async_request_refresh()

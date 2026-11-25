@@ -32,12 +32,19 @@ def _link(client):
         for address, payload in writes:
             await client.async_write_raw(*address, payload)
 
+    async def async_read_then_write(address, build):
+        read = getattr(client, "async_read_raw", None)
+        payload = build(await read(*address) if read is not None else None)
+        await client.async_write_raw(*address, payload)
+        return payload
+
     return SimpleNamespace(
         address=ADDRESS,
         source=PROXY,
         async_write=async_write,
         async_read=async_read,
         async_write_many=async_write_many,
+        async_read_then_write=async_read_then_write,
     )
 
 

@@ -659,3 +659,24 @@ async def test_per_poll_leaves_away_and_sets_the_mode_in_one_connection(
     assert kinds(proxy.events[:first_poll]).count("connect") == 1
     assert "102a" in [e[1][4:8] for e in proxy.events[:first_poll] if e[0] == "write"]
     assert "1001" in [e[1][4:8] for e in proxy.events[:first_poll] if e[0] == "write"]
+
+
+async def test_starting_away_keeps_the_temperature_set_on_the_heater(
+    hass, fake_bt
+) -> None:
+    """Codex review: start Away from the live record, not the last poll."""
+    from custom_components.dimplex_ble.protocol import AWAY_MODE
+
+    proxy = fake_bt.add()
+    proxy.services.add(AWAY_MODE)
+    proxy.values[AWAY_MODE] = bytes((0, 26, 11, 26, 30, 18, 12))  # Away off, 12 C
+    coordinator = await setup(hass, make_entry(hass))
+    proxy.values[AWAY_MODE] = bytes((0, 26, 11, 26, 30, 18, 15))  # changed: 15 C
+    proxy.events.clear()
+
+    await coordinator.async_set_away_mode(
+        until=dt_util.now().replace(tzinfo=None) + timedelta(hours=13)
+    )
+
+    [away] = [e[2] for e in proxy.events if e[0] == "write" and e[1][4:8] == "102a"]
+    assert away[0] == 1 and away[6] == 15
