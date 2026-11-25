@@ -10,7 +10,8 @@ import asyncio
 from typing import Any
 
 import aiohttp
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_CLOSE
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.storage import Store
@@ -34,10 +35,13 @@ class DimplexAccount:
         self._refresh_token: str | None = None
         self._loaded = False
         self._lock = asyncio.Lock()
-        # B2C's cookies are sent by hand (cloud.async_sign_in).
+        # Shared by every heater: not tied to the entry whose setup created it
+        # (HA closes such sessions on that entry's unload). B2C's cookies are
+        # sent by hand (cloud.async_sign_in).
         self.session = async_create_clientsession(
-            hass, cookie_jar=aiohttp.DummyCookieJar()
+            hass, auto_cleanup=False, cookie_jar=aiohttp.DummyCookieJar()
         )
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_CLOSE, self._async_close)
 
     async def async_signed_in(self) -> bool:
         """Return whether a refresh token is stored."""
@@ -78,6 +82,9 @@ class DimplexAccount:
                 raise
             await self._async_save(renewed)
             return access
+
+    async def _async_close(self, event: Event) -> None:
+        await self.session.close()
 
     async def _async_load(self) -> None:
         if not self._loaded:

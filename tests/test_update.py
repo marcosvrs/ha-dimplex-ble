@@ -308,3 +308,21 @@ async def test_sign_in_errors(
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": expected}
+
+
+async def test_the_shared_session_outlives_a_heater_reload(hass, fake_bt) -> None:
+    """Jarvis 2026-11-25: the session closed with the entry that created it."""
+    from homeassistant.const import EVENT_HOMEASSISTANT_CLOSE
+
+    heater(fake_bt)
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    session = account(hass).session
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not session.closed
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_CLOSE)
+    await hass.async_block_till_done()
+    assert session.closed
