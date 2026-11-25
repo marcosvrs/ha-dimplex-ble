@@ -879,3 +879,26 @@ async def test_an_interrupted_silence_between_retries_starts_afresh(
     await advance(hass, 700)
 
     assert issue(hass, entry) is None
+
+
+async def test_a_sighting_long_before_the_retry_counts_from_the_sighting(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Codex review: silence is measured from the last sighting, not the retry."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    clock.now += 10
+    fake_bt.advertise(PROXY)  # heard once in the gap, then silent again
+    proxy.sees_heater = False
+    clock.now += STALL_WINDOW + 5  # 65 s after that sighting
+    await advance(hass, 700)
+
+    assert issue(hass, entry) is not None

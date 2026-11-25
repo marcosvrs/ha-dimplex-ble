@@ -101,19 +101,19 @@ class StallMonitor:
         """Return when the silence began; a gap no monitor watched resets it.
 
         Between setup retries nothing listens: a sighting in HA's Bluetooth
-        history after the start, or another scanner (the proxy rebooted), means
-        the silence was interrupted (Codex review).
+        history after the start moves it to that sighting, and another scanner
+        (the proxy rebooted) starts it afresh (Codex review).
         """
         store = silent_since(self._hass)
         carried = store.get(self.issue_id)
-        if carried is not None:
+        start = monotonic()
+        if carried is not None and carried[1] is scanner:
             heard = bluetooth.async_last_service_info(
                 self._hass, self._address, connectable=False
             )
-            if carried[1] is scanner and (heard is None or heard.time <= carried[0]):
-                return carried[0]
-        store[self.issue_id] = (monotonic(), scanner)
-        return store[self.issue_id][0]
+            start = carried[0] if heard is None else max(carried[0], heard.time)
+        store[self.issue_id] = (start, scanner)
+        return start
 
     @callback
     def async_heard(self) -> None:
