@@ -7,6 +7,7 @@ from conftest import ADDRESS, PIN, PROXY, add_settings
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -187,6 +188,10 @@ async def test_install_downloads_checks_and_flashes(
     )
 
     assert flashed == [image]
+    (device,) = dr.async_entries_for_config_entry(
+        dr.async_get(hass), coordinator.config_entry.entry_id
+    )
+    assert device.sw_version.startswith("UI 5.0")  # the device page follows
     assert hass.states.get(entity_id(hass)).attributes["in_progress"] is False
 
 

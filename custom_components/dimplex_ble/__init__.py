@@ -120,7 +120,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     )
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(
+        coordinator.async_add_listener(lambda: _async_sync_device(hass, coordinator))
+    )
     return True
+
+
+@callback
+def _async_sync_device(hass: HomeAssistant, coordinator: DimplexCoordinator) -> None:
+    """Keep the device page's software version current (e.g. after an update).
+
+    HA only applies an entity's device info when the entity is added.
+    """
+    info = device_info_for_coordinator(coordinator)
+    registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(
+        registry, coordinator.config_entry.entry_id
+    ):
+        if info["sw_version"] and device.sw_version != info["sw_version"]:
+            registry.async_update_device(device.id, sw_version=info["sw_version"])
 
 
 @callback
