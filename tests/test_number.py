@@ -34,12 +34,18 @@ def make_coordinator(hass, data, *, reads=()):
     async def async_read(address):
         return await client.async_read_raw(*address)
 
+    async def async_read_then_write(address, build):
+        payload = build(await client.async_read_raw(*address))
+        await client.async_write_raw(*address, payload)
+        return payload
+
     link = SimpleNamespace(
         address=ADDRESS,
         source=PROXY,
         keep_connected=True,
         async_write=async_write,
         async_read=async_read,
+        async_read_then_write=async_read_then_write,
     )
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -114,6 +120,7 @@ async def test_away_temperature_keeps_state_and_return_time(hass) -> None:
     coordinator, client = make_coordinator(
         hass,
         snapshot(away_active=True, away_until=until, away_target_temperature_c=7),
+        reads=[bytes((1, 26, 11, 26, 30, 18, 7))],  # the live record
     )
 
     await DimplexAwayTemperatureNumber(coordinator).async_set_native_value(12)
@@ -122,6 +129,24 @@ async def test_away_temperature_keeps_state_and_return_time(hass) -> None:
         0, 0x102A, bytes((1, 26, 11, 26, 30, 18, 12))
     )
     coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_away_ended_on_the_heater_since_the_poll_is_not_restarted(
+    hass,
+) -> None:
+    """Review round 9: the snapshot still says Away, the heater says off."""
+    until = datetime(2026, 11, 26, 18, 30)
+    coordinator, client = make_coordinator(
+        hass,
+        snapshot(away_active=True, away_until=until, away_target_temperature_c=7),
+        reads=[bytes((0, 26, 11, 26, 30, 18, 7))],
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await DimplexAwayTemperatureNumber(coordinator).async_set_native_value(12)
+
+    assert err.value.translation_key == "away_temperature_needs_away"
+    client.async_write_raw.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

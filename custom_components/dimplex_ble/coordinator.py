@@ -55,6 +55,7 @@ from .protocol import (
     encode_setpoint,
     encode_sound,
     encode_temperature_offset,
+    parse_away_mode,
     parse_setback,
     parse_sound_enabled,
     parse_temperature_offset,
@@ -481,11 +482,20 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                     translation_domain=DOMAIN,
                     translation_key="away_temperature_needs_away",
                 )
-            await self.async_write(
-                AWAY_MODE,
-                encode_away_mode(data.away_active, until, int(value)),
-                refresh=False,
-            )
+
+            def build(current: bytes | None) -> bytes:
+                # The live record, read in the same operation: Away may have
+                # ended on the heater since the last poll, and writing the
+                # record would start it again.
+                live = parse_away_mode(current)
+                if live is None or not live[0] or live[1] is None:
+                    raise ServiceValidationError(
+                        translation_domain=DOMAIN,
+                        translation_key="away_temperature_needs_away",
+                    )
+                return encode_away_mode(True, live[1], int(value))
+
+            await self._async_command(self.link.async_read_then_write(AWAY_MODE, build))
         await self.async_request_refresh()
 
     async def async_set_away_mode(
