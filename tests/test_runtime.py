@@ -425,3 +425,22 @@ async def test_unconfirmed_smp_codes_at_setup_do_not_start_reauth(
 
     assert entry.state is ConfigEntryState.SETUP_RETRY
     assert reauth_flows(hass) == []
+
+
+async def test_diagnostics_never_show_when_the_home_is_empty(hass, fake_bt) -> None:
+    """Codex review: the Away return time is redacted like the schedule times."""
+    from dataclasses import replace
+    from datetime import datetime
+
+    fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    coordinator = entry.runtime_data
+    coordinator.data = replace(
+        coordinator.data, away_active=True, away_until=datetime(2026, 11, 26, 18, 30)
+    )
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["coordinator"]["data"]["away_until"] == "**REDACTED**"
+    assert "2026-11-26" not in str(result)

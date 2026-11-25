@@ -13,7 +13,9 @@ from .coordinator import DimplexConfigEntry
 from .responder import has_responder
 
 # The model is not personal data and is the first thing support needs.
-TO_REDACT = {CONF_ADDRESS, CONF_PASSKEY, CONF_PROXY_SOURCE}
+# The Away return time says when the home is empty (like the schedules, whose
+# times are not exported either).
+TO_REDACT = {CONF_ADDRESS, CONF_PASSKEY, CONF_PROXY_SOURCE, "away_until"}
 
 
 async def async_get_config_entry_diagnostics(
