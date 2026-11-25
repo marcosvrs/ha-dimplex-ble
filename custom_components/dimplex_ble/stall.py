@@ -98,32 +98,51 @@ class StallMonitor:
         )
 
     def _silence_start(self, scanner: BaseHaScanner | None) -> float:
-        """Return when the silence began; a gap no monitor watched resets it.
+        """Return when the silence began; a gap no monitor watched moves it.
 
-        Between setup retries nothing listens: a sighting in HA's Bluetooth
-        history after the start moves it to that sighting, and another scanner
-        (the proxy rebooted) starts it afresh (Codex review).
+        Between setup retries nothing listens: the latest sighting on any
+        scanner after the start moves the start there (and clears a repair
+        shown meanwhile); another scanner on the pinned proxy (it rebooted)
+        starts afresh (Codex review).
         """
         store = silent_since(self._hass)
         carried = store.get(self.issue_id)
         start = monotonic()
         if carried is not None and carried[1] is scanner:
-            heard = bluetooth.async_last_service_info(
-                self._hass, self._address, connectable=False
-            )
-            start = carried[0] if heard is None else max(carried[0], heard.time)
+            start = carried[0]
+            heard = self._last_heard()
+            if heard is not None and heard > start:
+                start = heard
+                self._clear_repair()
         store[self.issue_id] = (start, scanner)
         return start
+
+    def _last_heard(self) -> float | None:
+        """Return the newest sighting of the heater on any scanner.
+
+        ``async_last_service_info`` keeps the best-signal scanner's record,
+        which can be older than a weaker scanner's sighting (Codex review).
+        """
+        times = [
+            seen
+            for scanner in bluetooth.async_current_scanners(self._hass)
+            if (seen := scanner.discovered_device_timestamps.get(self._address))
+            is not None
+        ]
+        return max(times, default=None)
+
+    def _clear_repair(self) -> None:
+        if self._raised:
+            self._raised = False
+            ir.async_delete_issue(self._hass, DOMAIN, self.issue_id)
+            _LOGGER.info("Heater %s responds again; repair cleared", self._address)
 
     @callback
     def async_heard(self) -> None:
         """The heater is alive (advertisement or snapshot): cancel and clear."""
         self._cancel()
         silent_since(self._hass).pop(self.issue_id, None)
-        if self._raised:
-            self._raised = False
-            ir.async_delete_issue(self._hass, DOMAIN, self.issue_id)
-            _LOGGER.info("Heater %s responds again; repair cleared", self._address)
+        self._clear_repair()
 
     @callback
     def async_stop(self) -> None:

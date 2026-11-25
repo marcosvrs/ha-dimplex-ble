@@ -200,6 +200,7 @@ class FakeScanner:
         self.slots = 3
         self.free: int | None = 3
         self.allocated: list[str] = []
+        self.discovered_device_timestamps: dict[str, float] = {}
         self.connector = SimpleNamespace(
             client=lambda device, **kwargs: FakeClient(proxy, device, **kwargs)
         )
@@ -301,14 +302,9 @@ class FakeBluetooth:
             "homeassistant.components.bluetooth.async_register_advertisement_callback",
             self.register_advertisement_callback,
         )
-        self.last_heard: dict[str, float] = {}
         monkeypatch.setattr(
-            "homeassistant.components.bluetooth.async_last_service_info",
-            lambda hass, address, connectable=True: (
-                SimpleNamespace(time=self.last_heard[address])
-                if address in self.last_heard
-                else None
-            ),
+            "homeassistant.components.bluetooth.async_current_scanners",
+            lambda hass: [proxy.scanner for proxy in self.proxies],
         )
         self.hass = hass
         loaded_entries = hass.config_entries.async_loaded_entries
@@ -366,10 +362,11 @@ class FakeBluetooth:
         """
         from custom_components.dimplex_ble import stall
 
-        self.last_heard[address] = stall.monotonic()  # habluetooth's history
         for proxy in self.proxies:
             if proxy.source == source:
                 proxy.sees_heater = True
+                # habluetooth's per-scanner history of the last sighting
+                proxy.scanner.discovered_device_timestamps[address] = stall.monotonic()
         for callback, registered in list(self.callbacks):
             if registered == address:
                 callback(SimpleNamespace(source=source, address=address))

@@ -902,3 +902,53 @@ async def test_a_sighting_long_before_the_retry_counts_from_the_sighting(
     await advance(hass, 700)
 
     assert issue(hass, entry) is not None
+
+
+async def test_a_weaker_proxy_hearing_the_heater_counts_as_a_sighting(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Codex review: the newest sighting on any scanner, not the preferred one."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    other = fake_bt.add(FakeProxy(OTHER))
+    proxy.sees_heater = other.sees_heater = False
+    proxy.scanner.discovered_device_timestamps[ADDRESS] = clock.now - 100  # stale
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    clock.now += 30
+    fake_bt.advertise(OTHER)  # only the far proxy hears it, in the gap
+    other.sees_heater = False
+    clock.now += 40  # 70 s since the start, 40 s since that sighting
+    await advance(hass, 700)
+
+    assert issue(hass, entry) is None
+
+
+async def test_a_sighting_between_retries_clears_a_shown_repair(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Codex review: a repair from before must not outlive a gap sighting."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    clock.now += STALL_WINDOW + 1
+    await advance(hass, 700)
+    assert issue(hass, entry) is not None
+
+    fake_bt.advertise(PROXY)  # heard in the gap, setup still fails after
+    proxy.sees_heater = False
+    clock.now += 5
+    await advance(hass, 1400)
+
+    assert issue(hass, entry) is None
