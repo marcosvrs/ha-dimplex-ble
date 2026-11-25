@@ -851,3 +851,31 @@ async def test_a_heater_back_before_the_window_ends_raises_nothing(
     await advance(hass, 1)
     assert issue(hass, entry) is None
     assert stall.silent_since(hass)
+
+
+@pytest.mark.parametrize("gap", ["heard", "proxy_rebooted"])
+async def test_an_interrupted_silence_between_retries_starts_afresh(
+    hass, fake_bt, monkeypatch, gap
+) -> None:
+    """Codex review: nothing listens between retries; the carried start must
+    not survive a sighting or a proxy reboot in that gap."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    clock.now += 30
+    if gap == "heard":
+        fake_bt.advertise(PROXY)  # no monitor is listening now
+        proxy.sees_heater = False
+    else:
+        proxy.reconnect_api()
+    clock.now += STALL_WINDOW - 20  # 70 s since the first start, 40 s since the gap
+    await advance(hass, 700)
+
+    assert issue(hass, entry) is None

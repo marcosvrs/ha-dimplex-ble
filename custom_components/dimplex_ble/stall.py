@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from time import monotonic
 
+from bluetooth_data_tools import monotonic_time_coarse as monotonic
 from habluetooth import BaseHaScanner
 from homeassistant.components import bluetooth
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -39,9 +39,11 @@ def stall_issue_id(entry_id: str) -> str:
     return f"heater_stalled_{entry_id}"
 
 
-def silent_since(hass: HomeAssistant) -> dict[str, float]:
-    """Issue id -> when the heater's silence began; outlives setup retries."""
-    since: dict[str, float] = hass.data.setdefault(f"{DOMAIN}_silent_since", {})
+def silent_since(hass: HomeAssistant) -> dict[str, tuple[float, BaseHaScanner | None]]:
+    """Issue id -> (when the silence began, on which scanner); outlives retries."""
+    since: dict[str, tuple[float, BaseHaScanner | None]] = hass.data.setdefault(
+        f"{DOMAIN}_silent_since", {}
+    )
     return since
 
 
@@ -87,14 +89,31 @@ class StallMonitor:
         if self._cancel_timer is not None:
             return
         self._scanner = scanner
-        since = silent_since(self._hass).setdefault(self.issue_id, monotonic())
-        remaining = STALL_WINDOW - (monotonic() - since)
+        remaining = STALL_WINDOW - (monotonic() - self._silence_start(scanner))
         if remaining <= 0:
             self._raise()
             return
         self._cancel_timer = async_call_later(
             self._hass, remaining, self._async_window_expired
         )
+
+    def _silence_start(self, scanner: BaseHaScanner | None) -> float:
+        """Return when the silence began; a gap no monitor watched resets it.
+
+        Between setup retries nothing listens: a sighting in HA's Bluetooth
+        history after the start, or another scanner (the proxy rebooted), means
+        the silence was interrupted (Codex review).
+        """
+        store = silent_since(self._hass)
+        carried = store.get(self.issue_id)
+        if carried is not None:
+            heard = bluetooth.async_last_service_info(
+                self._hass, self._address, connectable=False
+            )
+            if carried[1] is scanner and (heard is None or heard.time <= carried[0]):
+                return carried[0]
+        store[self.issue_id] = (monotonic(), scanner)
+        return store[self.issue_id][0]
 
     @callback
     def async_heard(self) -> None:

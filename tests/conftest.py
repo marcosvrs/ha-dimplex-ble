@@ -301,6 +301,15 @@ class FakeBluetooth:
             "homeassistant.components.bluetooth.async_register_advertisement_callback",
             self.register_advertisement_callback,
         )
+        self.last_heard: dict[str, float] = {}
+        monkeypatch.setattr(
+            "homeassistant.components.bluetooth.async_last_service_info",
+            lambda hass, address, connectable=True: (
+                SimpleNamespace(time=self.last_heard[address])
+                if address in self.last_heard
+                else None
+            ),
+        )
         self.hass = hass
         loaded_entries = hass.config_entries.async_loaded_entries
         monkeypatch.setattr(
@@ -355,6 +364,9 @@ class FakeBluetooth:
         async_scanner_devices_by_address reads), then the manager runs the
         per-advertisement callbacks before updating its own history.
         """
+        from custom_components.dimplex_ble import stall
+
+        self.last_heard[address] = stall.monotonic()  # habluetooth's history
         for proxy in self.proxies:
             if proxy.source == source:
                 proxy.sees_heater = True
