@@ -526,14 +526,22 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         """
         async with self._away_lock:
             if leave_away():
-                await self._async_write_away_mode(False, None)
-            await self.async_write(address, payload, refresh=False)
+                # One link operation: in per-poll mode separate writes would be
+                # 10 s apart, and the Away write alone can leave the heater in
+                # Away (any Away-record write enters it; the mode write ends it).
+                await self._async_write_away_mode(False, None, then=(address, payload))
+            else:
+                await self.async_write(address, payload, refresh=False)
         # Not the debounced request: the next action of a script (a preset of
         # the new mode) is validated against the state, so it must be current.
         await self.async_refresh()
 
     async def _async_write_away_mode(
-        self, active: bool, until: datetime | None
+        self,
+        active: bool,
+        until: datetime | None,
+        *,
+        then: tuple[GattAddress, bytes] | None = None,
     ) -> None:
         """Write the Away record; the caller holds the Away lock."""
         if (
@@ -571,10 +579,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             if data is not None and data.away_target_temperature_c is not None
             else 7
         )
-        await self.async_write(
-            AWAY_MODE,
-            encode_away_mode(active, until, target_temperature),
-            refresh=False,
+        writes = ((AWAY_MODE, encode_away_mode(active, until, target_temperature)),)
+        await self._async_command(
+            self.link.async_write_many(writes + ((then,) if then else ()))
         )
         # Later Away checks must see what was just written, not the snapshot
         # from before it.

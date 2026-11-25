@@ -100,7 +100,16 @@ def make_coordinator(hass, *, data=None, client=None, entry=None):
     async def async_write(address, payload):
         await client.async_write_raw(*address, payload)
 
-    link = SimpleNamespace(address=ADDRESS, source=PROXY, async_write=async_write)
+    async def async_write_many(writes):
+        for address, payload in writes:
+            await client.async_write_raw(*address, payload)
+
+    link = SimpleNamespace(
+        address=ADDRESS,
+        source=PROXY,
+        async_write=async_write,
+        async_write_many=async_write_many,
+    )
     coordinator = DimplexCoordinator(hass, config_entry, link)
     coordinator.data = data
     return config_entry, coordinator

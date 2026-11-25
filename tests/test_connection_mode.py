@@ -636,3 +636,27 @@ async def test_per_poll_releases_the_link_after_a_refused_write(hass, fake_bt) -
     assert "connect" in kinds(proxy.events)
     assert kinds(proxy.events).count("disconnect") == 1
     assert not coordinator.link.connected
+
+
+async def test_per_poll_leaves_away_and_sets_the_mode_in_one_connection(
+    hass, fake_bt
+) -> None:
+    """Review round 10: two connections would be 10 s apart (settle)."""
+    from custom_components.dimplex_ble.protocol import AWAY_MODE, HEATING_MODE
+
+    proxy = fake_bt.add()
+    proxy.services.add(AWAY_MODE)
+    proxy.values[AWAY_MODE] = bytes((1, 26, 11, 26, 30, 18, 7))  # Away on
+    coordinator = await setup(hass, make_entry(hass, **{CONF_KEEP_CONNECTED: False}))
+    proxy.events.clear()
+
+    await coordinator.async_write_mode(
+        HEATING_MODE, bytes((2, 0, 0, 0, 0, 0)), leave_away=lambda: True
+    )
+
+    writes = [e[1][4:8] for e in proxy.events if e[0] == "write"]
+    assert writes[writes.index("102a") + 1] == "1001"
+    first_poll = proxy.events.index("disconnect")
+    assert kinds(proxy.events[:first_poll]).count("connect") == 1
+    assert "102a" in [e[1][4:8] for e in proxy.events[:first_poll] if e[0] == "write"]
+    assert "1001" in [e[1][4:8] for e in proxy.events[:first_poll] if e[0] == "write"]
