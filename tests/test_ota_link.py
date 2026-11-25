@@ -27,6 +27,7 @@ IMAGE = ota.Image("EP4213", "5.0", bytes(range(256)) * 2)  # 512 bytes, 3 rows
 def fast(monkeypatch) -> None:
     monkeypatch.setattr("custom_components.dimplex_ble.link.OTA_SUBSCRIBE_WAIT_S", 0)
     monkeypatch.setattr(ota, "REPLY_TIMEOUT", 0.05)
+    monkeypatch.setattr(ota, "EXIT_SETTLE_S", 0)
 
 
 def ota_heater(proxy: FakeProxy, answer=lambda cmd: OK) -> FakeProxy:

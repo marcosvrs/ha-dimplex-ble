@@ -12,6 +12,11 @@ import pytest
 from custom_components.dimplex_ble import ota
 
 
+@pytest.fixture(autouse=True)
+def no_exit_wait(monkeypatch) -> None:
+    monkeypatch.setattr(ota, "EXIT_SETTLE_S", 0)
+
+
 def esp_image(size: int = 1000) -> bytes:
     body = bytearray(size)
     body[0], body[23] = ota.ESP_IMAGE_MAGIC, 1
@@ -204,3 +209,14 @@ async def test_a_failing_cleanup_never_hides_why_the_update_stopped() -> None:
 
     with pytest.raises(ota.UpdateError, match="refused row"):
         await ota.async_flash(ota.Transport(set_mode, send, heater.reply), image, 236)
+
+
+async def test_update_mode_is_left_even_without_an_exit_reply() -> None:
+    """Codex review: ConfigR exits, waits a second, then leaves update mode."""
+    image = ota.Image("EP4213", "5.0", bytes(10))
+    heater = FakeHeater([OK, OK, OK])  # enter, row, verify; nothing after exit
+
+    await ota.async_flash(heater.transport(), image, 236)
+
+    assert heater.sent[-1] == ota.frame(ota.EXIT)
+    assert heater.modes == [True, False]

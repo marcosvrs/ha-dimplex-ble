@@ -13,6 +13,7 @@ Every byte below was read from ConfigR's code and checked live on AM2086
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -28,6 +29,7 @@ VERIFY = 0x35
 EXIT = 0x3B
 MAX_ROW = 236  # ConfigR: MTU 247 − 11
 REPLY_TIMEOUT = 30.0  # ConfigR's inactivity timer
+EXIT_SETTLE_S = 1.0  # ConfigR waits a second after ExitOTA
 ESP_IMAGE_MAGIC = 0xE9
 
 
@@ -175,12 +177,12 @@ async def async_flash(
         with suppress(Exception):
             await transport.set_ota_mode(False)
         raise
-    # Verified: the heater may reboot into the new image on exit, so neither
-    # an exit reply nor the final mode write is required. The version read
-    # after reconnecting confirms the update.
-    try:
+    # Verified: like ConfigR, exit, wait a second, then leave update mode
+    # (docs/ota-research.md B.6). The heater may reboot into the new image
+    # meanwhile, so both are best effort; the version read after reconnecting
+    # confirms the update.
+    with suppress(Exception):
         await transport.send(frame(EXIT))
-        await transport.reply(REPLY_TIMEOUT)
+    await asyncio.sleep(EXIT_SETTLE_S)
+    with suppress(Exception):
         await transport.set_ota_mode(False)
-    except Exception:  # noqa: BLE001 - expected when the heater reboots
-        pass

@@ -185,3 +185,21 @@ async def test_download_checks_the_md5(hass, aioclient_mock) -> None:
     with pytest.raises(cloud.CloudError, match="403"):
         await cloud.async_download(session, firmware)
     await session.close()
+
+
+async def test_network_errors_never_carry_the_signed_link(hass, aioclient_mock) -> None:
+    """Codex review: an aiohttp error text can hold the pre-signed URL."""
+    import aiohttp
+
+    firmware = cloud.Firmware("5.0", "https://blob.example/f.zip?sig=SECRET", None)
+    session = aioclient_mock.create_session(hass.loop)
+    aioclient_mock.get(
+        URL(firmware.url), exc=aiohttp.ClientConnectionError(firmware.url)
+    )
+
+    with pytest.raises(cloud.CloudError) as raised:
+        await cloud.async_download(session, firmware)
+
+    assert "SECRET" not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
+    await session.close()

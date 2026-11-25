@@ -12,10 +12,12 @@ Evidence: docs/ota-research.md, "Live findings 2026-11-25".
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import json
 import re
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -70,6 +72,28 @@ class Label:
     security_code: str  # a credential: never log it
 
 
+def _network_errors[**P, R](
+    what: str,
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
+    """Turn network errors into a ``CloudError`` without their text.
+
+    aiohttp errors can carry the request URL, and the firmware link is a
+    pre-signed credential (Codex review); nothing of it may reach a log.
+    """
+
+    def wrap(call: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+        @functools.wraps(call)
+        async def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
+            try:
+                return await call(*args, **kwargs)
+            except (aiohttp.ClientError, TimeoutError) as err:
+                raise CloudError(f"{what} failed ({type(err).__name__})") from None
+
+        return guarded
+
+    return wrap
+
+
 def _pkce() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(verifier.encode()).digest()
@@ -84,6 +108,7 @@ def _page_json(html: str, name: str) -> dict[str, Any]:
     return value
 
 
+@_network_errors("Sign-in")
 async def async_sign_in(
     session: aiohttp.ClientSession, email: str, password: str
 ) -> str:
@@ -166,6 +191,7 @@ async def async_sign_in(
     return refresh
 
 
+@_network_errors("Sign-in")
 async def _token(
     session: aiohttp.ClientSession, form: dict[str, str]
 ) -> dict[str, Any]:
@@ -194,6 +220,7 @@ async def async_refresh(
     return access, renewed
 
 
+@_network_errors("Firmware lookup")
 async def async_latest_firmware(
     session: aiohttp.ClientSession, access_token: str, label: Label
 ) -> Firmware:
@@ -224,6 +251,7 @@ async def async_latest_firmware(
     )
 
 
+@_network_errors("Firmware download")
 async def async_download(session: aiohttp.ClientSession, firmware: Firmware) -> bytes:
     """Download the firmware ZIP (pre-signed link, no sign-in) and check its MD5."""
     async with session.get(
