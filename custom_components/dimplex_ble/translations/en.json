@@ -105,13 +105,32 @@
         "title": "Settings",
         "data": {
           "sync_clock": "Sync the heater clock",
-          "boost_minutes": "Boost length"
+          "boost_minutes": "Boost length",
+          "qr_label": "Heater QR label"
         },
         "data_description": {
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
-          "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min)."
+          "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
+          "qr_label": "For firmware updates: the text of the QR code on the heater's label, for example 010423C0003A,123456,0,PLX050E,C. Leave empty for no updates."
+        }
+      },
+      "account": {
+        "title": "Dimplex account",
+        "description": "Firmware updates come from Dimplex. Sign in once with your Dimplex (ConfigR) account; Home Assistant keeps only a sign-in token, not your password.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
         }
       }
+    },
+    "error": {
+      "invalid_qr_label": "That is not a Dimplex QR label.",
+      "invalid_auth": "Dimplex did not accept the email or password.",
+      "cannot_connect": "Couldn't reach Dimplex. Try again later."
+    },
+    "abort": {
+      "unknown_qr_label": "Dimplex does not know this QR label. Check it against the heater.",
+      "cannot_connect": "Couldn't reach Dimplex. Try again later."
     }
   },
   "entity": {
@@ -238,6 +257,11 @@
       },
       "calculated_power_consumption": {
         "name": "Estimated power"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
       }
     }
   },
@@ -369,6 +393,18 @@
     },
     "no_schedule_backup": {
       "message": "There is no complete backup of this programme yet."
+    },
+    "firmware_unknown_heater": {
+      "message": "The heater has not reported its model yet. Try again after the next update."
+    },
+    "firmware_version_gone": {
+      "message": "Version {version} is no longer offered by Dimplex."
+    },
+    "firmware_download_failed": {
+      "message": "Couldn't get the firmware: {error}"
+    },
+    "firmware_update_failed": {
+      "message": "The firmware update stopped: {error}. Try again."
     }
   },
   "issues": {
@@ -379,6 +415,10 @@
     "schedule_pending": {
       "title": "{name}: schedule change waiting",
       "description": "The heater couldn't be reached when its schedule was changed. Home Assistant keeps the change and writes it as soon as the heater answers again; until then the heater keeps running its previous schedule."
+    },
+    "cloud_sign_in": {
+      "title": "Dimplex sign-in expired",
+      "description": "Dimplex no longer accepts Home Assistant's sign-in, so firmware updates can't be checked. Open a heater's settings and save its QR label again to sign in."
     }
   },
   "selector": {

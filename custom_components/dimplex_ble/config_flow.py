@@ -22,7 +22,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import UnitOfTime
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, UnitOfTime
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
@@ -37,12 +37,13 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from . import responder
+from . import cloud, responder
 from .const import (
     CONF_ADDRESS,
     CONF_BOOST_MINUTES,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
+    CONF_QR_LABEL,
     CONF_SYNC_CLOCK,
     DEFAULT_BOOST_MINUTES,
     DEFAULT_SYNC_CLOCK,
@@ -51,6 +52,7 @@ from .const import (
 )
 from .discovery import advertisement_label, is_dimplex_advertisement
 from .errors import DimplexError, HeaterAuthError
+from .firmware import account
 from .link import HeaterLink
 from .protocol import BOOST_MAX_MINUTES
 
@@ -757,19 +759,37 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DimplexOptionsFlow(OptionsFlowWithReload):
-    """Connection, clock sync and Boost length; saving reloads the entry."""
+    """Clock sync, Boost length and firmware updates; saving reloads the entry."""
+
+    def __init__(self) -> None:
+        """Hold the settings while the Dimplex sign-in step runs."""
+        self._options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show the heater settings."""
+        errors: dict[str, str] = {}
         if user_input is not None:
             # The number selector returns a float; the heater takes whole minutes.
-            minutes = int(user_input[CONF_BOOST_MINUTES])
-            return self.async_create_entry(
-                data={**user_input, CONF_BOOST_MINUTES: minutes}
-            )
-        options = self.config_entry.options
+            self._options = {
+                **user_input,
+                CONF_BOOST_MINUTES: int(user_input[CONF_BOOST_MINUTES]),
+            }
+            label = str(user_input.get(CONF_QR_LABEL) or "").strip()
+            if not label:
+                self._options.pop(CONF_QR_LABEL, None)
+                return self.async_create_entry(data=self._options)
+            try:
+                cloud.Label.parse(label)
+            except ValueError:
+                errors[CONF_QR_LABEL] = "invalid_qr_label"
+            else:
+                self._options[CONF_QR_LABEL] = label
+                if not await account(self.hass).async_signed_in():
+                    return await self.async_step_account()
+                return await self._async_check_label()
+        options = {**self.config_entry.options, **(user_input or {})}
         return self.async_show_form(
             step_id="init",
             data_schema=probatio.Schema(
@@ -790,6 +810,62 @@ class DimplexOptionsFlow(OptionsFlowWithReload):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    probatio.Optional(
+                        CONF_QR_LABEL,
+                        description={"suggested_value": options.get(CONF_QR_LABEL)},
+                    ): TextSelector(),
                 }
             ),
+            errors=errors,
         )
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Sign in to Dimplex once; only the refresh token is kept."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                await account(self.hass).async_sign_in(
+                    user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                )
+            except cloud.AuthError:
+                errors["base"] = "invalid_auth"
+            except cloud.CloudError:
+                errors["base"] = "cannot_connect"
+            else:
+                return await self._async_check_label()
+        return self.async_show_form(
+            step_id="account",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Required(CONF_EMAIL): TextSelector(
+                        TextSelectorConfig(
+                            type=TextSelectorType.EMAIL, autocomplete="username"
+                        )
+                    ),
+                    probatio.Required(CONF_PASSWORD): TextSelector(
+                        TextSelectorConfig(
+                            type=TextSelectorType.PASSWORD,
+                            autocomplete="current-password",
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def _async_check_label(self) -> ConfigFlowResult:
+        """Ask Dimplex whether it knows the label before saving it."""
+        shared = account(self.hass)
+        label = cloud.Label.parse(self._options[CONF_QR_LABEL])
+        try:
+            token = await shared.async_access_token()
+            await cloud.async_latest_firmware(shared.session, token, label)
+        except cloud.AuthError:
+            return await self.async_step_account()
+        except ValueError:
+            return self.async_abort(reason="unknown_qr_label")
+        except cloud.CloudError:
+            return self.async_abort(reason="cannot_connect")
+        return self.async_create_entry(data=self._options)
