@@ -20,7 +20,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlowWithReload,
+    OptionsFlow,
 )
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, UnitOfTime
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
@@ -54,6 +54,12 @@ from .errors import DimplexError, HeaterAuthError
 from .firmware import account
 from .link import HeaterLink
 from .protocol import BOOST_MAX_MINUTES
+from .settings import (
+    CONF_REFRESH_TOKEN,
+    SETTINGS_UNIQUE_ID,
+    is_settings_entry,
+    settings_entry,
+)
 
 _LOGGER = logging.getLogger(__name__)
 # A released heater re-advertised within seconds on hardware (ledger 15:39).
@@ -233,16 +239,21 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         self._waiter: asyncio.Task[None] | None = None
         self._reload_entry_id: str | None = None
         self._pin_error: str | None = None
-        self._sync_clock: bool | None = None
         # Set when Home Assistant removed the flow: start no new pairing.
         self._removed = False
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> DimplexOptionsFlow:
-        """Return the connection mode options flow."""
+        """Return the shared settings flow of the Dimplex entry."""
         del config_entry
         return DimplexOptionsFlow()
+
+    @classmethod
+    @callback
+    def async_supports_options_flow(cls, config_entry: ConfigEntry) -> bool:
+        """Only the Dimplex entry has settings; heaters have none of their own."""
+        return is_settings_entry(config_entry)
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -258,6 +269,38 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         return await self.async_step_confirm()
 
     async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add a heater, or the Dimplex entry while there is none."""
+        if settings_entry(self.hass) is None:
+            return self.async_show_menu(
+                step_id="user", menu_options=["heater", "settings"]
+            )
+        return await self.async_step_heater(user_input)
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add the Dimplex entry: shared settings and the optional sign-in."""
+        await self.async_set_unique_id(SETTINGS_UNIQUE_ID)
+        self._abort_if_unique_id_configured()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            token, error = await _async_sign_in(self.hass, user_input)
+            if error is None:
+                return self.async_create_entry(
+                    title="Dimplex",
+                    data={CONF_REFRESH_TOKEN: token},
+                    options=_shared_options(user_input),
+                )
+            errors["base"] = error
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=_settings_schema(user_input or {}, sign_in=True),
+            errors=errors,
+        )
+
+    async def async_step_heater(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """List nearby, unconfigured panel heaters."""
@@ -282,7 +325,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             for address, label in self._discovered.items()
         ]
         return self.async_show_form(
-            step_id="user",
+            step_id="heater",
             data_schema=probatio.Schema(
                 {
                     probatio.Required(CONF_ADDRESS): SelectSelector(
@@ -301,7 +344,9 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
-        """The heater rejected the stored PIN."""
+        """The heater rejected the stored PIN, or Dimplex the sign-in."""
+        if is_settings_entry(self._get_reauth_entry()):
+            return await self.async_step_reauth_account()
         self._address = str(entry_data[CONF_ADDRESS]).upper()
         self._name = self._get_reauth_entry().title
         # HA creates this flow on its own; nothing is released until the user
@@ -310,6 +355,29 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=probatio.Schema({}),
             description_placeholders={"name": self._name},
+        )
+
+    async def async_step_reauth_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Sign in to Dimplex again; only the new token is kept."""
+        errors: dict[str, str] = {}
+        if user_input is not None and user_input.get(CONF_EMAIL):
+            token, error = await _async_sign_in(self.hass, user_input)
+            if error is None:
+                entry = (
+                    self._get_reauth_entry()
+                    if self.source == SOURCE_REAUTH
+                    else self._get_reconfigure_entry()
+                )
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_REFRESH_TOKEN: token}
+                )
+            errors["base"] = error
+        return self.async_show_form(
+            step_id="reauth_account",
+            data_schema=probatio.Schema(_sign_in_fields(required=True)),
+            errors=errors,
         )
 
     async def async_step_reauth_confirm(
@@ -329,8 +397,10 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Re-pair, optionally on another proxy."""
+        """Re-pair, optionally on another proxy (the Dimplex entry: sign in)."""
         entry = self._get_reconfigure_entry()
+        if is_settings_entry(entry):
+            return await self.async_step_reauth_account(user_input)
         self._address = str(entry.data[CONF_ADDRESS]).upper()
         self._name = entry.title
         return await self._async_step_proxy("reconfigure", user_input, entry)
@@ -454,8 +524,6 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None and CONF_PROXY_SOURCE in user_input:
             # The choice is made: no second release wait or survey (an empty
             # submit means "look again" and falls through).
-            if CONF_SYNC_CLOCK in user_input:
-                self._sync_clock = bool(user_input[CONF_SYNC_CLOCK])
             self._link = HeaterLink(
                 self.hass, address, user_input[CONF_PROXY_SOURCE], None
             )
@@ -494,13 +562,6 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_PROXY_SOURCE, default=options[0]["value"]
             ): SelectSelector(SelectSelectorConfig(options=options))
         }
-        if step_id != "reauth_proxy":
-            sync = (
-                entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK)
-                if entry is not None
-                else DEFAULT_SYNC_CLOCK
-            )
-            schema[probatio.Required(CONF_SYNC_CLOCK, default=sync)] = bool
         return self.async_show_form(
             step_id=step_id,
             data_schema=probatio.Schema(schema),
@@ -627,20 +688,10 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         if self.source in (SOURCE_REAUTH, SOURCE_RECONFIGURE):
             self._reload_entry_id = None
             entry = self._get_repair_entry()
-            if self._sync_clock is None:
-                return self.async_update_reload_and_abort(entry, data_updates=data)
-            return self.async_update_reload_and_abort(
-                entry,
-                data_updates=data,
-                options={**entry.options, CONF_SYNC_CLOCK: self._sync_clock},
-            )
-        sync_clock = (
-            DEFAULT_SYNC_CLOCK if self._sync_clock is None else self._sync_clock
-        )
+            return self.async_update_reload_and_abort(entry, data_updates=data)
         return self.async_create_entry(
             title=f"Dimplex Heater {self._name or link.address}",
             data={CONF_ADDRESS: link.address, **data},
-            options={CONF_SYNC_CLOCK: sync_clock},
         )
 
     async def _async_complete_pairing(self, pin: int) -> str | None:
@@ -757,71 +808,93 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class DimplexOptionsFlow(OptionsFlowWithReload):
-    """Clock sync, Boost length and the Dimplex sign-in; saving reloads."""
+def _sign_in_fields(*, required: bool) -> dict[Any, Any]:
+    key = probatio.Required if required else probatio.Optional
+    return {
+        key(CONF_EMAIL): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
+        ),
+        key(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD, autocomplete="current-password"
+            )
+        ),
+    }
+
+
+def _settings_schema(values: Mapping[str, Any], *, sign_in: bool) -> probatio.Schema:
+    """Clock sync, Boost length and (until signed in) the Dimplex sign-in."""
+    schema: dict[Any, Any] = {
+        probatio.Required(
+            CONF_SYNC_CLOCK, default=values.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK)
+        ): bool,
+        probatio.Required(
+            CONF_BOOST_MINUTES,
+            default=values.get(CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1,
+                max=BOOST_MAX_MINUTES,
+                step=1,
+                unit_of_measurement=UnitOfTime.MINUTES,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+    }
+    if sign_in:
+        schema.update(_sign_in_fields(required=False))
+    return probatio.Schema(schema)
+
+
+def _shared_options(user_input: Mapping[str, Any]) -> dict[str, Any]:
+    """The number selector returns a float; the heater takes whole minutes."""
+    return {
+        CONF_SYNC_CLOCK: bool(user_input[CONF_SYNC_CLOCK]),
+        CONF_BOOST_MINUTES: int(user_input[CONF_BOOST_MINUTES]),
+    }
+
+
+async def _async_sign_in(
+    hass: HomeAssistant, user_input: Mapping[str, Any]
+) -> tuple[str | None, str | None]:
+    """Sign in when email and password were given: (token, error key)."""
+    email = str(user_input.get(CONF_EMAIL) or "").strip()
+    password = str(user_input.get(CONF_PASSWORD) or "")
+    if not email and not password:
+        return None, None
+    if not email or not password:
+        return None, "incomplete_sign_in"
+    try:
+        return await cloud.async_sign_in(account(hass).session, email, password), None
+    except cloud.AuthError:
+        return None, "invalid_auth"
+    except cloud.CloudError:
+        return None, "cannot_connect"
+
+
+class DimplexOptionsFlow(OptionsFlow):
+    """The Dimplex entry's shared settings; saving reloads every heater."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show the heater settings (and the sign-in while not signed in)."""
-        shared = account(self.hass)
-        signed_in = await shared.async_signed_in()
+        """Show clock sync, Boost length and (until signed in) the sign-in."""
+        entry = self.config_entry
+        signed_in = bool(entry.data.get(CONF_REFRESH_TOKEN))
         errors: dict[str, str] = {}
         if user_input is not None:
-            email = str(user_input.pop(CONF_EMAIL, "") or "").strip()
-            password = str(user_input.pop(CONF_PASSWORD, "") or "")
-            if email and password:
-                try:
-                    await shared.async_sign_in(email, password)
-                except cloud.AuthError:
-                    errors["base"] = "invalid_auth"
-                except cloud.CloudError:
-                    errors["base"] = "cannot_connect"
-                else:
-                    self._async_reload_other_heaters()
-            elif email or password:
-                errors["base"] = "incomplete_sign_in"
-            if not errors:
-                # The number selector returns a float; the heater takes minutes.
-                minutes = int(user_input[CONF_BOOST_MINUTES])
-                return self.async_create_entry(
-                    data={**user_input, CONF_BOOST_MINUTES: minutes}
-                )
-        options = {**self.config_entry.options, **(user_input or {})}
-        schema: dict[Any, Any] = {
-            probatio.Required(
-                CONF_SYNC_CLOCK,
-                default=options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
-            ): bool,
-            probatio.Required(
-                CONF_BOOST_MINUTES,
-                default=options.get(CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=1,
-                    max=BOOST_MAX_MINUTES,
-                    step=1,
-                    unit_of_measurement=UnitOfTime.MINUTES,
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-        }
-        if not signed_in:
-            schema[probatio.Optional(CONF_EMAIL)] = TextSelector(
-                TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
-            )
-            schema[probatio.Optional(CONF_PASSWORD)] = TextSelector(
-                TextSelectorConfig(
-                    type=TextSelectorType.PASSWORD, autocomplete="current-password"
-                )
-            )
+            token, error = await _async_sign_in(self.hass, user_input)
+            if error is None:
+                if token is not None:
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_REFRESH_TOKEN: token}
+                    )
+                return self.async_create_entry(data=_shared_options(user_input))
+            errors["base"] = error
         return self.async_show_form(
-            step_id="init", data_schema=probatio.Schema(schema), errors=errors
+            step_id="init",
+            data_schema=_settings_schema(
+                {**entry.options, **(user_input or {})}, sign_in=not signed_in
+            ),
+            errors=errors,
         )
-
-    @callback
-    def _async_reload_other_heaters(self) -> None:
-        """Every heater's firmware entity becomes available after a sign-in."""
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if entry.entry_id != self.config_entry.entry_id:
-                self.hass.config_entries.async_schedule_reload(entry.entry_id)

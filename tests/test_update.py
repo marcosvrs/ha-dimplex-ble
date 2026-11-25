@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from conftest import ADDRESS, PIN, PROXY
+from conftest import ADDRESS, PIN, PROXY, add_settings
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.dimplex_ble import cloud, ota
@@ -20,8 +19,9 @@ from custom_components.dimplex_ble.const import (
     CONF_SYNC_CLOCK,
     DOMAIN,
 )
-from custom_components.dimplex_ble.firmware import SIGN_IN_ISSUE, account
+from custom_components.dimplex_ble.firmware import account
 from custom_components.dimplex_ble.protocol import GDID, PRODUCT_CODE
+from custom_components.dimplex_ble.settings import CONF_REFRESH_TOKEN
 
 pytestmark = pytest.mark.usefixtures("skip_dependencies")
 
@@ -62,12 +62,8 @@ def entity_id(hass) -> str:
 
 
 @pytest.fixture
-def signed_in(hass_storage) -> None:
-    hass_storage[f"{DOMAIN}.cloud"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.cloud",
-        "data": {"refresh_token": "R"},
-    }
+def signed_in(hass):
+    return add_settings(hass, data={CONF_REFRESH_TOKEN: "R"})
 
 
 @pytest.fixture
@@ -86,6 +82,8 @@ def dimplex(monkeypatch):
     async def sign_in(session, email, password):
         calls["sign_in"].append(email)
         return "R"
+
+    calls["sign_in_fn"] = sign_in
 
     monkeypatch.setattr(cloud, "async_refresh", refresh)
     monkeypatch.setattr(cloud, "async_latest_firmware", latest)
@@ -226,9 +224,8 @@ async def test_install_needs_the_heater_model(hass, fake_bt, dimplex) -> None:
         )
 
 
-@pytest.mark.usefixtures("signed_in")
-async def test_a_refused_sign_in_raises_a_repair_and_forgets_the_token(
-    hass, fake_bt, dimplex, monkeypatch, hass_storage
+async def test_a_refused_sign_in_starts_reauthentication(
+    hass, fake_bt, dimplex, monkeypatch, signed_in
 ) -> None:
     heater(fake_bt)
 
@@ -238,42 +235,49 @@ async def test_a_refused_sign_in_raises_a_repair_and_forgets_the_token(
     monkeypatch.setattr(cloud, "async_refresh", refused)
     await setup(hass, make_entry(hass))
 
-    assert ir.async_get(hass).async_get_issue(DOMAIN, SIGN_IN_ISSUE) is not None
     assert not account(hass).signed_in
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [f["context"]["source"] for f in flows] == ["reauth"]
+    assert flows[0]["step_id"] == "reauth_account"
     with pytest.raises(cloud.AuthError):
         await account(hass).async_access_token()
 
 
-async def test_sign_in_fields_show_until_signed_in(hass, fake_bt, dimplex) -> None:
-    heater(fake_bt)
-    entry = make_entry(hass)
-    other = make_entry(hass, "AA:BB:CC:DD:EE:21")
-    await setup(hass, entry)
+async def test_the_menu_adds_the_dimplex_entry_with_a_sign_in(
+    hass, fake_bt, dimplex, monkeypatch
+) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert result["type"] is FlowResultType.MENU
+    assert result["menu_options"] == ["heater", "settings"]
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert {str(key) for key in result["data_schema"].schema} >= {"email", "password"}
-
-    result = await hass.config_entries.options.async_configure(
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+    result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
-            CONF_SYNC_CLOCK: True,
-            CONF_BOOST_MINUTES: 60.0,
+            CONF_SYNC_CLOCK: False,
+            CONF_BOOST_MINUTES: 45.0,
             "email": "me@x",
             "password": "p",
         },
     )
-    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {
-        CONF_SYNC_CLOCK: True,
-        CONF_BOOST_MINUTES: 60,
-    }  # no secrets
-    assert dimplex["sign_in"] == ["me@x"] and account(hass).signed_in
-    assert other.state is not None  # the other heater was scheduled for a reload
+    assert result["data"] == {CONF_REFRESH_TOKEN: "R"}  # no email, no password
+    assert result["options"] == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 45}
+    assert account(hass).signed_in
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert "email" not in {str(key) for key in result["data_schema"].schema}
+    monkeypatch.setattr(
+        "homeassistant.components.bluetooth.async_discovered_service_info",
+        lambda hass: [],
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert result["reason"] == "no_heaters_found"  # straight to heaters: no menu
 
 
 @pytest.mark.parametrize(
@@ -281,33 +285,82 @@ async def test_sign_in_fields_show_until_signed_in(hass, fake_bt, dimplex) -> No
     [
         (None, {"email": "me@x"}, "incomplete_sign_in"),
         (cloud.AuthError("no"), {"email": "me@x", "password": "p"}, "invalid_auth"),
-        (
-            cloud.CloudError("down"),
-            {"email": "me@x", "password": "p"},
-            "cannot_connect",
-        ),
+        (cloud.CloudError("x"), {"email": "me@x", "password": "p"}, "cannot_connect"),
     ],
 )
 async def test_sign_in_errors(
     hass, fake_bt, dimplex, monkeypatch, error, user, expected
 ) -> None:
-    heater(fake_bt)
-    entry = make_entry(hass)
-    await setup(hass, entry)
     if error is not None:
 
         async def fail(session, email, password):
             raise error
 
         monkeypatch.setattr(cloud, "async_sign_in", fail)
-
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+    result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_SYNC_CLOCK: True, CONF_BOOST_MINUTES: 60.0, **user}
     )
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": expected}
+
+
+async def test_without_a_sign_in_the_settings_offer_it(hass, fake_bt, dimplex) -> None:
+    entry = add_settings(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    shared = {CONF_SYNC_CLOCK: True, CONF_BOOST_MINUTES: 60.0}
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert {str(key) for key in result["data_schema"].schema} >= {"email", "password"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**shared, "email": "me@x"}
+    )
+    assert result["errors"] == {"base": "incomplete_sign_in"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**shared, "email": "me@x", "password": "p"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_REFRESH_TOKEN] == "R"
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert "email" not in {str(key) for key in result["data_schema"].schema}
+
+
+@pytest.mark.parametrize("source", ["reauth", "reconfigure"])
+async def test_signing_in_again(hass, fake_bt, dimplex, monkeypatch, source) -> None:
+    entry = add_settings(hass, data={CONF_REFRESH_TOKEN: None})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    result = await (
+        entry.start_reauth_flow(hass)
+        if source == "reauth"
+        else entry.start_reconfigure_flow(hass)
+    )
+    assert result["step_id"] == "reauth_account"
+
+    async def refused(session, email, password):
+        raise cloud.AuthError("no")
+
+    monkeypatch.setattr(cloud, "async_sign_in", refused)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"email": "me@x", "password": "bad"}
+    )
+    assert result["errors"] == {"base": "invalid_auth"}
+
+    monkeypatch.setattr(cloud, "async_sign_in", dimplex["sign_in_fn"])
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"email": "me@x", "password": "p"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == f"{source}_successful"
+    assert entry.data[CONF_REFRESH_TOKEN] == "R"
 
 
 async def test_the_shared_session_outlives_a_heater_reload(hass, fake_bt) -> None:

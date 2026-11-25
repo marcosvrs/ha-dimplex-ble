@@ -28,8 +28,7 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Offer firmware updates; they need the Dimplex sign-in (heater settings)."""
-    await account(hass).async_signed_in()  # load the stored sign-in
+    """Offer firmware updates; they need the Dimplex sign-in (Dimplex entry)."""
     async_add_entities(
         [DimplexFirmwareUpdate(entry.runtime_data)], update_before_add=True
     )

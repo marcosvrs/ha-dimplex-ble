@@ -433,3 +433,21 @@ def gatt_failure(att: int) -> BleakError:
     err = BleakError(str(cause))
     err.__cause__ = cause
     return err
+
+
+def add_settings(hass, data=None, **options):
+    """The integration-level Dimplex entry (shared settings, optional sign-in)."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.dimplex_ble.const import DOMAIN
+    from custom_components.dimplex_ble.settings import SETTINGS_UNIQUE_ID
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex",
+        unique_id=SETTINGS_UNIQUE_ID,
+        data=data or {},
+        options=options,
+    )
+    entry.add_to_hass(hass)
+    return entry

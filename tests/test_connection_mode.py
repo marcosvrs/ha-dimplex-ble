@@ -261,15 +261,22 @@ async def test_a_second_window_never_raises_twice(hass, fake_bt, caplog) -> None
 # --- Feature B: connection mode option -------------------------------------
 
 
-async def test_options_flow_saves_the_settings_and_reloads(hass, fake_bt) -> None:
+async def test_shared_settings_apply_to_every_heater(hass, fake_bt) -> None:
+    """Clock sync and Boost length live in the Dimplex entry; heaters reload."""
+    from conftest import add_settings
+
     fake_bt.add()
+    settings = add_settings(hass)
     entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     assert coordinator.update_interval == UPDATE_INTERVAL
+    assert coordinator.link.sync_clock  # the default
+    assert not entry.supports_options
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_init(settings.entry_id)
     assert result["type"] is FlowResultType.FORM
-    assert result["data_schema"]({}) == {CONF_SYNC_CLOCK: True, CONF_BOOST_MINUTES: 60}
+    defaults = result["data_schema"]({})
+    assert (defaults[CONF_SYNC_CLOCK], defaults[CONF_BOOST_MINUTES]) == (True, 60)
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30.0}
@@ -277,12 +284,10 @@ async def test_options_flow_saves_the_settings_and_reloads(hass, fake_bt) -> Non
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30}
+    assert settings.options == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30}
     reloaded: DimplexCoordinator = entry.runtime_data
     assert reloaded is not coordinator
     assert not reloaded.link.sync_clock
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["data_schema"]({}) == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30}
 
 
 async def test_per_poll_refresh_connects_pairs_reads_then_disconnects(

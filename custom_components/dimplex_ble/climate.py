@@ -22,7 +22,8 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES, DOMAIN
+from . import settings
+from .const import DOMAIN
 from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .protocol import (
@@ -331,9 +332,5 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="boost_unavailable"
             )
-        minutes = int(
-            self.coordinator.config_entry.options.get(
-                CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES
-            )
-        )
+        minutes = settings.boost_minutes(self.coordinator.hass)
         await self.coordinator.async_start_boost(minutes, temperature)

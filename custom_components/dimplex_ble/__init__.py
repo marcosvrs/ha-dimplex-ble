@@ -6,7 +6,7 @@ import logging
 
 from homeassistant.components import bluetooth
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
@@ -15,13 +15,11 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
-from . import responder
+from . import responder, settings
 from .const import (
     CONF_ADDRESS,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
-    CONF_SYNC_CLOCK,
-    DEFAULT_SYNC_CLOCK,
     DOMAIN,
     PASSKEY_REQUEST_EVENT,
     PLATFORMS,
@@ -33,6 +31,7 @@ from .entity import device_info_for_coordinator
 from .link import HeaterLink
 from .schedule_keeper import STORAGE_VERSION, pending_issue_id
 from .services import async_setup_services
+from .settings import CONF_REFRESH_TOKEN, is_settings_entry
 from .stall import silent_since, stall_issue_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,13 +47,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:
-    """Set up one panel heater on its pinned proxy."""
+    """Set up one panel heater on its pinned proxy (the Dimplex entry: nothing)."""
+    if is_settings_entry(entry):
+        _async_watch_settings(hass, entry)
+        return True
     link = HeaterLink(
         hass,
         entry.data[CONF_ADDRESS],
         entry.data[CONF_PROXY_SOURCE],
         entry.data.get(CONF_PASSKEY),
-        sync_clock=entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
+        sync_clock=settings.sync_clock(hass),
     )
     coordinator = DimplexCoordinator(hass, entry, link)
     entry.runtime_data = coordinator
@@ -121,8 +123,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     return True
 
 
+@callback
+def _async_watch_settings(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
+    """Heaters read the Dimplex entry directly; reload them when it changes.
+
+    A renewed token alone changes nothing they use, so it reloads nothing.
+    """
+
+    def seen() -> tuple[dict[str, object], bool]:
+        return dict(entry.options), bool(entry.data.get(CONF_REFRESH_TOKEN))
+
+    last = seen()
+
+    async def _async_changed(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
+        nonlocal last
+        if (now := seen()) != last:
+            last = now
+            settings.async_reload_heaters(hass)
+
+    entry.async_on_unload(entry.add_update_listener(_async_changed))
+    if hass.state is CoreState.running:  # just added or signed in again
+        settings.async_reload_heaters(hass)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:
     """Stop polling, wait for in-flight work, then close the link once."""
+    if is_settings_entry(entry):
+        return True
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         coordinator = entry.runtime_data

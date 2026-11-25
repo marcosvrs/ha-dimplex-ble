@@ -13,7 +13,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import FakeProxy
+from conftest import FakeProxy, add_settings
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
@@ -154,10 +154,11 @@ async def test_a_mode_write_ends_boost_first_and_reads_the_result(
 
 
 def climate(hass, *, minutes=0, mode_hex="040000000000", boost_temperature=22, **kw):
+    if options := kw.pop("options", None):
+        add_settings(hass, **options)
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
-        options=kw.pop("options", {}),
     )
     _, coordinator = make_coordinator(
         hass,

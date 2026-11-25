@@ -2,23 +2,14 @@
   "config": {
     "flow_title": "{name}",
     "step": {
-      "user": {
-        "title": "Choose a heater",
-        "description": "Pick the Dimplex panel heater to add.",
-        "data": {
-          "address": "Heater"
-        }
-      },
       "confirm": {
         "title": "Choose a Bluetooth proxy",
         "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "proxy_source": "Bluetooth proxy",
-          "sync_clock": "Sync the heater clock"
+          "proxy_source": "Bluetooth proxy"
         },
         "data_description": {
-          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN.",
-          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock."
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
         }
       },
       "reauth_confirm": {
@@ -39,12 +30,10 @@
         "title": "Choose a Bluetooth proxy",
         "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "proxy_source": "Bluetooth proxy",
-          "sync_clock": "Sync the heater clock"
+          "proxy_source": "Bluetooth proxy"
         },
         "data_description": {
-          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN.",
-          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock."
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
         }
       },
       "pin_ready": {
@@ -76,6 +65,43 @@
       "pairing_failed": {
         "title": "Pairing didn't start",
         "description": "Submit to try again on the same proxy."
+      },
+      "heater": {
+        "title": "Choose a heater",
+        "description": "Pick the Dimplex panel heater to add.",
+        "data": {
+          "address": "Heater"
+        }
+      },
+      "user": {
+        "title": "Dimplex BLE",
+        "menu_options": {
+          "heater": "Add a heater",
+          "settings": "Dimplex settings for all heaters"
+        }
+      },
+      "settings": {
+        "title": "Dimplex settings",
+        "description": "Shared by all heaters.",
+        "data": {
+          "sync_clock": "Sync the heater clock",
+          "boost_minutes": "Boost length",
+          "email": "Dimplex email",
+          "password": "Dimplex password"
+        },
+        "data_description": {
+          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
+          "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
+          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
+        }
+      },
+      "reauth_account": {
+        "title": "Sign in to Dimplex",
+        "description": "Dimplex no longer accepts the sign-in used for firmware updates.",
+        "data": {
+          "email": "Dimplex email",
+          "password": "Dimplex password"
+        }
       }
     },
     "progress": {
@@ -94,15 +120,18 @@
       "invalid_passkey": "Enter exactly 6 digits.",
       "pin_rejected": "Wrong PIN. Check the display and try again.",
       "pairing_failed": "Pairing failed. Submit the PIN again.",
-      "cannot_connect": "Couldn't reach the heater. Submit to try again.",
+      "cannot_connect": "Couldn't reach Dimplex. Try again later.",
       "pairing_not_started": "Pairing didn't start. Submit to try again.",
-      "proxies_busy": "All proxies are busy — pairing will probably fail."
+      "proxies_busy": "All proxies are busy — pairing will probably fail.",
+      "invalid_auth": "Dimplex did not accept the email or password.",
+      "incomplete_sign_in": "Enter both the email and the password, or neither."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Settings",
+        "title": "Dimplex settings",
+        "description": "Shared by all heaters.",
         "data": {
           "sync_clock": "Sync the heater clock",
           "boost_minutes": "Boost length",
@@ -112,7 +141,7 @@
         "data_description": {
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
           "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
-          "email": "For firmware updates: your Dimplex (ConfigR) account, entered once for all heaters. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
+          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
         }
       }
     },
@@ -401,10 +430,6 @@
     "schedule_pending": {
       "title": "{name}: schedule change waiting",
       "description": "The heater couldn't be reached when its schedule was changed. Home Assistant keeps the change and writes it as soon as the heater answers again; until then the heater keeps running its previous schedule."
-    },
-    "cloud_sign_in": {
-      "title": "Dimplex sign-in expired",
-      "description": "Dimplex no longer accepts Home Assistant's sign-in, so firmware updates can't be checked. Open any heater's settings and sign in again."
     }
   },
   "selector": {

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from bleak.exc import BleakError
-from conftest import FakeProxy
+from conftest import FakeProxy, add_settings
 from test_connection_mode import make_entry, setup
 
 from custom_components.dimplex_ble import link as link_module
@@ -136,7 +136,8 @@ async def test_a_clock_within_a_minute_is_left_alone(hass, fake_bt) -> None:
 @pytest.mark.usefixtures("fixed_now")
 async def test_sync_off_only_measures(hass, fake_bt) -> None:
     proxy = with_clock(fake_bt.add())
-    coordinator = await setup(hass, make_entry(hass, **{CONF_SYNC_CLOCK: False}))
+    add_settings(hass, **{CONF_SYNC_CLOCK: False})
+    coordinator = await setup(hass, make_entry(hass))
 
     assert [e[0] for e in clock_events(proxy)] == ["read"]
     assert coordinator.link.clock_offset_s == -137 * 60

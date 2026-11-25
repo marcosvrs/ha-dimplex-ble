@@ -7,7 +7,7 @@ from contextlib import suppress
 from types import SimpleNamespace
 
 import pytest
-from conftest import ADDRESS, PIN, PROXY, FakeProxy, pair_failure
+from conftest import ADDRESS, PIN, PROXY, FakeProxy, add_settings, pair_failure
 from homeassistant.config_entries import (
     SOURCE_BLUETOOTH,
     SOURCE_USER,
@@ -162,7 +162,7 @@ async def test_pin_typed_while_pairing_waits_creates_the_entry(hass, fake_bt) ->
         CONF_PROXY_SOURCE: PROXY,
         CONF_PASSKEY: PIN,
     }
-    assert result["options"] == {CONF_SYNC_CLOCK: True}  # on by default
+    assert result["options"] == {}  # shared settings live in the Dimplex entry
     assert proxy.actions[:3] == [TARGET_ONLY, ARM_PIN, CLEAR]
     assert proxy.actions[-1] == CLEAR
     # Fresh service discovery, verified read, then the slot is released.
@@ -669,6 +669,7 @@ async def test_discovery_aborts(hass, fake_bt) -> None:
 
 
 async def test_user_step_lists_unconfigured_heaters(hass, fake_bt, monkeypatch) -> None:
+    add_settings(hass)  # with the Dimplex entry present, no menu
     fake_bt.add()
     infos = [
         advert(),
@@ -871,17 +872,15 @@ async def test_bonded_proxy_finishes_reconfigure_without_a_pin(hass, fake_bt) ->
     before = len(proxy.actions)
 
     result = await entry.start_reconfigure_flow(hass)
-    assert result["data_schema"]({})[CONF_SYNC_CLOCK] is True
+    assert CONF_SYNC_CLOCK not in result["data_schema"]({})  # shared setting
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_PROXY_SOURCE: PROXY, CONF_SYNC_CLOCK: False}
+        result["flow_id"], {CONF_PROXY_SOURCE: PROXY}
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     result = await advance(hass, result["flow_id"])
     await hass.async_block_till_done()
 
     assert result["reason"] == "reconfigure_successful"
-    assert entry.options == {CONF_SYNC_CLOCK: False}
-    assert not entry.runtime_data.link.sync_clock
     assert entry.data[CONF_PASSKEY] == PIN  # kept
     assert entry.state is ConfigEntryState.LOADED
     assert passkey_listeners(hass) == 0
