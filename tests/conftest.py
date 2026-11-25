@@ -126,7 +126,21 @@ class FakeClient:
         self.timeout = kwargs["timeout"]
         self.is_connected = False
         self.services: FakeServices | None = None
+        self.cached = True
+        self.notify: dict[str, Any] = {}
         proxy.clients.append(self)
+
+    @property
+    def mtu_size(self) -> int:
+        """bleak-esphome: a connect without the cache exchanges the MTU."""
+        return 23 if self.cached else self.proxy.fresh_mtu
+
+    async def start_notify(self, char: FakeChar, callback: Any) -> None:
+        self.events.append(("notify", char.uuid))
+        self.notify[char.uuid] = callback
+
+    def notify_from_heater(self, uuid: str, data: bytes) -> None:
+        self.notify[uuid](bytearray(data))
 
     @property
     def events(self) -> list[Any]:
@@ -134,6 +148,7 @@ class FakeClient:
 
     async def connect(self, pair: bool, dangerous_use_bleak_cache: bool) -> None:
         self.events.append(("connect", pair, dangerous_use_bleak_cache))
+        self.cached = dangerous_use_bleak_cache
         if self.proxy.connect_gate is not None:
             await self.proxy.connect_gate
         if self.proxy.connect_error is not None:
@@ -253,6 +268,7 @@ class FakeProxy:
         self.api_connected = True
         self.on_arm = None
         self.sees_heater = True
+        self.fresh_mtu = 517
         self.rssi = -60
         self.entry_id = f"esphome_{source}"
         self.scanner = FakeScanner(self)
