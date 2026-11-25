@@ -257,9 +257,13 @@ Two firmware targets exist (VERIFIED): `OTAMode.UI` and `OTAMode.ACC`, and
 `Esp32OtaEnable.Mode` byte (default 1 = UI) selects the target.
 
 The live AM6532 inventory (in [`capability-matrix.md`](capability-matrix.md))
-exposes `1/0x300E` and not `1/0x100E`. **INFERENCE:** the PLX Series C panel
-heater is on the ESP32 path. Whether its GATT table contains service
-`00060000-F8CE-11E4-ABF4-0002A5D5C51D` has not been checked.
+exposes `1/0x300E` and not `1/0x100E`, and (**VERIFIED** 2026-11-25, read-only
+`get_gatt_services` on AM1382, AM2086, AM6532 and AM8224) every heater has
+service `00060000-F8CE-11E4-ABF4-0002A5D5C51D` with characteristic
+`00060001-…-C51D` (read, write, write-without-response, notify, indicate).
+The PLX Series C panel heater is therefore on the ESP32 OTA path. Nothing was
+written; OTA stays out of the integration (no local firmware source, no
+recovery path tested).
 
 ### 4.3 Embedded firmware versions or release notes (Q3)
 
