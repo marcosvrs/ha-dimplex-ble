@@ -51,4 +51,4 @@ class DimplexAwayUntil(DimplexEntity, DateTimeEntity):
 
     async def async_set_value(self, value: datetime) -> None:
         """Set the deadline and activate Away Mode explicitly."""
-        await self.coordinator.async_set_away_mode(True, until=value)
+        await self.coordinator.async_set_away_mode(until=value)

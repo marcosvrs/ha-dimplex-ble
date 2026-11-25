@@ -237,7 +237,7 @@ async def test_another_preset_is_a_mode_write(hass) -> None:
 async def test_away_during_boost_goes_to_the_away_write(hass) -> None:
     coordinator, entity = climate(hass, minutes=29, mode_hex="020000010000")
     await entity.async_set_preset_mode("away")
-    coordinator.async_set_away_mode.assert_awaited_once_with(True)
+    coordinator.async_set_away_mode.assert_awaited_once_with()
     coordinator.async_set_heating_mode.assert_not_awaited()
 
 
@@ -318,9 +318,7 @@ async def test_entering_away_ends_a_running_boost_first(hass, fake_bt) -> None:
     await coordinator.async_start_boost(30, 22)
     proxy.events.clear()
 
-    await coordinator.async_set_away_mode(
-        True, until=dt_util.now() + timedelta(hours=13)
-    )
+    await coordinator.async_set_away_mode(until=dt_util.now() + timedelta(hours=13))
 
     boost_and_away = [
         (e[1][4:8], e[2][:1])
@@ -337,9 +335,7 @@ async def test_entering_away_without_boost_writes_only_away(hass, fake_bt) -> No
     coordinator = await setup(hass, make_entry(hass))
     proxy.events.clear()
 
-    await coordinator.async_set_away_mode(
-        True, until=dt_util.now() + timedelta(hours=13)
-    )
+    await coordinator.async_set_away_mode(until=dt_util.now() + timedelta(hours=13))
 
     assert "1027" not in [e[1][4:8] for e in proxy.events if e[0] == "write"]
 
@@ -392,9 +388,7 @@ async def test_a_refused_away_request_keeps_boost_running(hass, fake_bt) -> None
     proxy.events.clear()
 
     with pytest.raises(ServiceValidationError) as err:
-        await coordinator.async_set_away_mode(
-            True, until=dt_util.now() - timedelta(hours=1)
-        )
+        await coordinator.async_set_away_mode(until=dt_util.now() - timedelta(hours=1))
 
     assert err.value.translation_key == "invalid_away_until"
     assert [e for e in proxy.events if e[0] == "write"] == []

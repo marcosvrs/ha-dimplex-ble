@@ -464,15 +464,35 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             await self.async_command(self.link.async_read_then_write(AWAY_MODE, build))
         await self.async_request_refresh()
 
-    async def async_set_away_mode(
-        self,
-        active: bool,
-        *,
-        until: datetime | None = None,
-    ) -> None:
-        """Write Away Mode with an explicit future deadline when activating."""
+    async def async_set_away_mode(self, *, until: datetime | None = None) -> None:
+        """Start Away until ``until`` (or the last return time still ahead)."""
         async with self._away_lock:
-            await self._async_write_away_mode(active, until)
+            now = dt_util.now().replace(tzinfo=None)
+            data = self.data
+            if until is not None and until.tzinfo is not None:
+                until = dt_util.as_local(until).replace(tzinfo=None)
+            if until is None and data is not None and data.away_until is not None:
+                if data.away_until > now:
+                    until = data.away_until
+            if until is None:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="away_until_required"
+                )
+            if until <= now:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="invalid_away_until"
+                )
+            if isinstance(data, HeaterSnapshot) and data.boost_minutes_left:
+                # Boost during Away was never tested: end Boost first (only once
+                # the request is known to be valid, so a refused one keeps it).
+                await self._async_end_boost()
+            await self.async_command(
+                self.link.async_write(
+                    AWAY_MODE, encode_away_mode(True, until, self._away_target())
+                )
+            )
+            # Later Away checks must see what was just written.
+            self._apply_written(away_active=True, away_until=until)
         await self.async_request_refresh()
 
     async def async_set_heating_mode(self, payload: bytes) -> None:
@@ -493,62 +513,23 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 # One link operation: in per-poll mode separate writes would be
                 # 10 s apart, and the Away write alone can leave the heater in
                 # Away (any Away-record write enters it; the mode write ends it).
-                await self._async_write_away_mode(
-                    False, None, then=(HEATING_MODE, payload)
+                until = data.away_until or dt_util.now().replace(tzinfo=None)
+                leave = encode_away_mode(False, until, self._away_target())
+                await self.async_command(
+                    self.link.async_write_many(
+                        ((AWAY_MODE, leave), (HEATING_MODE, payload))
+                    )
                 )
+                self._apply_written(away_active=False, away_until=until)
             else:
                 await self.async_write(HEATING_MODE, payload, refresh=False)
         # Not the debounced request: the next action of a script (a preset of
         # the new mode) is validated against the state, so it must be current.
         await self.async_refresh()
 
-    async def _async_write_away_mode(
-        self,
-        active: bool,
-        until: datetime | None,
-        *,
-        then: tuple[GattAddress, bytes] | None = None,
-    ) -> None:
-        """Write the Away record; the caller holds the Away lock."""
-        now = dt_util.now().replace(tzinfo=None)
+    def _away_target(self) -> int:
+        """Return the Away temperature to keep when rewriting the Away record."""
         data = self.data
-        if until is not None and until.tzinfo is not None:
-            until = dt_util.as_local(until).replace(tzinfo=None)
-        if active:
-            if until is None and data is not None and data.away_until is not None:
-                if data.away_until > now:
-                    until = data.away_until
-            if until is None:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN, translation_key="away_until_required"
-                )
-            if until <= now:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN, translation_key="invalid_away_until"
-                )
-        elif until is None:
-            until = (
-                data.away_until
-                if data is not None and data.away_until is not None
-                else now
-            )
-        if (
-            active
-            and isinstance(self.data, HeaterSnapshot)
-            and self.data.boost_minutes_left
-        ):
-            # Boost during Away was never tested: end Boost first (only once
-            # the Away request is known to be valid, so a refused one keeps it).
-            await self._async_end_boost()
-        target_temperature = (
-            data.away_target_temperature_c
-            if data is not None and data.away_target_temperature_c is not None
-            else AWAY_TEMPERATURE_MIN_C
-        )
-        writes = ((AWAY_MODE, encode_away_mode(active, until, target_temperature)),)
-        await self.async_command(
-            self.link.async_write_many(writes + ((then,) if then else ()))
-        )
-        # Later Away checks must see what was just written, not the snapshot
-        # from before it.
-        self._apply_written(away_active=active, away_until=until)
+        if data is not None and data.away_target_temperature_c is not None:
+            return data.away_target_temperature_c
+        return AWAY_TEMPERATURE_MIN_C

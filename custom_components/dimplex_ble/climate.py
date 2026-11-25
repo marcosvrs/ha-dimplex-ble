@@ -299,7 +299,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             await self._async_start_boost()
             return
         if preset_mode == PRESET_AWAY:
-            await self.coordinator.async_set_away_mode(True)  # ends Boost first
+            await self.coordinator.async_set_away_mode()  # ends Boost first
             return
         await self.coordinator.async_set_heating_mode(encode_preset_mode(preset_mode))
 

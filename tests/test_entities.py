@@ -961,7 +961,7 @@ async def test_away_mode_write_records_the_written_state_until_the_next_poll(has
     coordinator.async_request_refresh = AsyncMock()
     until = datetime(2063, 11, 22, 18, 53)
 
-    await coordinator.async_set_away_mode(True, until=until)
+    await coordinator.async_set_away_mode(until=until)
 
     assert coordinator.data.away_active is True
     assert coordinator.data.away_until == until
