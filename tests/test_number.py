@@ -14,6 +14,7 @@ from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE,
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.number import (
     DimplexAwayTemperatureNumber,
+    DimplexSetbackTemperatureNumber,
     DimplexTemperatureOffsetNumber,
     async_setup_entry,
 )
@@ -67,10 +68,12 @@ async def test_setup_adds_the_temperature_settings(hass) -> None:
 
     assert [entity.unique_id.split("_", 1)[1] for entity in entities] == [
         "away_temperature",
+        "setback_temperature",
         "temperature_offset",
     ]
     assert all(e.entity_category is EntityCategory.CONFIG for e in entities)
     assert [e.entity_registry_enabled_default for e in entities] == [
+        True,
         True,
         False,
     ]
@@ -78,11 +81,13 @@ async def test_setup_adds_the_temperature_settings(hass) -> None:
         e.native_unit_of_measurement == UnitOfTemperature.CELSIUS for e in entities
     )
     # The offset is a difference: never converted like an absolute temperature.
-    assert entities[1].device_class is None
-    assert entities[0].device_class == "temperature"
-    assert (entities[0].native_min_value, entities[0].native_max_value) == (7, 18)
-    assert (entities[1].native_min_value, entities[1].native_max_value) == (-3.0, 3.0)
-    assert entities[1].native_step == 0.1
+    away, setback, offset = entities
+    assert offset.device_class is None
+    assert away.device_class == setback.device_class == "temperature"
+    assert (away.native_min_value, away.native_max_value) == (7, 18)
+    assert (setback.native_min_value, setback.native_max_value) == (7, 18)
+    assert (offset.native_min_value, offset.native_max_value) == (-3.0, 3.0)
+    assert offset.native_step == 0.1
     assert all(entity.icon is None for entity in entities)
 
 
@@ -230,3 +235,19 @@ async def test_temperature_offset_rejects_values_outside_the_range(hass, value) 
     assert err.value.translation_key == "invalid_temperature_offset"
     assert err.value.translation_placeholders == {"min": "-3", "max": "3"}
     client.async_write_raw.assert_not_awaited()
+
+
+async def test_setback_temperature_reads_and_writes_the_setback_record(hass) -> None:
+    coordinator, client = make_coordinator(hass, snapshot(), reads=[b"\x00\x08"])
+    entity = DimplexSetbackTemperatureNumber(coordinator)
+    assert entity.native_value is None and not entity.available  # not read yet
+
+    coordinator.settings[(0, 0x1016)] = b"\x00\x08"
+    assert entity.native_value == 8.0
+    assert (entity.native_min_value, entity.native_max_value) == (7, 18)
+    assert entity.entity_category is EntityCategory.CONFIG
+
+    await entity.async_set_native_value(12.0)
+
+    client.async_write_raw.assert_awaited_once_with(0, 0x1016, b"\x00\x0c")
+    assert entity.native_value == 12.0

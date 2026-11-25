@@ -166,7 +166,8 @@ Each heater becomes one device with:
 | Away return time | When Away ends. Setting it starts Away. The Away preset reuses the return time set last, if it is still in the future; otherwise set a new one here. |
 | Away temperature | What Away holds, 7–18 °C (default 7 °C). Can be changed only while Away is on: the heater starts Away whenever this value is written. During Away the climate's target shows and sets this temperature. |
 | Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
-| Setback | In Auto, holds the heater's Setback temperature during Heating Off periods instead of letting the room cool. The Setback temperature itself is set on the heater. |
+| Setback | In Auto, holds the Setback temperature during Heating Off periods instead of letting the room cool. |
+| Setback temperature | What Setback holds, 7–18 °C (whole degrees). Can be changed whether Setback is on or off. |
 | Sound | Button sounds on the heater. |
 | Adaptive start | Dimplex "Adaptive Start": heats early so a timer period starts at its target. Only affects User Timer and Home All Day. Learns continuously, plans at most 2 hours ahead; turn it on or off for all heaters in a room together. |
 | Open window detection | Stops heating ("Heating Off") when the room temperature drops suddenly. Can trigger in drafty or poorly insulated rooms. |
@@ -177,7 +178,7 @@ Each heater becomes one device with:
 | Firmware | Installed display firmware and Dimplex's latest, checked every 12 hours; **Install** updates the heater over Bluetooth (about 7 minutes). Needs the Dimplex sign-in. |
 | Temperature offset (installer setting, disabled) | Corrects the room reading, −3.0 to +3.0 °C in 0.1 °C steps. Dimplex reserves it for service staff. |
 
-Sound, Setback and Temperature offset are read every 5 minutes (and right after
+Sound, Setback, Setback temperature and Temperature offset are read every 5 minutes (and right after
 you change them), so a change made on the heater's own menu can take up to
 5 minutes to show.
 

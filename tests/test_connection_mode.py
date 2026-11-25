@@ -593,6 +593,37 @@ async def test_setback_keeps_the_heater_temperature_in_one_operation(
     assert coordinator.settings[SETBACK] == b"\x01\x0a"
 
 
+async def test_setback_temperature_keeps_setback_on_in_one_operation(
+    hass, fake_bt
+) -> None:
+    from custom_components.dimplex_ble.protocol import SETBACK
+
+    proxy = fake_bt.add()
+    proxy.services.add(SETBACK)
+    proxy.values[SETBACK] = b"\x01\x08"  # Setback switched on at the heater
+    coordinator = await setup(hass, make_entry(hass))
+    coordinator.settings[SETBACK] = b"\x00\x08"  # cached before the change
+    proxy.events.clear()
+
+    await coordinator.async_set_setback_temperature(15.0)
+
+    assert [e[2] for e in proxy.events if e[0] == "write"][-1] == b"\x01\x0f"
+    assert kinds(proxy.events).count("connect") == 1
+    assert coordinator.settings[SETBACK] == b"\x01\x0f"
+
+
+async def test_setback_temperature_refuses_values_outside_7_to_18(
+    hass, fake_bt
+) -> None:
+    from homeassistant.exceptions import ServiceValidationError
+
+    fake_bt.add()
+    coordinator = await setup(hass, make_entry(hass))
+    for bad in (6, 19, 15.5):
+        with pytest.raises(ServiceValidationError):
+            await coordinator.async_set_setback_temperature(bad)
+
+
 async def test_per_poll_releases_the_link_after_a_refused_write(hass, fake_bt) -> None:
     """Review round 7: a non-GATT failure must not keep the proxy slot."""
     from custom_components.dimplex_ble.errors import CharacteristicError

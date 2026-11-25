@@ -24,6 +24,7 @@ from custom_components.dimplex_ble.protocol import (
     parse_flag,
     parse_model,
     parse_setback,
+    parse_setback_temperature,
     parse_snapshot,
     parse_sound_enabled,
     parse_temperature_offset,
@@ -412,6 +413,32 @@ def test_setback_round_trips_and_keeps_the_temperature_byte(
     assert parse_setback(payload) is active
     assert encode_setback(active, payload) == payload
     assert encode_setback(not active, payload)[1:] == b"\x08"
+
+
+@pytest.mark.parametrize(
+    ("payload", "temperature"),
+    [
+        (b"\x00\x08", 8),
+        (b"\x01\x0f", 15),
+        (b"\x00\x07", 7),
+        (b"\x00\x12", 18),
+        (b"\x00\x06", None),
+        (b"\x00\x13", None),
+        (b"\x02\x08", None),
+        (None, None),
+    ],
+)
+def test_setback_temperature_is_whole_degrees(payload, temperature) -> None:
+    """AM2086 2026-11-25: display 8 degC read 0x08; a written 0x0F showed 15 degC."""
+    assert parse_setback_temperature(payload) == temperature
+
+
+def test_setback_temperature_keeps_setback_on_or_off() -> None:
+    assert encode_setback(None, b"\x01\x08", 15) == b"\x01\x0f"
+    assert encode_setback(None, b"\x00\x08", 7) == b"\x00\x07"
+    for bad in (6, 19):
+        with pytest.raises(DimplexProtocolError):
+            encode_setback(None, b"\x00\x08", bad)
 
 
 @pytest.mark.parametrize("payload", [None, b"", b"\x01", b"\x02\x08", b"\x01\x08\x00"])

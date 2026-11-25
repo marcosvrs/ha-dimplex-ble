@@ -60,6 +60,10 @@ CLOCK_CENTURY: Final = 20
 SOUND_PAYLOAD_LENGTH: Final = 3
 AWAY_MODE_PAYLOAD_LENGTH: Final = 7
 SETBACK_PAYLOAD_LENGTH: Final = 2
+# Setback holds 7-18 degC (PLXE manual p. 23); byte 1 is whole degC, verified on
+# AM2086 2026-11-25 (display 8 degC = 0x08, a written 0x0F showed 15 degC).
+SETBACK_TEMPERATURE_MIN_C: Final = 7
+SETBACK_TEMPERATURE_MAX_C: Final = 18
 
 # Away target bounds of the Dimplex cloud client (7-18 degC); the PLXE manual
 # gives the 7 degC default (p. 17) (docs/capability-matrix.md).
@@ -341,15 +345,34 @@ def parse_setback(value: bytes | None) -> bool | None:
     return bool(value[0])
 
 
-def encode_setback(active: bool, current: bytes | None) -> bytes:
-    """Switch Setback, keeping the heater's own Setback temperature byte.
+def parse_setback_temperature(value: bytes | None) -> int | None:
+    """Decode the Setback temperature (whole degC, 7-18) from ``[IsActive, Temp]``."""
+    if parse_setback(value) is None:
+        return None
+    assert value is not None  # checked by parse_setback()
+    temperature = value[1]
+    if not SETBACK_TEMPERATURE_MIN_C <= temperature <= SETBACK_TEMPERATURE_MAX_C:
+        return None
+    return temperature
 
-    The temperature byte's scale is unverified, so it is never generated.
-    """
+
+def encode_setback(
+    active: bool | None, current: bytes | None, temperature: int | None = None
+) -> bytes:
+    """Change Setback on/off and/or its temperature, keeping the other part."""
     if parse_setback(current) is None:
         raise DimplexProtocolError("The current Setback value is unknown")
     assert current is not None  # checked by parse_setback()
-    return bytes((int(active), current[1]))
+    if temperature is not None and not (
+        SETBACK_TEMPERATURE_MIN_C <= temperature <= SETBACK_TEMPERATURE_MAX_C
+    ):
+        raise DimplexProtocolError("Setback temperature out of range")
+    return bytes(
+        (
+            current[0] if active is None else int(active),
+            current[1] if temperature is None else temperature,
+        )
+    )
 
 
 def parse_temperature_offset(value: bytes | None) -> float | None:

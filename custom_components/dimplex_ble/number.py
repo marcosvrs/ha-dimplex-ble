@@ -17,7 +17,11 @@ from .protocol import (
     AWAY_TEMPERATURE_MAX_C,
     AWAY_TEMPERATURE_MIN_C,
     ROOM_TEMPERATURE_OFFSET,
+    SETBACK,
+    SETBACK_TEMPERATURE_MAX_C,
+    SETBACK_TEMPERATURE_MIN_C,
     TEMPERATURE_OFFSET_LIMIT_C,
+    parse_setback_temperature,
     parse_temperature_offset,
 )
 
@@ -35,6 +39,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             DimplexAwayTemperatureNumber(coordinator),
+            DimplexSetbackTemperatureNumber(coordinator),
             DimplexTemperatureOffsetNumber(coordinator),
         ]
     )
@@ -74,6 +79,25 @@ class DimplexAwayTemperatureNumber(_DimplexTemperatureNumber):
     async def async_set_native_value(self, value: float) -> None:
         """Write the Away target."""
         await self.coordinator.async_set_away_temperature(value)
+
+
+class DimplexSetbackTemperatureNumber(_DimplexTemperatureNumber):
+    """What Setback holds during Heating Off periods of a timer programme."""
+
+    _attr_translation_key = "setback_temperature"
+    _unique_suffix = "setback_temperature"
+    _attr_native_min_value = SETBACK_TEMPERATURE_MIN_C
+    _attr_native_max_value = SETBACK_TEMPERATURE_MAX_C
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the Setback temperature last read from the heater."""
+        value = parse_setback_temperature(self.coordinator.settings.get(SETBACK))
+        return None if value is None else float(value)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write the Setback temperature, keeping Setback on or off."""
+        await self.coordinator.async_set_setback_temperature(value)
 
 
 class DimplexTemperatureOffsetNumber(DimplexEntity, NumberEntity):

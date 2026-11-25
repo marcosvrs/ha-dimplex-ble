@@ -45,6 +45,8 @@ from .protocol import (
     PRESET_USER_TIMER,
     ROOM_TEMPERATURE_OFFSET,
     SETBACK,
+    SETBACK_TEMPERATURE_MAX_C,
+    SETBACK_TEMPERATURE_MIN_C,
     SETPOINT,
     SOUND,
     TEMPERATURE_OFFSET_LIMIT_C,
@@ -464,15 +466,28 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         await self.async_write_setting(SOUND, encode_sound(enabled))
 
     async def async_set_setback(self, enabled: bool) -> None:
-        """Switch Setback, keeping the heater's Setback temperature.
+        """Switch Setback, keeping the heater's Setback temperature."""
+        await self._async_write_setback(enabled, None)
 
-        The record is read and written in one link operation, so a temperature
-        changed on the heater's menu since the last poll is kept.
+    async def async_set_setback_temperature(self, value: object) -> None:
+        """Set the Setback temperature (whole degC), keeping Setback on/off."""
+        temperature = whole_degrees(
+            value, SETBACK_TEMPERATURE_MIN_C, SETBACK_TEMPERATURE_MAX_C
+        )
+        await self._async_write_setback(None, temperature)
+
+    async def _async_write_setback(
+        self, enabled: bool | None, temperature: int | None
+    ) -> None:
+        """Change one part of the Setback record, keeping the other.
+
+        The record is read and written in one link operation, so a change made
+        on the heater's menu since the last poll is kept.
         """
 
         def build(current: bytes | None) -> bytes:
             try:
-                return encode_setback(enabled, current)
+                return encode_setback(enabled, current, temperature)
             except DimplexProtocolError as err:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="setting_unavailable"

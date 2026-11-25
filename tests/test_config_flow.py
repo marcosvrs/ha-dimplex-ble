@@ -755,7 +755,8 @@ async def test_reauth_repairs_with_a_new_pin(hass, fake_bt) -> None:
 async def test_reauth_without_a_visible_proxy_stays_open(
     hass, fake_bt, monkeypatch
 ) -> None:
-    monkeypatch.setattr(config_flow, "ADVERTISEMENT_WAIT", 0.01)
+    # Long enough to still be waiting at the check below (0.01 s raced it).
+    monkeypatch.setattr(config_flow, "ADVERTISEMENT_WAIT", 0.2)
     fake_bt.add(FakeProxy(OTHER, responder=False))
     entry = make_entry(hass)
     result = await entry.start_reauth_flow(hass)

@@ -59,6 +59,7 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "advance",
         "setback",
         "away_temperature",
+        "setback_temperature",
         "temperature_offset",
         "schedule_user_timer",
         "schedule_home_all_day",

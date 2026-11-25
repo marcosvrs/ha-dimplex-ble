@@ -198,6 +198,9 @@
       },
       "temperature_offset": {
         "name": "Temperature offset"
+      },
+      "setback_temperature": {
+        "name": "Setback temperature"
       }
     },
     "switch": {
