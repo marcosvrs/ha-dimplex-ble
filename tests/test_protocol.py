@@ -5,14 +5,11 @@ from datetime import datetime
 import pytest
 
 from custom_components.dimplex_ble.protocol import (
-    BLOCKED_READS,
-    BLOCKED_WRITES,
     DIMPLEX_GROUPS,
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
     DimplexProtocolError,
     HeaterSnapshot,
-    ProtectedCharacteristicError,
     _parse_selected_version,
     characteristic_uuid,
     encode_advance,
@@ -35,7 +32,6 @@ from custom_components.dimplex_ble.protocol import (
     parse_sound_enabled,
     parse_temperature_offset,
     service_uuid,
-    validate_raw_access,
 )
 
 
@@ -88,45 +84,6 @@ def test_gatt_uuid_candidates_include_sig_and_gdhv_bases(group: int) -> None:
             f"00001023-000{group}-474c-4e44-494d504c4558",
         ),
     )
-
-
-def test_validate_raw_access_allows_safe_reads_and_writes() -> None:
-    for group in range(4):
-        validate_raw_access(group, 0x1234, write=False)
-        validate_raw_access(group, 0x1234, write=True)
-
-
-@pytest.mark.parametrize("address", sorted(BLOCKED_READS))
-def test_validate_raw_access_blocks_every_protected_read(
-    address: tuple[int, int],
-) -> None:
-    with pytest.raises(ProtectedCharacteristicError) as err:
-        validate_raw_access(*address, write=False)
-    assert str(err.value) == "This characteristic is blocked for reads"
-
-
-@pytest.mark.parametrize("address", sorted(BLOCKED_WRITES))
-def test_validate_raw_access_blocks_every_protected_write(
-    address: tuple[int, int],
-) -> None:
-    with pytest.raises(ProtectedCharacteristicError) as err:
-        validate_raw_access(*address, write=True)
-    assert str(err.value) == "This characteristic is blocked for writes"
-
-
-@pytest.mark.parametrize("address", sorted(BLOCKED_READS))
-def test_read_protection_does_not_implicitly_block_writes(
-    address: tuple[int, int],
-) -> None:
-    if address not in BLOCKED_WRITES:
-        validate_raw_access(*address, write=True)
-
-
-@pytest.mark.parametrize("address", sorted(BLOCKED_WRITES - BLOCKED_READS))
-def test_write_protection_does_not_implicitly_block_reads(
-    address: tuple[int, int],
-) -> None:
-    validate_raw_access(*address, write=False)
 
 
 def test_away_mode_round_trips_verified_payload() -> None:

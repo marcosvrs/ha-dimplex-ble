@@ -52,7 +52,6 @@ from .protocol import (
     parse_clock,
     parse_schedule_day,
     parse_snapshot,
-    validate_raw_access,
 )
 
 CONNECT_TIMEOUT = 15.0
@@ -361,7 +360,6 @@ class HeaterLink:
         self, address: GattAddress, build: Callable[[bytes | None], bytes]
     ) -> bytes:
         """Read a record and write ``build(current)`` in one operation."""
-        validate_raw_access(*address, write=True)
         async with self._operation(f"update {address[0]}/0x{address[1]:04x}") as client:
             payload = build(await _read_optional(client, address))
             await _write(client, address, payload)
@@ -371,8 +369,6 @@ class HeaterLink:
         self, writes: tuple[tuple[GattAddress, bytes], ...]
     ) -> None:
         """Write characteristics in order inside one operation (one connection)."""
-        for address, _ in writes:
-            validate_raw_access(*address, write=True)
         op = "write " + ",".join(f"{a[0]}/0x{a[1]:04x}" for a, _ in writes)
         async with self._operation(op) as client:
             for address, payload in writes:
@@ -390,7 +386,6 @@ class HeaterLink:
         ``readback`` collects each day as the heater returns it, so a caller
         knows which days were saved even when a later one fails.
         """
-        validate_raw_access(*SCHEDULE, write=True)
         payloads = {
             day: encode_schedule_day(programme, day, periods)
             for day, periods in days.items()
@@ -487,13 +482,7 @@ class HeaterLink:
             self.clock_offset_s = (heater - local).total_seconds()
             if abs(self.clock_offset_s) <= 60 or not self.sync_clock:
                 return
-            characteristic = _find_characteristic(client, CLOCK)
-            assert characteristic is not None  # it was just read
-            await client.write_gatt_char(
-                characteristic,
-                encode_clock(now),
-                response="write" in characteristic.properties,
-            )
+            await _write(client, CLOCK, encode_clock(now))
         except _GATT_ERRORS as err:
             _LOGGER.debug(
                 "CLOCK %s check failed %s: %s", self.address, type(err).__name__, err

@@ -180,7 +180,7 @@ async def test_away_temperature_rejects_values_outside_the_range(hass, value) ->
 
 @pytest.mark.parametrize(
     "data",
-    [None, snapshot(away_active=None), snapshot(away_active=True, away_until=None)],
+    [None, snapshot(away_active=None)],
 )
 async def test_away_temperature_needs_a_known_away_state(hass, data) -> None:
     coordinator, client = make_coordinator(hass, data)
@@ -189,6 +189,21 @@ async def test_away_temperature_needs_a_known_away_state(hass, data) -> None:
         await coordinator.async_set_away_temperature(10)
 
     assert err.value.translation_key == "setting_unavailable"
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_away_without_a_valid_return_time_is_not_rewritten(hass) -> None:
+    """The live record decides: no valid return time, nothing to keep."""
+    coordinator, client = make_coordinator(
+        hass,
+        snapshot(away_active=True, away_until=None),
+        reads=[bytes((1, 0, 0, 0, 0, 0, 7))],
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_away_temperature(10)
+
+    assert err.value.translation_key == "away_temperature_needs_away"
     client.async_write_raw.assert_not_awaited()
 
 

@@ -35,6 +35,7 @@ from custom_components.dimplex_ble.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 from custom_components.dimplex_ble.link import HeaterLink
+from custom_components.dimplex_ble.protocol import SOUND
 from custom_components.dimplex_ble.stall import STALL_WINDOW, StallMonitor
 
 pytestmark = pytest.mark.usefixtures("skip_dependencies")
@@ -355,7 +356,7 @@ async def test_per_poll_sound_due_is_read_inside_the_poll_connection(
     # Setup: one connection carried the snapshot and the sound read.
     assert kinds(proxy.events).count("connect") == 1
     assert proxy.events.count(SOUND_READ) == 1
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
     assert proxy.events.index(SOUND_READ) < len(proxy.events) - 1
     assert proxy.events[-1] == "disconnect"
 
@@ -370,14 +371,14 @@ async def test_per_poll_sound_due_is_read_inside_the_poll_connection(
     proxy.values[(2, 0x0005)] = b"\x00\x00\x00"
     await coordinator.async_refresh_settings()
     assert proxy.events == []
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
 
     # The next poll reads it inside its single connection.
     await coordinator.async_refresh()
     assert kinds(proxy.events).count("connect") == 1
     assert proxy.events.count(SOUND_READ) == 1
     assert proxy.events[-1] == "disconnect"
-    assert coordinator.sound_value == b"\x00\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
 
     # And only once.
     proxy.events.clear()
@@ -406,7 +407,7 @@ async def test_per_poll_sound_failure_keeps_the_snapshot(
     coordinator = await setup(hass, entry)
 
     assert coordinator.last_update_success
-    assert coordinator.sound_value is None
+    assert coordinator.settings.get(SOUND) is None
     assert kinds(proxy.events).count("connect") == 1
     assert proxy.events[-1] == "disconnect"
     # Nothing was confirmed, so the next poll reads the settings again.

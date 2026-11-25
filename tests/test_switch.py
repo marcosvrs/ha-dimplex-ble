@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE, DOMAIN
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.errors import DimplexError
+from custom_components.dimplex_ble.protocol import SOUND
 from custom_components.dimplex_ble.switch import (
     DimplexAdvanceSwitch,
     DimplexOpenWindowDetectionSwitch,
@@ -67,7 +68,8 @@ def make_coordinator(
         preemptive_heating=preemptive,
         open_window_detection=open_window,
     )
-    coordinator.sound_value = sound
+    if sound is not None:
+        coordinator.settings[SOUND] = sound
     coordinator.async_request_refresh = AsyncMock()
     return coordinator
 
@@ -152,7 +154,7 @@ async def test_sound_switch_writes_and_reads_back_without_main_refresh(hass) -> 
         (2, 0x0005),
         (2, 0x0005),
     ]
-    assert coordinator.sound_value == b"\x00\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
 
 
 async def test_sound_poll_is_independent_and_updates_cache(hass) -> None:
@@ -167,7 +169,7 @@ async def test_sound_poll_is_independent_and_updates_cache(hass) -> None:
 
     await coordinator.async_refresh_settings()
 
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
     assert [call.args for call in client.async_read_raw.await_args_list] == [
         (2, 0x0005),
         (0, 0x1016),
@@ -190,7 +192,7 @@ async def test_sound_poll_ignores_failed_and_invalid_reads(hass) -> None:
     await coordinator.async_refresh_settings()
     await coordinator.async_refresh_settings()
 
-    assert coordinator.sound_value == b"\x00\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
 
 
 async def test_sound_poll_skips_an_unavailable_coordinator(hass) -> None:
@@ -360,7 +362,7 @@ async def test_setting_readback_failure_keeps_the_written_value(hass) -> None:
 
     await DimplexSoundSwitch(coordinator).async_turn_on()
 
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
 
 
 async def test_per_poll_setting_write_is_read_back_by_the_next_poll(hass) -> None:
@@ -372,7 +374,7 @@ async def test_per_poll_setting_write_is_read_back_by_the_next_poll(hass) -> Non
     await DimplexSoundSwitch(coordinator).async_turn_on()
 
     assert coordinator._settings_due is True
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
 
 
 def _advance_coordinator(hass, client, *, mode_hex, away=False, advance=False):

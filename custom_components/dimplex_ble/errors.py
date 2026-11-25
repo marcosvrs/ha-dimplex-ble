@@ -8,7 +8,7 @@ from bleak.exc import BleakError
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import DOMAIN
-from .protocol import DimplexProtocolError, ProtectedCharacteristicError
+from .protocol import DimplexProtocolError
 
 # SMP failure reasons that mean "the heater rejected the PIN". Only 81
 # (CONFIRM_VALUE_FAIL) is hardware-confirmed: a wrong PIN produced it twice
@@ -76,9 +76,7 @@ def to_homeassistant_error(
     err: DimplexError | DimplexProtocolError,
 ) -> HomeAssistantError:
     """Return the translated Home Assistant error for a failed operation."""
-    if isinstance(err, ProtectedCharacteristicError):
-        key = "protected_characteristic"
-    elif isinstance(err, DimplexProtocolError):
+    if isinstance(err, DimplexProtocolError):
         key = "invalid_gatt_request"
     else:
         key = err.translation_key

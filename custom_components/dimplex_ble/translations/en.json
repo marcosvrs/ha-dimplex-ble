@@ -284,9 +284,6 @@
     "characteristic_unavailable": {
       "message": "The heater doesn't support this operation."
     },
-    "protected_characteristic": {
-      "message": "This heater setting is blocked because changing it is unsafe."
-    },
     "invalid_gatt_request": {
       "message": "Invalid value for this heater setting."
     },

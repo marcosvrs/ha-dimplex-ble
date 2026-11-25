@@ -254,11 +254,6 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         return HVACAction.HEATING if data.heating_active else HVACAction.IDLE
 
     @property
-    def native_temperature_unit(self) -> str:
-        """Return the panel heater protocol's Celsius unit."""
-        return UnitOfTemperature.CELSIUS
-
-    @property
     def min_temp(self) -> float:
         """Return the minimum reported setpoint or Home Assistant's default."""
         data = self.coordinator.data

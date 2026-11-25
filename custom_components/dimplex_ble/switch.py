@@ -18,6 +18,7 @@ from .protocol import (
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
     SETBACK,
+    SOUND,
     TIMER_MODE_KEYS,
     GattAddress,
     encode_advance,
@@ -60,13 +61,13 @@ class DimplexSoundSwitch(DimplexEntity, SwitchEntity):
         """Require a valid independently refreshed Sound value."""
         return (
             super().available
-            and parse_sound_enabled(self.coordinator.sound_value) is not None
+            and parse_sound_enabled(self.coordinator.settings.get(SOUND)) is not None
         )
 
     @property
     def is_on(self) -> bool:
         """Return whether panel-heater sounds are enabled."""
-        return parse_sound_enabled(self.coordinator.sound_value) is True
+        return parse_sound_enabled(self.coordinator.settings.get(SOUND)) is True
 
     async def async_turn_on(self, **kwargs: object) -> None:
         """Enable panel-heater sounds."""

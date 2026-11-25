@@ -761,12 +761,12 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DimplexOptionsFlow(OptionsFlowWithReload):
-    """Choose whether the BLE link stays open; saving reloads the entry."""
+    """Connection, clock sync and Boost length; saving reloads the entry."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show the single connection mode switch."""
+        """Show the heater settings."""
         if user_input is not None:
             # The number selector returns a float; the heater takes whole minutes.
             minutes = int(user_input[CONF_BOOST_MINUTES])

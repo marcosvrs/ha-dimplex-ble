@@ -1,4 +1,4 @@
-"""Dimplex BLE identifiers, byte decoding, and conservative raw-GATT policy."""
+"""Dimplex BLE identifiers and byte encoding/decoding."""
 
 from dataclasses import dataclass
 from datetime import datetime, time
@@ -72,58 +72,9 @@ PRESET_BOOST = "boost"
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
 MAX_GATT_VALUE_BYTES: Final = 512
 
-# These reads have disconnected observed panel heaters or expose device-specific credentials.
-BLOCKED_READS: Final = frozenset(
-    {(0, value) for value in range(0x1012, 0x1016)}
-    | {(3, 0x2002), (3, 0x2006), (3, 0x2007), (3, 0x2008)}
-)
-
-# These characteristics may be read for diagnostics but must never be written
-# until their device-specific semantics are established.
-READ_ONLY_RAW_FIELDS: Final = frozenset(
-    {
-        (1, 0x0007),
-        (3, 0x000B),
-        (3, 0x000C),
-        (3, 0x1022),
-        (3, 0x1029),
-        (1, 0x1010),
-        (1, 0x1020),
-        (1, 0x300E),
-        (2, 0x100C),
-        (2, 0x700F),
-        (3, 0x2003),
-        (3, 0x200B),
-        (3, 0x200C),
-        (3, 0x200F),
-    }
-)
-
-# Keep the established protection list for fields whose format or purpose is unsafe.
-BLOCKED_WRITES: Final = frozenset(
-    {(0, value) for value in range(0x1012, 0x1016)}
-    | READ_ONLY_RAW_FIELDS
-    | {
-        (2, 0x1030),
-        (2, 0x1033),
-        (2, 0x1034),
-        (3, 0x000A),
-        (3, 0x1010),
-        (3, 0x1037),
-        (3, 0x2002),
-        (3, 0x2006),
-        (3, 0x2007),
-        (3, 0x2008),
-    }
-)
-
 
 class DimplexProtocolError(ValueError):
     """A requested GATT value or payload is invalid."""
-
-
-class ProtectedCharacteristicError(DimplexProtocolError):
-    """A requested characteristic is unsafe to access through raw GATT."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,17 +137,6 @@ def gatt_uuid_candidates(
     return standard, gdhv
 
 
-def validate_raw_access(group: int, characteristic: int, *, write: bool) -> None:
-    """Reject non-Dimplex groups and characteristics with known hazards."""
-    service_uuid(group)
-    characteristic_uuid(characteristic)
-    key = (group, characteristic)
-    if write and key in BLOCKED_WRITES:
-        raise ProtectedCharacteristicError("This characteristic is blocked for writes")
-    if not write and key in BLOCKED_READS:
-        raise ProtectedCharacteristicError("This characteristic is blocked for reads")
-
-
 def parse_away_mode(
     value: bytes | None,
 ) -> tuple[bool, datetime | None, int] | None:
@@ -214,7 +154,7 @@ def parse_away_mode(
 def encode_away_mode(
     active: bool,
     until: datetime,
-    target_temperature_c: int = 7,
+    target_temperature_c: int = AWAY_TEMPERATURE_MIN_C,
 ) -> bytes:
     """Encode the verified Away Mode payload."""
     if not 2000 <= until.year <= 2255:

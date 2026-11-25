@@ -313,19 +313,6 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self.schedules = {**self.schedules, preset: week}
         self.async_update_listeners()
 
-    @property
-    def sound_value(self) -> bytes | None:
-        """Return the last verified Sound payload."""
-        return self.settings.get(SOUND)
-
-    @sound_value.setter
-    def sound_value(self, value: bytes | None) -> None:
-        """Replace the cached Sound payload."""
-        if value is None:
-            self.settings.pop(SOUND, None)
-        else:
-            self.settings[SOUND] = value
-
     async def async_refresh_settings(self, now: datetime | None = None) -> None:
         """Read the slow settings on their own slow schedule."""
         del now
@@ -465,19 +452,14 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             )
         async with self._away_lock:
             data = self.data
-            if (
-                data is None
-                or data.away_active is None
-                or (data.away_active and data.away_until is None)
-            ):
+            if data is None or data.away_active is None:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="setting_unavailable"
                 )
             # Writing the Away record always makes the heater enter Away, whatever
             # the active byte or deadline (hardware 2026-11-24 18:44 and 18:48,
             # AM2086). Only an active Away can have its temperature changed.
-            until = data.away_until
-            if not data.away_active or until is None:
+            if not data.away_active:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="away_temperature_needs_away",
@@ -503,13 +485,11 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         active: bool,
         *,
         until: datetime | None = None,
-        refresh: bool = True,
     ) -> None:
         """Write Away Mode with an explicit future deadline when activating."""
         async with self._away_lock:
             await self._async_write_away_mode(active, until)
-        if refresh:
-            await self.async_request_refresh()
+        await self.async_request_refresh()
 
     async def async_write_mode(
         self,
@@ -577,7 +557,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         target_temperature = (
             data.away_target_temperature_c
             if data is not None and data.away_target_temperature_c is not None
-            else 7
+            else AWAY_TEMPERATURE_MIN_C
         )
         writes = ((AWAY_MODE, encode_away_mode(active, until, target_temperature)),)
         await self._async_command(

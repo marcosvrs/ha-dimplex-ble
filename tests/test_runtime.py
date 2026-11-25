@@ -35,6 +35,7 @@ from custom_components.dimplex_ble.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 from custom_components.dimplex_ble.errors import HeaterAuthError
+from custom_components.dimplex_ble.protocol import SOUND
 
 # The climate entity uses the native_* climate API of HA 2026.11; the pinned test
 # harness (HA 2026.10) cannot add it, so availability is observed on the select.
@@ -323,7 +324,7 @@ async def test_sound_is_read_on_its_own_slow_schedule(hass, fake_bt) -> None:
     await hass.async_block_till_done()
 
     assert proxy.events.count(("read", "00000005-0000-1000-8000-00805f9b34fb")) > reads
-    assert coordinator.sound_value == b"\x00\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
 
 
 async def test_sound_read_failures_and_skips(hass) -> None:
@@ -337,14 +338,14 @@ async def test_sound_read_failures_and_skips(hass) -> None:
         ),
     )
     coordinator = DimplexCoordinator(hass, entry, link)
-    coordinator.sound_value = b"\x01\x00\x00"
+    coordinator.settings[SOUND] = b"\x01\x00\x00"
 
     await coordinator.async_refresh_settings()
     await coordinator.async_refresh_settings()
     coordinator.last_update_success = False
     await coordinator.async_refresh_settings()
 
-    assert coordinator.sound_value == b"\x01\x00\x00"
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
     # A failure ends that round; the next round reads every slow setting.
     assert link.async_read.await_count == 4
 

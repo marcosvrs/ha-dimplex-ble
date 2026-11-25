@@ -28,8 +28,7 @@ PASSKEY_REQUEST_EVENT = "esphome.dimplex_passkey_request"
 
 DEFAULT_UPDATE_INTERVAL = timedelta(seconds=10)
 # Per-poll mode connects, pairs, reads and disconnects on every update, so it
-# polls less often. This A/B experiment therefore changes the interval together
-# with the mode: a difference between modes may come from either.
+# polls less often.
 POLL_INTERVAL_PER_POLL = 60
 # Slow settings (Sound, Setback, offset) change only when someone changes them.
 SETTINGS_UPDATE_INTERVAL = timedelta(minutes=5)

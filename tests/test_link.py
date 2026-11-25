@@ -22,7 +22,6 @@ from custom_components.dimplex_ble.errors import (
 from custom_components.dimplex_ble.link import CONNECT_TIMEOUT, HeaterLink
 from custom_components.dimplex_ble.protocol import (
     DimplexProtocolError,
-    ProtectedCharacteristicError,
 )
 from custom_components.dimplex_ble.responder import async_arm, has_responder
 
@@ -454,11 +453,6 @@ def test_pair_error_code_parses_only_the_bleak_esphome_message() -> None:
         (HeaterAuthError(), HomeAssistantError, "reauth_required"),
         (CharacteristicError(), ServiceValidationError, "characteristic_unavailable"),
         (DimplexProtocolError(), ServiceValidationError, "invalid_gatt_request"),
-        (
-            ProtectedCharacteristicError(),
-            ServiceValidationError,
-            "protected_characteristic",
-        ),
     ],
 )
 def test_errors_translate_once(error, error_type, key) -> None:

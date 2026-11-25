@@ -181,7 +181,7 @@ def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(ha
     assert entity.available is True
     assert entity.hvac_mode == HVACMode.HEAT
     assert entity.hvac_modes == [HVACMode.HEAT, HVACMode.AUTO]
-    assert entity.native_temperature_unit == UnitOfTemperature.CELSIUS
+    assert entity._attr_native_temperature_unit == UnitOfTemperature.CELSIUS
     assert entity.target_temperature_step == 1
     assert entity.precision == 0.1
     assert entity.name is None  # the main feature: named after the device
@@ -961,8 +961,7 @@ async def test_away_mode_write_records_the_written_state_until_the_next_poll(has
     coordinator.async_request_refresh = AsyncMock()
     until = datetime(2063, 11, 22, 18, 53)
 
-    await coordinator.async_set_away_mode(True, until=until, refresh=False)
+    await coordinator.async_set_away_mode(True, until=until)
 
     assert coordinator.data.away_active is True
     assert coordinator.data.away_until == until
-    coordinator.async_request_refresh.assert_not_awaited()
