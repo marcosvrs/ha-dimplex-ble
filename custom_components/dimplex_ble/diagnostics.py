@@ -34,14 +34,9 @@ async def async_get_config_entry_diagnostics(
             "clock_offset_s": link.clock_offset_s,
         },
         "schedules": {
-            preset: [
-                None
-                if periods is None
-                else [
-                    f"{p.start:%H:%M}-{p.end:%H:%M} {p.temperature_c}C" for p in periods
-                ]
-                for periods in week
-            ]
+            # Period count per day (None = not read yet). The exact times and
+            # temperatures are a household routine, so they are not exported.
+            preset: [None if periods is None else len(periods) for periods in week]
             for preset, week in coordinator.schedules.items()
         },
         "coordinator": {

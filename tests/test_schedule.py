@@ -135,11 +135,11 @@ async def test_persistent_link_reads_all_programmes_after_setup(hass, fake_bt) -
         SchedulePeriod(time(8), time(21), 21),
     )
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-    assert diagnostics["schedules"]["home_all_day"][0] == ["08:00-21:00 21C"]
-    assert diagnostics["schedules"]["out_all_day"][0] == [
-        "07:00-08:30 21C",
-        "17:30-22:00 21C",
-    ]
+    # Only period counts are exported, not the household routine.
+    assert diagnostics["schedules"]["home_all_day"][0] == 1
+    assert diagnostics["schedules"]["out_all_day"][0] == 2
+    text = str(diagnostics["schedules"])
+    assert "08:00" not in text and "21C" not in text
 
     proxy.events.clear()
     await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 1)
