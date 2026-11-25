@@ -515,3 +515,29 @@ equal → skip flash, sync cloud only. (Zigbee products read
   file version; all four test heaters report UI 1.7 / RF 5, so ConfigR would
   flash. No changelog exists in the API, the APK or the ZIP; older images are
   not offered by the API.
+
+## Live capture 2026-11-25: AM2086 OTA channel, read-only
+
+Temporary probe build (not merged), 12:17–12:23 UTC; main redeployed after.
+No characteristic was written; subscribing wrote only the CCCD.
+
+- `…C51D` properties: read, write, write-without-response, notify, indicate;
+  one descriptor (CCCD `0x2902`). Subscribing succeeds.
+- `C51D` read: 506 zero bytes. No notifications in 20 s at idle: the heater
+  only answers after a command, so the reply format still needs the first
+  EnterOTA exchange.
+- `3/0x2001` selector 1: `01 01 07` → UI 1.7. `3/0x200A`: `EP4213` (ASCII),
+  matching the file's EP prefix. `1/0x300E` (OTA enable): `00`.
+
+## Brick-risk evidence from the image (static)
+
+- The running app performs the update (`esp_ota_begin`, `esp_ota_end`,
+  `esp_ota_set_boot_partition` present). An ESP32 app cannot overwrite the
+  partition it runs from, so the image goes to the other slot and the boot
+  slot changes only after `esp_ota_end` validates it: an interrupted transfer
+  leaves the current firmware booting. (INFERENCE from ESP-IDF's OTA model.)
+- The image carries an appended SHA-256 (header byte 23 = 1) that matches; the
+  bootloader rejects a corrupt image. No secure-boot/flash-encryption markers.
+- Not settled: app rollback after a bad-but-valid image (`PENDING_VERIFY`
+  appears once; `esp_ota_mark_app_valid_cancel_rollback` is not a string in
+  the image, so this cannot be decided statically).
