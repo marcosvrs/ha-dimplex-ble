@@ -34,8 +34,10 @@ reconfigure the heater until the earlier layer works.
 
 ## Repair: "*Heater* stopped responding"
 
-1. Switch the heater off and on at the wall. Home Assistant reconnects without a
-   PIN and clears the repair once it hears the heater.
+1. If the Dimplex app is open and connected to the heater, close it: the heater
+   accepts one connection at a time and does not advertise while connected.
+2. Otherwise switch the heater off and on at the wall. Home Assistant
+   reconnects without a PIN and clears the repair once it hears the heater.
 
 Why: the repair appears when the heater's connection ended without Home
 Assistant disconnecting it, or its proxy stopped seeing it, and then no proxy
