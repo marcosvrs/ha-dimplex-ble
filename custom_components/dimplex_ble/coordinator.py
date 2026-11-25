@@ -7,6 +7,7 @@ import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigEntry
@@ -224,8 +225,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             )
             # Before the lock is released, so an Away write right after sees
             # the running Boost and ends it first.
-            if isinstance(self.data, HeaterSnapshot):
-                self.data = dataclasses.replace(self.data, boost_minutes_left=minutes)
+            self._apply_written(boost_minutes_left=minutes)
         await self.async_refresh()
 
     async def async_cancel_boost(self) -> None:
@@ -241,8 +241,18 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         # ConfigR re-reads 1 s after ending Boost; the heater had restored its
         # mode within 1.5 s in every test (hardware 2026-11-25).
         await asyncio.sleep(BOOST_END_SETTLE_S)
+        self._apply_written(boost_minutes_left=0)
+
+    @callback
+    def _apply_written(self, **changes: Any) -> None:
+        """Show what was just written until the next poll reads it back.
+
+        Listeners are told now: with ``always_update=False`` a poll that reads
+        the same values notifies no one.
+        """
         if isinstance(self.data, HeaterSnapshot):
-            self.data = dataclasses.replace(self.data, boost_minutes_left=0)
+            self.data = dataclasses.replace(self.data, **changes)
+            self.async_update_listeners()
 
     async def async_save_schedule(
         self, preset: str, days: dict[int, tuple[SchedulePeriod, ...]]
@@ -556,9 +566,6 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             encode_away_mode(active, until, target_temperature),
             refresh=False,
         )
-        if isinstance(self.data, HeaterSnapshot):
-            # Until the next poll reads it back, later Away checks must see
-            # what was just written, not the snapshot from before it.
-            self.data = dataclasses.replace(
-                self.data, away_active=active, away_until=until
-            )
+        # Later Away checks must see what was just written, not the snapshot
+        # from before it.
+        self._apply_written(away_active=active, away_until=until)

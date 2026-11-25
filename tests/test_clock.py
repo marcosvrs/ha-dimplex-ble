@@ -161,9 +161,16 @@ async def test_an_unreadable_clock_is_skipped(hass, fake_bt) -> None:
     proxy = with_clock(fake_bt.add(), b"\x00")
     coordinator = await setup(hass, make_entry(hass))
 
-    assert [e[0] for e in clock_events(proxy)] == ["read"]
+    assert {e[0] for e in clock_events(proxy)} == {"read"}  # never written
     assert coordinator.link.clock_offset_s is None
     assert coordinator.last_update_success
+
+    # Not checked yet, so the next operation tries again (not in an hour).
+    proxy.values[CLOCK] = SLOW_HEATER
+    proxy.events.clear()
+    await coordinator.async_refresh()
+    assert [e[0] for e in clock_events(proxy)] == ["read", "write"]
+    assert coordinator.link.clock_offset_s == 0
 
 
 @pytest.mark.usefixtures("fixed_now")
@@ -182,3 +189,7 @@ async def test_a_clock_failure_never_fails_the_poll(hass, fake_bt, monkeypatch) 
     assert coordinator.last_update_success
     assert coordinator.link.clock_offset_s is None
     assert coordinator.link.connected
+
+    monkeypatch.setattr(link_module, "_read_optional", read)
+    await coordinator.async_refresh()  # retried on the next operation
+    assert coordinator.link.clock_offset_s == 0

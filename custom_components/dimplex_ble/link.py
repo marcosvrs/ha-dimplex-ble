@@ -479,6 +479,7 @@ class HeaterLink:
             heater = parse_clock(await _read_optional(client, CLOCK))
             if heater is None:
                 _LOGGER.debug("CLOCK %s unreadable", self.address)
+                self._clock_due = True  # retry on the next operation
                 return
             local = now.replace(second=0, microsecond=0, tzinfo=None)
             self.clock_offset_s = (heater - local).total_seconds()
@@ -495,6 +496,7 @@ class HeaterLink:
             _LOGGER.debug(
                 "CLOCK %s check failed %s: %s", self.address, type(err).__name__, err
             )
+            self._clock_due = True  # retry on the next operation
             return
         _LOGGER.info(
             "Set the clock of %s; it was %+d min off",

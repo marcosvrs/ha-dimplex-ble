@@ -372,3 +372,16 @@ async def test_in_away_the_target_is_the_away_temperature(hass) -> None:
 
     coordinator.async_set_away_temperature.assert_awaited_once_with(12.0)
     coordinator.async_write.assert_not_awaited()
+
+
+async def test_written_state_reaches_entities_before_the_poll(hass, fake_bt) -> None:
+    """always_update=False: a poll reading the same values would notify no one."""
+    heater(fake_bt.add(), FROST)
+    coordinator = await setup(hass, make_entry(hass))
+    coordinator.async_refresh = AsyncMock()
+    updates: list[int] = []
+    coordinator.async_add_listener(lambda: updates.append(1))
+
+    await coordinator.async_start_boost(30, 22)
+
+    assert updates
