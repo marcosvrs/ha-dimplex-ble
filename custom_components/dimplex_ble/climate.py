@@ -93,8 +93,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     def __init__(self, coordinator: DimplexCoordinator) -> None:
         """Start from the programme the first poll found, not a default."""
         super().__init__(coordinator)
-        if (preset := self.preset_mode) in SCHEDULE_PRESETS:
-            self._last_schedule = preset
+        self._remember_schedule()
 
     @property
     def _boosting(self) -> bool:
@@ -148,9 +147,20 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Remember the last schedule so Auto resumes it."""
-        if (preset := self.preset_mode) in SCHEDULE_PRESETS:
-            self._last_schedule = preset
+        self._remember_schedule()
         super()._handle_coordinator_update()
+
+    def _remember_schedule(self) -> None:
+        """Track the timer programme in the mode bytes, also during Boost.
+
+        A Boost started from a programme keeps it in the mode bytes (01 0p 00 0n,
+        hardware 2026-11-25), so it is read from there, not from the preset.
+        """
+        data = self.coordinator.data
+        if data is not None:
+            mode = heating_mode_of(data.operating_mode_hex)
+            if mode in SCHEDULE_PRESETS:
+                self._last_schedule = mode
 
     @property
     def available(self) -> bool:

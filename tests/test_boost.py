@@ -393,3 +393,16 @@ async def test_a_refused_away_request_keeps_boost_running(hass, fake_bt) -> None
     assert err.value.translation_key == "invalid_away_until"
     assert [e for e in proxy.events if e[0] == "write"] == []
     assert coordinator.data.boost_minutes_left == 30
+
+
+async def test_a_boost_snapshot_keeps_the_programme_auto_resumes(hass) -> None:
+    """Codex review: restart during a Home All Day Boost, then Heat -> Auto."""
+    coordinator, entity = climate(hass, minutes=29, mode_hex="010200010000")
+    assert entity.preset_mode == "boost"
+
+    coordinator.data = snapshot(mode_hex="020000000000")  # now Heat
+    await entity.async_set_hvac_mode(HVACMode.AUTO)
+
+    coordinator.async_set_heating_mode.assert_awaited_once_with(
+        b"\x01\x02\x00\x00\x00\x00"
+    )
