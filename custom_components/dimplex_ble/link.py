@@ -438,9 +438,17 @@ class HeaterLink:
                     image.version,
                     mtu,
                 )
-                await ota.async_flash(
-                    ota.Transport(set_mode, send, reply), image, ota.MAX_ROW, progress
-                )
+                try:
+                    await ota.async_flash(
+                        ota.Transport(set_mode, send, reply),
+                        image,
+                        ota.MAX_ROW,
+                        progress,
+                    )
+                except _GATT_ERRORS as err:
+                    # A rebooting heater fails the write in flight (GATT 133
+                    # after the supervision timeout, rehearsal 2026-11-25).
+                    raise ota.UpdateError("The heater dropped the link") from err
             finally:
                 if self._client is not None:
                     await self._disconnect("ota")

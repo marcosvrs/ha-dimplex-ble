@@ -130,8 +130,9 @@ async def test_a_lost_link_during_the_update_is_an_update_error(hass, fake_bt) -
 
     proxy.on_write = on_write
 
-    with pytest.raises(BleakError):
+    with pytest.raises(ota.UpdateError, match="dropped the link") as raised:
         await coordinator.link.async_flash(IMAGE)
+    assert isinstance(raised.value.__cause__, BleakError)
     assert proxy.events[-1] == "disconnect"
 
 
