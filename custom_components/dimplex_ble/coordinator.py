@@ -37,6 +37,7 @@ from .protocol import (
     AWAY_TEMPERATURE_MAX_C,
     AWAY_TEMPERATURE_MIN_C,
     BOOST_REMAINING,
+    GDID,
     HEATING_MODE,
     PRESET_AWAY,
     PRESET_HOME_ALL_DAY,
@@ -63,6 +64,7 @@ from .protocol import (
     encode_temperature_offset,
     heating_mode_of,
     parse_away_mode,
+    parse_gdid,
     parse_setback,
     parse_sound_enabled,
     parse_temperature_offset,
@@ -86,6 +88,7 @@ SCHEDULE_PROGRAMMES: dict[str, int] = {
 # Settings that only change when someone changes them: read on the slow
 # schedule, each with the decoder that accepts its value.
 SLOW_SETTINGS: dict[GattAddress, Callable[[bytes | None], object | None]] = {
+    GDID: parse_gdid,  # the appliance id Dimplex's firmware lookup needs
     SOUND: parse_sound_enabled,
     SETBACK: parse_setback,
     ROOM_TEMPERATURE_OFFSET: parse_temperature_offset,
@@ -429,6 +432,11 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         if by_preset != self.schedules:
             self.schedules = by_preset
             self.async_update_listeners()
+
+    @property
+    def gdid(self) -> str | None:
+        """Return the heater's Dimplex appliance id once read."""
+        return parse_gdid(self.settings.get(GDID))
 
     def _apply_settings(self, values: dict[GattAddress, bytes | None]) -> None:
         """Store verified setting values and notify listeners on change."""

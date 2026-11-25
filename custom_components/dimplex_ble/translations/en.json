@@ -106,31 +106,20 @@
         "data": {
           "sync_clock": "Sync the heater clock",
           "boost_minutes": "Boost length",
-          "qr_label": "Heater QR label"
+          "email": "Dimplex email",
+          "password": "Dimplex password"
         },
         "data_description": {
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
           "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
-          "qr_label": "For firmware updates: the text of the QR code on the heater's label, for example 010423C0003A,123456,0,PLX050E,C. Leave empty for no updates."
-        }
-      },
-      "account": {
-        "title": "Dimplex account",
-        "description": "Firmware updates come from Dimplex. Sign in once with your Dimplex (ConfigR) account; Home Assistant keeps only a sign-in token, not your password.",
-        "data": {
-          "email": "Email",
-          "password": "Password"
+          "email": "For firmware updates: your Dimplex (ConfigR) account, entered once for all heaters. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
         }
       }
     },
     "error": {
-      "invalid_qr_label": "That is not a Dimplex QR label.",
       "invalid_auth": "Dimplex did not accept the email or password.",
-      "cannot_connect": "Couldn't reach Dimplex. Try again later."
-    },
-    "abort": {
-      "unknown_qr_label": "Dimplex does not know this QR label. Check it against the heater.",
-      "cannot_connect": "Couldn't reach Dimplex. Try again later."
+      "cannot_connect": "Couldn't reach Dimplex. Try again later.",
+      "incomplete_sign_in": "Enter both the email and the password, or neither."
     }
   },
   "entity": {
@@ -418,7 +407,7 @@
     },
     "cloud_sign_in": {
       "title": "Dimplex sign-in expired",
-      "description": "Dimplex no longer accepts Home Assistant's sign-in, so firmware updates can't be checked. Open a heater's settings and save its QR label again to sign in."
+      "description": "Dimplex no longer accepts Home Assistant's sign-in, so firmware updates can't be checked. Open any heater's settings and sign in again."
     }
   },
   "selector": {

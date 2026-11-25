@@ -42,6 +42,11 @@ class DimplexAccount:
     async def async_signed_in(self) -> bool:
         """Return whether a refresh token is stored."""
         await self._async_load()
+        return self.signed_in
+
+    @property
+    def signed_in(self) -> bool:
+        """Return whether a refresh token is stored (after the first load)."""
         return self._refresh_token is not None
 
     async def async_sign_in(self, email: str, password: str) -> None:

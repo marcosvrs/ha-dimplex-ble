@@ -64,22 +64,10 @@ class Firmware:
 
 @dataclass(frozen=True, slots=True)
 class Label:
-    """The heater's QR label: ``<id>,<code>,0,<model>,<series>``."""
+    """What Dimplex identifies a heater by: its id (``0x2002``) and PIN."""
 
     appliance_id: str
     security_code: str  # a credential: never log it
-
-    @classmethod
-    def parse(cls, text: str) -> Label:
-        """Parse the label text; raise ``ValueError`` when it is not one."""
-        parts = [part.strip() for part in text.split(",")]
-        if (
-            len(parts) < 2
-            or not re.fullmatch(r"[0-9A-Fa-f]{12}([0-9A-Fa-f]{4})?", parts[0])
-            or not re.fullmatch(r"\d{6}", parts[1])
-        ):
-            raise ValueError("Not a Dimplex QR label")
-        return cls(parts[0].upper(), parts[1])
 
 
 def _pkce() -> tuple[str, str]:

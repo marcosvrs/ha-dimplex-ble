@@ -12,8 +12,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import cloud, ota
-from .const import CONF_QR_LABEL, DOMAIN, FIRMWARE_CHECK_INTERVAL
-from .coordinator import DimplexConfigEntry, DimplexCoordinator
+from .const import CONF_PASSKEY, DOMAIN, FIRMWARE_CHECK_INTERVAL
+from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
 from .firmware import account
 
@@ -28,12 +28,9 @@ async def async_setup_entry(
     entry: DimplexConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Offer firmware updates for heaters whose QR label was entered."""
-    if label := entry.options.get(CONF_QR_LABEL):
-        async_add_entities(
-            [DimplexFirmwareUpdate(entry.runtime_data, cloud.Label.parse(label))],
-            update_before_add=True,
-        )
+    """Offer firmware updates; they need the Dimplex sign-in (heater settings)."""
+    await account(hass).async_signed_in()  # load the stored sign-in
+    async_add_entities([DimplexFirmwareUpdate(entry.runtime_data)])
 
 
 class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
@@ -46,12 +43,25 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
     )
+    _attr_title = "Dimplex"
 
-    def __init__(self, coordinator: DimplexCoordinator, label: cloud.Label) -> None:
-        """Bind the heater to its QR label."""
-        super().__init__(coordinator)
-        self._label = label
-        self._attr_title = "Dimplex"
+    @property
+    def available(self) -> bool:
+        """Available once signed in to Dimplex and the heater id was read."""
+        return (
+            super().available
+            and account(self.hass).signed_in
+            and self._label is not None
+        )
+
+    @property
+    def _label(self) -> cloud.Label | None:
+        """The label values, read from the heater: its id and pairing PIN."""
+        passkey = self.coordinator.config_entry.data.get(CONF_PASSKEY)
+        gdid = self.coordinator.gdid
+        if gdid is None or passkey is None:
+            return None
+        return cloud.Label(gdid, str(passkey).zfill(6))
 
     @property
     def installed_version(self) -> str | None:
@@ -61,7 +71,7 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
 
     async def async_update(self) -> None:
         """Ask Dimplex for the latest firmware (no account changes)."""
-        if self._attr_in_progress:
+        if self._attr_in_progress or not self.available:
             return
         try:
             firmware = await self._latest()
@@ -71,9 +81,12 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
         self._attr_latest_version = firmware.version
 
     async def _latest(self) -> cloud.Firmware:
+        label = self._label
+        if label is None:
+            raise cloud.CloudError("The heater id was not read yet")
         shared = account(self.hass)
         token = await shared.async_access_token()
-        return await cloud.async_latest_firmware(shared.session, token, self._label)
+        return await cloud.async_latest_firmware(shared.session, token, label)
 
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any

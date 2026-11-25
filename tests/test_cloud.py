@@ -185,11 +185,3 @@ async def test_download_checks_the_md5(hass, aioclient_mock) -> None:
     with pytest.raises(cloud.CloudError, match="403"):
         await cloud.async_download(session, firmware)
     await session.close()
-
-
-def test_label_parsing() -> None:
-    label = cloud.Label.parse(" 010423c0003a, 123456 ,0,PLX050E,C")
-    assert label == cloud.Label("010423C0003A", "123456")
-    for bad in ("", "010423C0003A", "XYZ,123456", "010423C0003A,12345"):
-        with pytest.raises(ValueError):
-            cloud.Label.parse(bad)

@@ -66,6 +66,4 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "firmware",
     }
 )
-# Firmware updates: the heater's QR label text (``<id>,<code>,0,<model>,<series>``).
-CONF_QR_LABEL = "qr_label"
 FIRMWARE_CHECK_INTERVAL = timedelta(hours=12)

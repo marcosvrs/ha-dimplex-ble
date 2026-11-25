@@ -20,6 +20,9 @@ DISPLAY_UNIT: Final[GattAddress] = (0, 0x1005)
 ROOM_TEMPERATURE: Final[GattAddress] = (1, 0x0008)
 TRAC: Final[GattAddress] = (1, 0x0002)
 UI_VERSION: Final[GattAddress] = (3, 0x2001)
+# Dimplex appliance id (ConfigR "Gdid"), stored byte-reversed: AM2086 reads
+# 3a00c0230401 for the label's 010423C0003A (2026-11-25).
+GDID: Final[GattAddress] = (3, 0x2002)
 # Firmware update: 1 = update mode (display image), 0 = normal (ConfigR
 # Esp32OtaEnableParameter); the update frames go to OTA_COMMAND.
 OTA_ENABLE: Final[GattAddress] = (1, 0x300E)
@@ -298,6 +301,13 @@ def encode_preset_mode(preset: str) -> bytes:
         return _PRESET_PAYLOADS[preset]
     except KeyError as err:
         raise DimplexProtocolError("Unsupported preset mode") from err
+
+
+def parse_gdid(value: bytes | None) -> str | None:
+    """Decode the 6-byte appliance id as on the heater's label (12 hex digits)."""
+    if value is None or len(value) != 6 or not any(value):
+        return None
+    return value[::-1].hex().upper()
 
 
 def parse_sound_enabled(value: bytes | None) -> bool | None:

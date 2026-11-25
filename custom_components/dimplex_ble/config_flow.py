@@ -43,7 +43,6 @@ from .const import (
     CONF_BOOST_MINUTES,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
-    CONF_QR_LABEL,
     CONF_SYNC_CLOCK,
     DEFAULT_BOOST_MINUTES,
     DEFAULT_SYNC_CLOCK,
@@ -759,113 +758,70 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DimplexOptionsFlow(OptionsFlowWithReload):
-    """Clock sync, Boost length and firmware updates; saving reloads the entry."""
-
-    def __init__(self) -> None:
-        """Hold the settings while the Dimplex sign-in step runs."""
-        self._options: dict[str, Any] = {}
+    """Clock sync, Boost length and the Dimplex sign-in; saving reloads."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show the heater settings."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            # The number selector returns a float; the heater takes whole minutes.
-            self._options = {
-                **user_input,
-                CONF_BOOST_MINUTES: int(user_input[CONF_BOOST_MINUTES]),
-            }
-            label = str(user_input.get(CONF_QR_LABEL) or "").strip()
-            if not label:
-                self._options.pop(CONF_QR_LABEL, None)
-                return self.async_create_entry(data=self._options)
-            try:
-                cloud.Label.parse(label)
-            except ValueError:
-                errors[CONF_QR_LABEL] = "invalid_qr_label"
-            else:
-                self._options[CONF_QR_LABEL] = label
-                if not await account(self.hass).async_signed_in():
-                    return await self.async_step_account()
-                return await self._async_check_label()
-        options = {**self.config_entry.options, **(user_input or {})}
-        return self.async_show_form(
-            step_id="init",
-            data_schema=probatio.Schema(
-                {
-                    probatio.Required(
-                        CONF_SYNC_CLOCK,
-                        default=options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
-                    ): bool,
-                    probatio.Required(
-                        CONF_BOOST_MINUTES,
-                        default=options.get(CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=1,
-                            max=BOOST_MAX_MINUTES,
-                            step=1,
-                            unit_of_measurement=UnitOfTime.MINUTES,
-                            mode=NumberSelectorMode.BOX,
-                        )
-                    ),
-                    probatio.Optional(
-                        CONF_QR_LABEL,
-                        description={"suggested_value": options.get(CONF_QR_LABEL)},
-                    ): TextSelector(),
-                }
-            ),
-            errors=errors,
-        )
-
-    async def async_step_account(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Sign in to Dimplex once; only the refresh token is kept."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            try:
-                await account(self.hass).async_sign_in(
-                    user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
-                )
-            except cloud.AuthError:
-                errors["base"] = "invalid_auth"
-            except cloud.CloudError:
-                errors["base"] = "cannot_connect"
-            else:
-                return await self._async_check_label()
-        return self.async_show_form(
-            step_id="account",
-            data_schema=probatio.Schema(
-                {
-                    probatio.Required(CONF_EMAIL): TextSelector(
-                        TextSelectorConfig(
-                            type=TextSelectorType.EMAIL, autocomplete="username"
-                        )
-                    ),
-                    probatio.Required(CONF_PASSWORD): TextSelector(
-                        TextSelectorConfig(
-                            type=TextSelectorType.PASSWORD,
-                            autocomplete="current-password",
-                        )
-                    ),
-                }
-            ),
-            errors=errors,
-        )
-
-    async def _async_check_label(self) -> ConfigFlowResult:
-        """Ask Dimplex whether it knows the label before saving it."""
+        """Show the heater settings (and the sign-in while not signed in)."""
         shared = account(self.hass)
-        label = cloud.Label.parse(self._options[CONF_QR_LABEL])
-        try:
-            token = await shared.async_access_token()
-            await cloud.async_latest_firmware(shared.session, token, label)
-        except cloud.AuthError:
-            return await self.async_step_account()
-        except ValueError:
-            return self.async_abort(reason="unknown_qr_label")
-        except cloud.CloudError:
-            return self.async_abort(reason="cannot_connect")
-        return self.async_create_entry(data=self._options)
+        signed_in = await shared.async_signed_in()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            email = str(user_input.pop(CONF_EMAIL, "") or "").strip()
+            password = str(user_input.pop(CONF_PASSWORD, "") or "")
+            if email and password:
+                try:
+                    await shared.async_sign_in(email, password)
+                except cloud.AuthError:
+                    errors["base"] = "invalid_auth"
+                except cloud.CloudError:
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._async_reload_other_heaters()
+            elif email or password:
+                errors["base"] = "incomplete_sign_in"
+            if not errors:
+                # The number selector returns a float; the heater takes minutes.
+                minutes = int(user_input[CONF_BOOST_MINUTES])
+                return self.async_create_entry(
+                    data={**user_input, CONF_BOOST_MINUTES: minutes}
+                )
+        options = {**self.config_entry.options, **(user_input or {})}
+        schema: dict[Any, Any] = {
+            probatio.Required(
+                CONF_SYNC_CLOCK,
+                default=options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
+            ): bool,
+            probatio.Required(
+                CONF_BOOST_MINUTES,
+                default=options.get(CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=1,
+                    max=BOOST_MAX_MINUTES,
+                    step=1,
+                    unit_of_measurement=UnitOfTime.MINUTES,
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+        }
+        if not signed_in:
+            schema[probatio.Optional(CONF_EMAIL)] = TextSelector(
+                TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
+            )
+            schema[probatio.Optional(CONF_PASSWORD)] = TextSelector(
+                TextSelectorConfig(
+                    type=TextSelectorType.PASSWORD, autocomplete="current-password"
+                )
+            )
+        return self.async_show_form(
+            step_id="init", data_schema=probatio.Schema(schema), errors=errors
+        )
+
+    @callback
+    def _async_reload_other_heaters(self) -> None:
+        """Every heater's firmware entity becomes available after a sign-in."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id != self.config_entry.entry_id:
+                self.hass.config_entries.async_schedule_reload(entry.entry_id)
