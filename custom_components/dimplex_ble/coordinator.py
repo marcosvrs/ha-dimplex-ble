@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import isfinite
 from typing import Any
 
@@ -22,11 +22,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_KEEP_CONNECTED,
-    DEFAULT_KEEP_CONNECTED,
-    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
-    POLL_INTERVAL_PER_POLL,
+    UPDATE_INTERVAL,
 )
 from .errors import (
     DimplexError,
@@ -95,11 +92,6 @@ SLOW_SETTINGS: dict[GattAddress, Callable[[bytes | None], object | None]] = {
 }
 
 
-def keep_connected(entry: ConfigEntry) -> bool:
-    """Return the entry's connection mode option (persistent by default)."""
-    return bool(entry.options.get(CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED))
-
-
 def whole_degrees(value: object, low: int, high: int) -> int:
     """Return ``value`` as whole degrees within ``low``..``high``, or refuse it."""
     if (
@@ -131,9 +123,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             _LOGGER,
             config_entry=entry,
             name=entry.title,
-            update_interval=DEFAULT_UPDATE_INTERVAL
-            if keep_connected(entry)
-            else timedelta(seconds=POLL_INTERVAL_PER_POLL),
+            update_interval=UPDATE_INTERVAL,
             always_update=False,
         )
         self.link = link

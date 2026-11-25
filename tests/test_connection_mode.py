@@ -23,17 +23,13 @@ from custom_components.dimplex_ble import async_remove_entry
 from custom_components.dimplex_ble.const import (
     CONF_ADDRESS,
     CONF_BOOST_MINUTES,
-    CONF_KEEP_CONNECTED,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
     CONF_SYNC_CLOCK,
     DOMAIN,
-    POLL_INTERVAL_PER_POLL,
+    UPDATE_INTERVAL,
 )
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
-from custom_components.dimplex_ble.diagnostics import (
-    async_get_config_entry_diagnostics,
-)
 from custom_components.dimplex_ble.link import HeaterLink
 from custom_components.dimplex_ble.protocol import SOUND
 from custom_components.dimplex_ble.stall import STALL_WINDOW, StallMonitor
@@ -76,12 +72,17 @@ def kinds(events):
     return [e if isinstance(e, str) else e[0] for e in events]
 
 
-def drop_link(proxy: FakeProxy, *, silent: bool = True) -> None:
-    """The heater ends the held link (supervision timeout), not us."""
-    client = proxy.clients[-1]
-    client.is_connected = False
+async def drop_link(hass, entry, proxy: FakeProxy, *, silent: bool = True) -> None:
+    """The heater drops the link during an update (supervision timeout).
+
+    Like AM1382 on 2026-11-25: the loss surfaces as a GATT error mid-read.
+    """
+    from conftest import gatt_failure
+
+    proxy.read_error = gatt_failure(133)
     proxy.sees_heater = not silent
-    client.disconnected_callback()
+    await entry.runtime_data.async_refresh()
+    proxy.read_error = None
 
 
 # --- Feature A: stalled-heater repair --------------------------------------
@@ -95,7 +96,7 @@ async def test_abnormal_drop_and_silence_raise_the_repair_once(
     await setup(hass, entry)
     caplog.set_level(logging.INFO, "custom_components.dimplex_ble")
 
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     await advance(hass, STALL_WINDOW - 1)
     assert issue(hass, entry) is None
 
@@ -130,7 +131,7 @@ async def test_advertisement_within_the_window_raises_nothing(hass, fake_bt) -> 
     entry = make_entry(hass)
     await setup(hass, entry)
 
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     await advance(hass, 5)
     fake_bt.advertise(OTHER)  # another proxy hears it: the radio is alive
     await advance(hass, STALL_WINDOW + 5)
@@ -142,7 +143,7 @@ async def test_successful_snapshot_clears_the_repair(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     entry = make_entry(hass)
     await setup(hass, entry)
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     await advance(hass, STALL_WINDOW + 1)
     assert issue(hass, entry) is not None
 
@@ -173,7 +174,7 @@ async def test_unload_cancels_a_pending_window(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     entry = make_entry(hass)
     await setup(hass, entry)
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     proxy.clients[0].disconnected_callback()  # a late link-down after unload
@@ -189,7 +190,7 @@ async def test_drop_while_home_assistant_stops_raises_nothing(hass, fake_bt) -> 
     coordinator = await setup(hass, entry)
     hass.set_state(CoreState.stopping)
     try:
-        drop_link(proxy)
+        await drop_link(hass, entry, proxy)
         assert coordinator.stall._cancel_timer is None
     finally:
         hass.set_state(CoreState.running)
@@ -201,7 +202,7 @@ async def test_proxy_offline_at_drop_raises_nothing(hass, fake_bt) -> None:
     await setup(hass, entry)
 
     proxy.runtime.available = False  # ESPHome API down: a proxy problem
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     await advance(hass, STALL_WINDOW + 1)
 
     assert issue(hass, entry) is None
@@ -214,7 +215,7 @@ async def test_proxy_reconnecting_within_the_window_raises_nothing(
     entry = make_entry(hass)
     await setup(hass, entry)
 
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     proxy.reconnect_api()  # the proxy rebooted: new scanner object
     await advance(hass, STALL_WINDOW + 1)
 
@@ -225,7 +226,7 @@ async def test_removing_the_entry_removes_its_repair(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     entry = make_entry(hass)
     await setup(hass, entry)
-    drop_link(proxy)
+    await drop_link(hass, entry, proxy)
     await advance(hass, STALL_WINDOW + 1)
     assert issue(hass, entry) is not None
 
@@ -260,57 +261,38 @@ async def test_a_second_window_never_raises_twice(hass, fake_bt, caplog) -> None
 # --- Feature B: connection mode option -------------------------------------
 
 
-async def test_options_flow_switches_the_mode_and_reloads(hass, fake_bt) -> None:
-    proxy = fake_bt.add()
+async def test_options_flow_saves_the_settings_and_reloads(hass, fake_bt) -> None:
+    fake_bt.add()
     entry = make_entry(hass)
     coordinator = await setup(hass, entry)
-    assert coordinator.link.keep_connected
-    assert coordinator.update_interval == timedelta(seconds=10)
+    assert coordinator.update_interval == UPDATE_INTERVAL
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
-    schema = result["data_schema"]({})
-    assert schema == {
-        CONF_KEEP_CONNECTED: True,
-        CONF_SYNC_CLOCK: True,
-        CONF_BOOST_MINUTES: 60,
-    }
+    assert result["data_schema"]({}) == {CONF_SYNC_CLOCK: True, CONF_BOOST_MINUTES: 60}
 
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {CONF_KEEP_CONNECTED: False, CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30.0},
+        result["flow_id"], {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30.0}
     )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {
-        CONF_KEEP_CONNECTED: False,
-        CONF_SYNC_CLOCK: False,
-        CONF_BOOST_MINUTES: 30,
-    }
+    assert entry.options == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30}
     reloaded: DimplexCoordinator = entry.runtime_data
     assert reloaded is not coordinator
-    assert not reloaded.link.keep_connected
-    assert reloaded.update_interval == timedelta(seconds=POLL_INTERVAL_PER_POLL)
-    assert proxy.events[-1] == "disconnect"  # the reloaded entry ended its poll
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["data_schema"]({}) == {
-        CONF_KEEP_CONNECTED: False,
-        CONF_SYNC_CLOCK: False,
-        CONF_BOOST_MINUTES: 30,
-    }
     assert not reloaded.link.sync_clock
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["data_schema"]({}) == {CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30}
 
 
 async def test_per_poll_refresh_connects_pairs_reads_then_disconnects(
     hass, fake_bt, caplog
 ) -> None:
     proxy = fake_bt.add()
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     caplog.set_level(logging.DEBUG, "custom_components.dimplex_ble")
     coordinator = await setup(hass, entry)
 
-    assert f"MODE per_poll {ADDRESS}" in caplog.text
     cycle = kinds(proxy.events)
     first_read = cycle.index("read")
     assert cycle[:first_read] == [
@@ -325,9 +307,9 @@ async def test_per_poll_refresh_connects_pairs_reads_then_disconnects(
     assert not coordinator.link.connected
 
     proxy.events.clear()
-    await advance(hass, 11)  # the persistent interval does not apply
+    await advance(hass, 11)  # nothing before the next update
     assert proxy.events == []
-    await advance(hass, POLL_INTERVAL_PER_POLL + 1)
+    await advance(hass, UPDATE_INTERVAL.total_seconds() + 1)
     assert kinds(proxy.events)[:5] == [
         "action",
         "connect",
@@ -338,8 +320,6 @@ async def test_per_poll_refresh_connects_pairs_reads_then_disconnects(
     assert kinds(proxy.events)[-1] == "disconnect"
     assert len(proxy.clients) == 2  # setup poll, this poll
     assert not coordinator.link.connected
-    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-    assert diagnostics["link"]["mode"] == "per_poll"
 
 
 SOUND_READ = ("read", "00000005-0000-1000-8000-00805f9b34fb")
@@ -350,7 +330,7 @@ async def test_per_poll_sound_due_is_read_inside_the_poll_connection(
 ) -> None:
     proxy = fake_bt.add()
     proxy.values[(2, 0x0005)] = b"\x01\x00\x00"
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     coordinator = await setup(hass, entry)
 
     # Setup: one connection carried the snapshot and the sound read.
@@ -362,7 +342,7 @@ async def test_per_poll_sound_due_is_read_inside_the_poll_connection(
 
     # Sound not due: later polls do not read it.
     proxy.events.clear()
-    await advance(hass, POLL_INTERVAL_PER_POLL + 1)
+    await advance(hass, UPDATE_INTERVAL.total_seconds() + 1)
     assert kinds(proxy.events).count("connect") == 1
     assert SOUND_READ not in proxy.events
 
@@ -403,7 +383,7 @@ async def test_per_poll_sound_failure_keeps_the_snapshot(
 
     monkeypatch.setattr(link_module, "_read_optional", read)
     proxy = fake_bt.add()
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     coordinator = await setup(hass, entry)
 
     assert coordinator.last_update_success
@@ -416,7 +396,7 @@ async def test_per_poll_sound_failure_keeps_the_snapshot(
 
 async def test_per_poll_commands_connect_and_disconnect(hass, fake_bt) -> None:
     proxy = fake_bt.add()
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     proxy.events.clear()
 
@@ -434,22 +414,8 @@ async def test_per_poll_commands_connect_and_disconnect(hass, fake_bt) -> None:
     assert not coordinator.link.connected
 
 
-async def test_persistent_mode_keeps_the_link(hass, fake_bt, caplog) -> None:
-    proxy = fake_bt.add()
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: True})
-    caplog.set_level(logging.DEBUG, "custom_components.dimplex_ble")
-    coordinator = await setup(hass, entry)
-
-    await advance(hass, 11)
-
-    assert f"MODE persistent {ADDRESS}" in caplog.text
-    assert kinds(proxy.events).count("connect") == 1
-    assert "disconnect" not in proxy.events
-    assert coordinator.link.connected
-
-
 def per_poll_link(hass) -> HeaterLink:
-    return HeaterLink(hass, ADDRESS, PROXY, PIN, keep_connected=False)
+    return HeaterLink(hass, ADDRESS, PROXY, PIN)
 
 
 async def test_per_poll_cancel_during_connect_waits_for_connect(hass, fake_bt) -> None:
@@ -618,7 +584,7 @@ async def test_setback_keeps_the_heater_temperature_in_one_operation(
     await coordinator.async_set_setback(True)
 
     assert [e[2] for e in proxy.events if e[0] == "write"][-1] == b"\x01\x0a"
-    assert kinds(proxy.events).count("connect") == 0  # over the held link
+    assert kinds(proxy.events).count("connect") == 1  # read and write: one link
     assert coordinator.settings[SETBACK] == b"\x01\x0a"
 
 
@@ -628,7 +594,7 @@ async def test_per_poll_releases_the_link_after_a_refused_write(hass, fake_bt) -
     from custom_components.dimplex_ble.protocol import SETBACK
 
     proxy = fake_bt.add()
-    coordinator = await setup(hass, make_entry(hass, **{CONF_KEEP_CONNECTED: False}))
+    coordinator = await setup(hass, make_entry(hass))
     proxy.events.clear()
 
     with pytest.raises(CharacteristicError):
@@ -648,7 +614,7 @@ async def test_per_poll_leaves_away_and_sets_the_mode_in_one_connection(
     proxy = fake_bt.add()
     proxy.services.add(AWAY_MODE)
     proxy.values[AWAY_MODE] = bytes((1, 26, 11, 26, 30, 18, 7))  # Away on
-    coordinator = await setup(hass, make_entry(hass, **{CONF_KEEP_CONNECTED: False}))
+    coordinator = await setup(hass, make_entry(hass))
     proxy.events.clear()
 
     await coordinator.async_set_heating_mode(bytes((2, 0, 0, 0, 0, 0)))
@@ -781,3 +747,45 @@ def _settings_breaker(lose_link):
         return await real(client, address)
 
     return read
+
+
+async def test_a_heater_silent_between_updates_raises_the_repair(hass, fake_bt) -> None:
+    """No link between updates: silence is noticed as 'proxy does not see it'.
+
+    Polls keep finding it unseen; the window they start is not postponed.
+    """
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.sees_heater = False  # stalled while no update was running
+
+    await advance(hass, UPDATE_INTERVAL.total_seconds() + 1)  # first unseen poll
+    assert issue(hass, entry) is None
+    await advance(hass, UPDATE_INTERVAL.total_seconds() + STALL_WINDOW + 2)
+
+    assert issue(hass, entry) is not None
+
+
+async def test_a_link_dropped_by_the_heater_mid_update_raises_the_repair(
+    hass, fake_bt
+) -> None:
+    """bleak-esphome reports the link-down while our read still waits."""
+    from conftest import gatt_failure
+
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    proxy.read_gate = hass.loop.create_future()
+    refresh = hass.async_create_task(coordinator.async_refresh())
+    await asyncio.sleep(0.01)
+
+    client = proxy.clients[-1]
+    client.is_connected = False
+    proxy.sees_heater = False
+    client.disconnected_callback()  # supervision timeout, error=8
+    proxy.read_error = gatt_failure(133)
+    proxy.read_gate.set_result(None)
+    await refresh
+    await advance(hass, STALL_WINDOW + 1)
+
+    assert issue(hass, entry) is not None

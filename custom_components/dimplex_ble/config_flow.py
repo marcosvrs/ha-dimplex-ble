@@ -41,12 +41,10 @@ from . import responder
 from .const import (
     CONF_ADDRESS,
     CONF_BOOST_MINUTES,
-    CONF_KEEP_CONNECTED,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
     CONF_SYNC_CLOCK,
     DEFAULT_BOOST_MINUTES,
-    DEFAULT_KEEP_CONNECTED,
     DEFAULT_SYNC_CLOCK,
     DOMAIN,
     PASSKEY_REQUEST_EVENT,
@@ -87,10 +85,9 @@ class _Candidate:
     """One responder proxy that hears the heater, as the user should see it.
 
     Slots come from bleak-esphome's ``scanner.get_allocations()`` (slots,
-    free, allocated = addresses connected through the proxy right now). Each
-    configured heater keeps ONE persistent link, i.e. one slot, for as long
-    as its entry is set up, so heaters pinned to the proxy count even while
-    momentarily disconnected.
+    free, allocated = addresses connected through the proxy right now). Every
+    heater pinned to the proxy connects to it on each update, so pinned heaters
+    count even while disconnected.
     """
 
     source: str
@@ -173,9 +170,8 @@ def _survey_proxies(
 ) -> _ProxySurvey:
     """Rank the proxies that hear the heater: free and quiet, then signal."""
     own = address.upper()
-    # Other heaters pinned to a proxy hold a persistent link there (one slot
-    # each) even while momentarily disconnected; this heater's own entry is
-    # excluded because a repair has just released its link.
+    # Other heaters pinned to a proxy connect through it on every update; this
+    # heater's own entry is excluded because a repair has just released it.
     pinned: dict[str, int] = {}
     for entry in hass.config_entries.async_entries(DOMAIN):
         source = entry.data.get(CONF_PROXY_SOURCE)
@@ -778,12 +774,6 @@ class DimplexOptionsFlow(OptionsFlowWithReload):
             step_id="init",
             data_schema=probatio.Schema(
                 {
-                    probatio.Required(
-                        CONF_KEEP_CONNECTED,
-                        default=options.get(
-                            CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED
-                        ),
-                    ): bool,
                     probatio.Required(
                         CONF_SYNC_CLOCK,
                         default=options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),

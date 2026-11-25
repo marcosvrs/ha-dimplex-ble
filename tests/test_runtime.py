@@ -186,10 +186,10 @@ async def test_runtime_rejection_starts_reauth_and_stops_polling(hass, fake_bt) 
     proxy.clients[0].is_connected = False
     proxy.pair_errors = [pair_failure(81)]
 
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
     pairings = proxy.events.count("pair_start")
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=5))
     await hass.async_block_till_done()
 
     assert len(reauth_flows(hass)) == 1
@@ -208,12 +208,12 @@ async def test_transient_failure_recovers_on_the_next_poll(hass, fake_bt) -> Non
     proxy.clients[0].is_connected = False
     proxy.pair_errors = [pair_failure(99)]
 
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "unavailable"
     assert reauth_flows(hass) == []
 
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=22))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=122))
     await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "celsius"
 
@@ -228,7 +228,7 @@ async def test_advertisement_on_the_pinned_proxy_refreshes_an_unavailable_heater
     coordinator: DimplexCoordinator = entry.runtime_data
     proxy.clients[0].is_connected = False
     proxy.sees_heater = False
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "unavailable"  # ROUTE_NOT_SEEN
     refreshes = []
@@ -346,8 +346,7 @@ async def test_diagnostics_redact_the_pin_and_addresses(hass, fake_bt) -> None:
     assert result["coordinator"]["data"]["operating_mode_hex"] == "020000000000"
     assert result["link"] == {
         "route_seen": True,
-        "connected": True,
-        "mode": "persistent",
+        "connected": False,  # released after every update
         "responder": True,
         "sync_clock": True,
         "clock_offset_s": None,  # this heater has no clock characteristic

@@ -18,10 +18,9 @@ from homeassistant.util import dt as dt_util
 from test_connection_mode import advance, kinds, make_entry, setup
 
 from custom_components.dimplex_ble.const import (
-    CONF_KEEP_CONNECTED,
     DOMAIN,
-    POLL_INTERVAL_PER_POLL,
     SCHEDULE_UPDATE_INTERVAL,
+    UPDATE_INTERVAL,
 )
 from custom_components.dimplex_ble.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -121,7 +120,7 @@ def with_schedules(proxy: FakeProxy) -> FakeProxy:
     return proxy
 
 
-async def test_persistent_link_reads_all_programmes_after_setup(hass, fake_bt) -> None:
+async def test_the_first_poll_reads_all_programmes(hass, fake_bt) -> None:
     proxy = with_schedules(fake_bt.add())
     entry = make_entry(hass)
 
@@ -144,9 +143,12 @@ async def test_persistent_link_reads_all_programmes_after_setup(hass, fake_bt) -
 
     proxy.events.clear()
     await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 1)
-    await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 12)  # next poll
+    await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 62)  # next poll
     assert len(schedule_writes(proxy)) == 21
-    assert "connect" not in kinds(proxy.events)  # over the held link
+    # Inside the polls' own connections: each one is closed again.
+    assert kinds(proxy.events).count("connect") == kinds(proxy.events).count(
+        "disconnect"
+    )
 
 
 async def test_a_heater_without_schedules_reads_as_unknown_days(hass, fake_bt) -> None:
@@ -174,7 +176,7 @@ async def test_per_poll_reads_schedules_inside_the_poll_connection(
     hass, fake_bt
 ) -> None:
     proxy = with_schedules(fake_bt.add())
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
 
     coordinator = await setup(hass, entry)
 
@@ -184,14 +186,14 @@ async def test_per_poll_reads_schedules_inside_the_poll_connection(
 
     # Not due: the next poll reads only the snapshot.
     proxy.events.clear()
-    await advance(hass, POLL_INTERVAL_PER_POLL + 1)
+    await advance(hass, UPDATE_INTERVAL.total_seconds() + 1)
     assert schedule_writes(proxy) == []
 
     # Due again: read inside the following poll, never in an extra connection.
     proxy.events.clear()
     coordinator.async_schedules_due()
     assert proxy.events == []
-    await advance(hass, 2 * POLL_INTERVAL_PER_POLL + 2)
+    await advance(hass, 2 * UPDATE_INTERVAL.total_seconds() + 2)
     assert len(schedule_writes(proxy)) == 21
     assert kinds(proxy.events).count("connect") == 1
 
@@ -392,7 +394,7 @@ async def test_set_schedule_reports_a_day_the_heater_did_not_keep(
 
 async def test_set_schedule_on_a_heater_without_schedules(hass, fake_bt) -> None:
     proxy = with_schedules(fake_bt.add())
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     coordinator.schedules = {}
 
@@ -651,7 +653,7 @@ async def test_get_schedule_returns_heater_pending_and_backup(hass, fake_bt) -> 
 
 async def test_get_schedule_before_any_read(hass, fake_bt) -> None:
     fake_bt.add()
-    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     coordinator.schedules = {}
 
@@ -752,7 +754,6 @@ async def test_a_schedule_read_failure_keeps_the_poll_and_retries(
     assert coordinator.last_update_success  # the poll still succeeded
     assert coordinator.schedules == {}  # nothing decoded, so nothing stored
     assert coordinator._schedules_due  # retried next poll
-    assert coordinator.link.connected  # the held link was not dropped
 
 
 async def test_a_save_refused_for_another_reason_is_not_queued(hass, fake_bt) -> None:

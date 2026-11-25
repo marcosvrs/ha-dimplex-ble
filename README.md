@@ -17,9 +17,9 @@ Bluetooth proxies. No cloud, no Dimplex app.
 > The most reliable way to heat on time is the heater's **own timer
 > programmes**, which run on the heater even when Bluetooth is down: set them
 > once with the **Set schedule** action (or the Dimplex app) and select **Auto**.
-> Use automations only for occasional changes you can afford to miss, and turn
-> off **Keep the Bluetooth connection open** (see
-> [Known limitations](#known-limitations)).
+> Use automations only for occasional changes you can afford to miss. Home
+> Assistant therefore never holds the connection: every update connects,
+> reads and disconnects, like the Dimplex app.
 
 - [Reliability first](#reliability-first)
 - [Requirements](#requirements)
@@ -46,9 +46,9 @@ The warning above in practice:
   heater's Bluetooth has stopped or the link drops; Home Assistant reports the
   error, but nothing retries it later. Do not rely on an automation for
   anything that must happen (for example frost protection while you are away).
-- **Connect briefly.** Turn off **Keep the Bluetooth connection open** under
-  each heater's **Configure**: each update then connects, reads and
-  disconnects, like the Dimplex app. Controls react a few seconds slower.
+- **Brief connections.** Every update (once a minute) connects, reads and
+  disconnects, like the Dimplex app; a command connects at once. Changes made
+  on the heater itself show up within a minute.
 - **Watch for the repair.** When a heater stops responding, Home Assistant
   raises "*Heater* stopped responding" with the power-cycle steps.
 
@@ -104,8 +104,6 @@ The heater is added as "Dimplex Heater AMxxxx". To change its proxy later, use
   does. Timer schedules run on the heater clock, so leave it on unless another
   app manages the clock.
 - **Boost length**: how long the Boost preset lasts, 1–240 minutes (default 60).
-- **Keep the Bluetooth connection open**: see
-  [Known limitations](#known-limitations).
 
 ## Choosing a Bluetooth proxy
 
@@ -247,8 +245,8 @@ problem.
   [esphome/esphome#22859](https://github.com/esphome/esphome/issues/22859);
   confirmed on hardware, 4 of 4 restarts).
 - A proxy has 3 Bluetooth connection slots, shared with every other Bluetooth
-  device it connects to (locks, sensors…). Each heater keeps one slot
-  permanently, unless its connection option is off (below).
+  device it connects to (locks, sensors…). A heater uses one slot only while
+  it updates or runs a command.
 - The pairing belongs to the chosen proxy. Moving a heater to another proxy
   needs the PIN again (**Reconfigure**).
 - The PIN is shown for about 30 seconds per pairing attempt.
@@ -266,11 +264,7 @@ problem.
   has a mains isolator switch: switch it off, wait at least 5 seconds, then
   switch it on. If there is no isolator switch: switch off the circuit breaker
   or remove the fuse supplying the unit, wait at least 5 seconds, then switch it
-  on." If a heater does this often, turn off **Keep the Bluetooth connection
-  open** under the heater's **Configure**: each update (every 60 s instead of
-  10 s) and each command then connects briefly and disconnects. Controls react
-  more slowly. This option is an experiment; it changes the update interval
-  together with the connection mode.
+  on."
 - Otherwise, power-cycling a heater is a last resort, not a routine fix.
 - **Heater firmware updates are not handled.** The integration is fully local
   and only shows the installed heater firmware version on the device page. To
@@ -281,6 +275,11 @@ problem.
 ## Upgrade notes
 
 Upgrading from an earlier version:
+
+- **The connection is never held any more.** Every update connects, reads and
+  disconnects once a minute (it was every 10 s over a held link); the
+  **Keep the Bluetooth connection open** option is gone. A saved value of it
+  is ignored.
 
 - **Breaking:** the timer programmes moved to the new **Auto** mode. In Auto
   the presets are User Timer, Home All Day and Out All Day, and there is no
@@ -338,22 +337,23 @@ removes its entities; it does not change the heater or the proxy firmware.
   one dormant `ble_client` that answers the heater's passkey request from a PIN
   held in RAM, and two native API actions, `dimplex_pin_arm(address, passkey)`
   and `dimplex_pin_clear()`. No external component, no C++.
-- **`link.py`** owns one persistent BLE link per heater, pinned to the proxy
-  that holds the bond. It connects only when that proxy sees the heater
+- **`link.py`** owns the BLE link to one heater, pinned to the proxy that
+  holds the bond. It connects only when that proxy sees the heater
   advertising, then arms the responder with the saved PIN and runs the native
   `pair()` to its end before any GATT operation. With a valid bond no PIN is
   asked; a lost bond is re-created automatically. A `pair()` in flight is never
-  cancelled: a failed or aborted pairing deletes the bond in ESP-IDF. With
-  **Keep the Bluetooth connection open** off, every operation runs that
-  sequence and then disconnects; a connect or `pair()` is never cut short.
+  cancelled: a failed or aborted pairing deletes the bond in ESP-IDF. Every
+  operation runs that sequence and then disconnects; a connect or `pair()` is
+  never cut short.
 - **`stall.py`** raises the "stopped responding" repair when a link ended
-  without our disconnect and no scanner hears the heater for 60 s.
+  without our disconnect, or the proxy no longer sees the heater, and no
+  scanner hears it for 60 s.
 - **`responder.py`** calls the two actions through the ESPHome entry's own API
   client, never through a Home Assistant action, so the PIN never reaches the
   event bus or the recorder.
 - **`errors.py`** is the single error translation point. Only a rejected PIN
   starts reauthentication; timeouts and GATT errors make the heater unavailable
-  until the next poll (every 10 s, or 60 s per-poll) or advertisement.
+  until the next poll (every 60 s) or advertisement.
 - **`config_flow.py`**: setup, reauthentication and reconfigure share one path.
 
 The evidence-backed protocol and capability boundary is in

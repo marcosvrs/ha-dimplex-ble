@@ -30,7 +30,6 @@ async def async_get_config_entry_diagnostics(
         "link": {
             "route_seen": link.route() is not None,
             "connected": link.connected,
-            "mode": "persistent" if link.keep_connected else "per_poll",
             "responder": has_responder(hass, link.source),
             "sync_clock": link.sync_clock,
             "clock_offset_s": link.clock_offset_s,

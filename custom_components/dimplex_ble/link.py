@@ -1,7 +1,7 @@
 """One authenticated BLE link to a panel heater through its pinned proxy.
 
-By default the link stays open between operations; with ``keep_connected``
-off every operation connects, pairs, runs its GATT sequence and disconnects.
+Every operation connects, pairs, runs its GATT sequence and disconnects, like
+the Dimplex app: the heaters are not made for long-held Bluetooth links.
 """
 
 from __future__ import annotations
@@ -231,7 +231,6 @@ class HeaterLink:
         source: str,
         passkey: str | None,
         *,
-        keep_connected: bool = True,
         sync_clock: bool = False,
     ) -> None:
         """Pin the link to the proxy that holds the heater's bond."""
@@ -239,7 +238,6 @@ class HeaterLink:
         self.address = address.upper()
         self.source = source
         self._passkey = int(passkey) if passkey else None
-        self.keep_connected = keep_connected
         self.sync_clock = sync_clock
         # Heater clock minus local time (s) at the last check, for diagnostics.
         self.clock_offset_s: float | None = None
@@ -427,15 +425,11 @@ class HeaterLink:
                 await self._disconnect("cancelled")
                 raise
             finally:
-                if not self.keep_connected and self._client is not None:
+                if self._client is not None:
                     # Connect and pair already ran to their native end
                     # (RC-2/RC-3); only the finished link is released here, on
                     # every outcome (a refused write must not hold the slot).
-                    await self._disconnect("per_poll")
-
-    def request_clock_check(self) -> None:
-        """Check the heater clock on the next operation (a held link lives long)."""
-        self._clock_due = True
+                    await self._disconnect("done")
 
     async def _check_clock(self, client: BaseBleakClient) -> None:
         """Read the heater clock; set it when it is more than 60 s off.
@@ -477,7 +471,8 @@ class HeaterLink:
         client = self._client
         scanner = bluetooth.async_scanner_by_source(self._hass, self.source)
         if client is not None:
-            # A reconnected proxy API registers a new scanner object; a client
+            # The setup flow pairs, then verifies over the same link. A
+            # reconnected proxy API registers a new scanner object; a client
             # built on the old one talks to a dead API connection.
             if client.is_connected and scanner is self._scanner:
                 return client
@@ -491,6 +486,10 @@ class HeaterLink:
                 self.source,
                 scanner is not None,
             )
+            # With no link between updates, a heater that went silent is only
+            # noticed here: start the stall window (hearing it ends it).
+            if self.on_link_lost is not None:
+                self.on_link_lost(scanner)
             raise HeaterUnavailableError("The pinned proxy does not see the heater")
         scanner, device = route
         assert scanner.connector is not None  # checked by route()

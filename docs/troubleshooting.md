@@ -36,13 +36,10 @@ reconfigure the heater until the earlier layer works.
 
 1. Switch the heater off and on at the wall. Home Assistant reconnects without a
    PIN and clears the repair once it hears the heater.
-2. If it happens again, open the heater's **Configure** and turn off **Keep the
-   Bluetooth connection open**: each update then connects briefly (every 60 s,
-   so controls react more slowly).
 
-Why: the repair appears only when the heater's connection ended without Home
-Assistant disconnecting it and then no proxy heard the heater for 60 seconds,
-while its proxy stayed online. On hardware (2026-11-24) heaters were silent to
+Why: the repair appears when the heater's connection ended without Home
+Assistant disconnecting it, or its proxy stopped seeing it, and then no proxy
+heard the heater for 60 seconds, while its proxy stayed online. On hardware (2026-11-24) heaters were silent to
 every receiver, including a phone scan, after such a drop until power-cycled;
 after a normal disconnect they always advertised again within seconds.
 
@@ -170,9 +167,8 @@ A related operational trap: an ESPHome proxy accepts only a limited number of na
 ### Proxy capacity
 
 ESPHome owns the proxy's Bluetooth connection slots (`connection_slots`, default
-3). Each configured heater keeps one persistent link (unless **Keep the
-Bluetooth connection open** is off), and other BLE integrations
-share the same slots. The responder's `ble_client` needs one more controller
+3). A heater uses one slot only while it updates or runs a command, and other
+BLE integrations share the same slots. The responder's `ble_client` needs one more controller
 connection (`max_connections: 4`), not a proxy slot. On an ESP32-S3 a third
 heater link is refused ("Rejected: Resources") after every Home Assistant
 restart (esphome/esphome#22859; hardware 2026-11-24, 4/4), so keep at most 2

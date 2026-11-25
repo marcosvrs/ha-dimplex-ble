@@ -64,10 +64,14 @@ class StallMonitor:
 
     @callback
     def async_link_lost(self, scanner: BaseHaScanner | None) -> None:
-        """Start the silence window after a link-down we did not initiate."""
+        """Start the silence window: the link dropped, or the proxy lost the heater.
+
+        A window already running is kept, so repeated polls cannot postpone it.
+        """
         if self._stopped or self._hass.is_stopping or not self._proxy_online(scanner):
             return
-        self._cancel()
+        if self._cancel_timer is not None:
+            return
         self._scanner = scanner
         self._cancel_timer = async_call_later(
             self._hass, STALL_WINDOW, self._async_window_expired

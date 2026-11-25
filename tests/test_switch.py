@@ -42,7 +42,6 @@ def _link(client):
     return SimpleNamespace(
         address=ADDRESS,
         source=PROXY,
-        keep_connected=True,
         async_write=async_write,
         async_read=async_read,
         async_read_then_write=async_read_then_write,
@@ -325,7 +324,6 @@ async def test_setting_readback_failure_keeps_the_written_value(hass) -> None:
 async def test_per_poll_setting_write_is_read_back_by_the_next_poll(hass) -> None:
     client = SimpleNamespace(address=ADDRESS, async_write_raw=AsyncMock())
     coordinator = make_coordinator(hass, preemptive=False, client=client)
-    coordinator.link.keep_connected = False
     coordinator._settings_due = False
 
     await DimplexSoundSwitch(coordinator).async_turn_on()

@@ -42,7 +42,6 @@ def make_coordinator(hass, data, *, reads=()):
     link = SimpleNamespace(
         address=ADDRESS,
         source=PROXY,
-        keep_connected=True,
         async_write=async_write,
         async_read=async_read,
         async_read_then_write=async_read_then_write,

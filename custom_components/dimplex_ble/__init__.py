@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from homeassistant.components import bluetooth
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -19,7 +18,6 @@ from homeassistant.helpers.typing import ConfigType
 
 from . import responder
 from .const import (
-    CLOCK_CHECK_INTERVAL,
     CONF_ADDRESS,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
@@ -33,7 +31,7 @@ from .const import (
     UNIQUE_ID_SUFFIXES,
     UNVERIFIED_LEGACY_SUFFIXES,
 )
-from .coordinator import DimplexConfigEntry, DimplexCoordinator, keep_connected
+from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import device_info_for_coordinator, unique_id
 from .link import HeaterLink
 from .schedule_keeper import STORAGE_VERSION, pending_issue_id
@@ -59,11 +57,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
         entry.data[CONF_ADDRESS],
         entry.data[CONF_PROXY_SOURCE],
         entry.data.get(CONF_PASSKEY),
-        keep_connected=keep_connected(entry),
         sync_clock=entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
-    )
-    _LOGGER.debug(
-        "MODE %s %s", "persistent" if link.keep_connected else "per_poll", link.address
     )
     coordinator = DimplexCoordinator(hass, entry, link)
     entry.runtime_data = coordinator
@@ -115,15 +109,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
         )
     )
 
-    @callback
-    def _check_clock_soon(now: datetime) -> None:
-        """Recheck the clock: a held link can last days and span a DST change."""
-        del now
-        link.request_clock_check()
-
-    entry.async_on_unload(
-        async_track_time_interval(hass, _check_clock_soon, CLOCK_CHECK_INTERVAL)
-    )
     # Register the device before the first refresh, so a setup retry after a
     # transient BLE outage still offers the device's name and area step.
     device_info = device_info_for_coordinator(coordinator)

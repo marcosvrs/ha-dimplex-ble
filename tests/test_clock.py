@@ -9,12 +9,10 @@ from types import SimpleNamespace
 import pytest
 from bleak.exc import BleakError
 from conftest import FakeProxy
-from test_connection_mode import advance, make_entry, setup
+from test_connection_mode import make_entry, setup
 
 from custom_components.dimplex_ble import link as link_module
 from custom_components.dimplex_ble.const import (
-    CLOCK_CHECK_INTERVAL,
-    CONF_KEEP_CONNECTED,
     CONF_SYNC_CLOCK,
 )
 from custom_components.dimplex_ble.diagnostics import (
@@ -119,20 +117,10 @@ async def test_a_slow_clock_is_set_once_per_connection(hass, fake_bt, caplog) ->
     assert diagnostics["link"]["clock_offset_s"] == 0
     assert diagnostics["link"]["sync_clock"] is True
 
+    # The next update is a new connection: checked again, now in sync.
+    proxy.values[CLOCK] = NOW_BYTES
     proxy.events.clear()
     await coordinator.async_refresh()
-    assert clock_events(proxy) == []  # the held link checked it already
-
-
-@pytest.mark.usefixtures("fixed_now")
-async def test_a_held_link_rechecks_the_clock_hourly(hass, fake_bt) -> None:
-    proxy = with_clock(fake_bt.add(), NOW_BYTES)
-    coordinator = await setup(hass, make_entry(hass))
-    proxy.events.clear()
-
-    await advance(hass, CLOCK_CHECK_INTERVAL.total_seconds() + 1)
-    await coordinator.async_refresh()  # whichever timer ran first, one check
-
     assert [e[0] for e in clock_events(proxy)] == ["read"]
 
 
@@ -148,9 +136,7 @@ async def test_a_clock_within_a_minute_is_left_alone(hass, fake_bt) -> None:
 @pytest.mark.usefixtures("fixed_now")
 async def test_sync_off_only_measures(hass, fake_bt) -> None:
     proxy = with_clock(fake_bt.add())
-    coordinator = await setup(
-        hass, make_entry(hass, **{CONF_SYNC_CLOCK: False, CONF_KEEP_CONNECTED: False})
-    )
+    coordinator = await setup(hass, make_entry(hass, **{CONF_SYNC_CLOCK: False}))
 
     assert [e[0] for e in clock_events(proxy)] == ["read"]
     assert coordinator.link.clock_offset_s == -137 * 60
@@ -188,7 +174,6 @@ async def test_a_clock_failure_never_fails_the_poll(hass, fake_bt, monkeypatch) 
 
     assert coordinator.last_update_success
     assert coordinator.link.clock_offset_s is None
-    assert coordinator.link.connected
 
     monkeypatch.setattr(link_module, "_read_optional", read)
     await coordinator.async_refresh()  # retried on the next operation

@@ -38,7 +38,7 @@ def clock(monkeypatch) -> Clock:
 
 
 def make_link(hass) -> HeaterLink:
-    return HeaterLink(hass, ADDRESS.lower(), PROXY, PIN, keep_connected=False)
+    return HeaterLink(hass, ADDRESS.lower(), PROXY, PIN)
 
 
 async def test_reconnect_within_settle_waits_the_remainder(

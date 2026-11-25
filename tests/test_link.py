@@ -10,6 +10,7 @@ from bleak.exc import BleakError
 from conftest import ADDRESS, PIN, PROXY, FakeProxy, gatt_failure, pair_failure
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from custom_components.dimplex_ble import link as link_module
 from custom_components.dimplex_ble.errors import (
     CREDENTIAL_REJECTED_CODES,
     CharacteristicError,
@@ -64,22 +65,19 @@ async def test_connect_then_pair_then_gatt_in_order(hass, fake_bt) -> None:
         ("dimplex_pin_clear", {}),
     ]
     assert proxy.clients[0].timeout == CONNECT_TIMEOUT
-    assert link.connected
+    assert proxy.events[-1] == "disconnect"  # released once the work is done
+    assert not link.connected
 
 
-async def test_live_link_is_reused_and_a_dropped_one_reconnects(hass, fake_bt) -> None:
+async def test_every_operation_connects_pairs_and_disconnects(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     link = make_link(hass)
     await link.async_snapshot()
     await link.async_snapshot()
-    assert kinds(proxy.events).count("connect") == 1
-
-    proxy.clients[0].is_connected = False
-    proxy.clients[0].disconnected_callback()
-    await link.async_snapshot()
 
     assert kinds(proxy.events).count("connect") == 2
     assert kinds(proxy.events).count("pair_start") == 2
+    assert kinds(proxy.events).count("disconnect") == 2
 
 
 async def read(link: HeaterLink, address: tuple[int, int]) -> bytes | None:
@@ -89,9 +87,10 @@ async def read(link: HeaterLink, address: tuple[int, int]) -> bytes | None:
 
 
 async def test_proxy_api_reconnect_invalidates_the_cached_client(hass, fake_bt) -> None:
+    """The setup flow pairs and keeps the link for its verification read."""
     proxy = fake_bt.add()
     link = make_link(hass)
-    await link.async_snapshot()
+    await link.async_pair(int(PIN))
 
     proxy.reconnect_api()
     proxy.disconnect_error = BleakError("API connection is gone")
@@ -309,7 +308,11 @@ async def test_snapshot_and_write_are_serialized(hass, fake_bt) -> None:
     proxy.read_gate.set_result(None)
     await snapshot
     await write
-    assert kinds(proxy.events)[-1] == "write"
+    setpoint_write = next(
+        i for i, e in enumerate(proxy.events) if e[0] == "write" and e[1][4:8] == "1023"
+    )
+    assert setpoint_write > proxy.events.index("disconnect")  # after the snapshot
+    assert proxy.events[-1] == "disconnect"
 
 
 async def test_one_proxy_runs_one_pairing_at_a_time(hass, fake_bt) -> None:
@@ -354,18 +357,22 @@ async def test_write_rejects_missing_or_read_only_characteristics(
         await link.async_write((0, 0x102A), b"\x00")
     with pytest.raises(CharacteristicError):
         await link.async_write((0, 0x100B), b"\x00")
-    assert link.connected
+    assert not link.connected  # released even when the write is refused
 
 
-async def test_gatt_failure_during_write_drops_the_link(hass, fake_bt) -> None:
-    proxy = fake_bt.add()
+async def test_gatt_failure_during_write_drops_the_link(
+    hass, fake_bt, monkeypatch
+) -> None:
+    fake_bt.add()
     link = make_link(hass)
-    await link.async_snapshot()
+    real = link_module._write
 
-    async def fail(*args, **kwargs):
-        raise gatt_failure(0x0E)
+    async def failing_write(client, address, payload):
+        if address == SETPOINT:
+            raise gatt_failure(0x0E)
+        await real(client, address, payload)
 
-    proxy.clients[0].write_gatt_char = fail
+    monkeypatch.setattr(link_module, "_write", failing_write)
     with pytest.raises(HeaterUnavailableError):
         await link.async_write(SETPOINT, b"\x16\x00")
     assert not link.connected

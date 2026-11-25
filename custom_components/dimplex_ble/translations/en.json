@@ -104,12 +104,10 @@
       "init": {
         "title": "Settings",
         "data": {
-          "keep_connected": "Keep the Bluetooth connection open",
           "sync_clock": "Sync the heater clock",
           "boost_minutes": "Boost length"
         },
         "data_description": {
-          "keep_connected": "Turn off if this heater often stops responding. Each update then connects briefly (slower controls).",
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
           "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min)."
         }

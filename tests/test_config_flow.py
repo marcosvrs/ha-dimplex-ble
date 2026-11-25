@@ -17,6 +17,7 @@ from homeassistant.config_entries import (
 from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from test_connection_mode import kinds
 
 from custom_components.dimplex_ble import config_flow, responder
 from custom_components.dimplex_ble.const import (
@@ -795,7 +796,7 @@ async def test_reconfigure_moves_the_bond_to_another_proxy(hass, fake_bt) -> Non
         result["flow_id"], {CONF_PROXY_SOURCE: OTHER}
     )
     assert entry.state is ConfigEntryState.NOT_LOADED
-    assert old.events[old_events:] == ["disconnect"]  # the running link let go
+    assert "connect" not in kinds(old.events[old_events:])  # nothing on the old proxy
     await pin_ready(hass, fake_bt, new, result["flow_id"])
     result = await choose(hass, result["flow_id"], "pin")
     result = await hass.config_entries.flow.async_configure(
