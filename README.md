@@ -90,7 +90,7 @@ The climate entity shows the room temperature in 0.1 °C steps, whether the heat
 | --- | --- |
 | **Advance** | Switches the current timer period between heating and not heating until the next period starts. Only in timer presets. |
 | **Setback** | In **Auto**, holds the Setback temperature during periods without heating. |
-| **Setback temperature** | What Setback holds, 7 to 18 °C |
+| **Setback temperature** | What Setback holds, 8 to 19 °C |
 | **Boost temperature** | What Boost heats to, within the heater's setpoint range |
 | **Away return time** | When Away ends. Setting it starts Away. |
 | **Away temperature** | What Away holds, 7 to 18 °C. Can change only while Away is on. |

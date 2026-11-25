@@ -487,23 +487,29 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
     ) -> None:
         """Change one part of the Setback record, keeping the other.
 
-        The record is read and written in one link operation, so a change made
-        on the heater's menu since the last poll is kept.
+        The record is read, written and read back in one link operation, so a
+        change made on the heater's menu since the last poll is kept, and a
+        value the heater refuses is reported instead of shown.
         """
+        written: list[bytes] = []
 
         def build(current: bytes | None) -> bytes:
             try:
-                return encode_setback(enabled, current, temperature)
+                written.append(encode_setback(enabled, current, temperature))
             except DimplexProtocolError as err:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="setting_unavailable"
                 ) from err
+            return written[0]
 
-        payload = await self.async_command(
-            self.link.async_read_then_write(SETBACK, build)
-        )
-        self.settings[SETBACK] = payload
-        self.async_update_listeners()
+        kept = await self.async_command(self.link.async_read_then_write(SETBACK, build))
+        if kept is not None:  # an unreadable record keeps the last known value
+            self.settings[SETBACK] = kept
+            self.async_update_listeners()
+        if kept != written[0]:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="setting_not_kept"
+            )
         self._settings_due = True  # confirmed by the next poll, as other writes
 
     async def async_set_temperature_offset(self, offset_c: float) -> None:

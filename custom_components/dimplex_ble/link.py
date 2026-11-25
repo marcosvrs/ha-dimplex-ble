@@ -334,12 +334,15 @@ class HeaterLink:
 
     async def async_read_then_write(
         self, address: GattAddress, build: Callable[[bytes | None], bytes]
-    ) -> bytes:
-        """Read a record and write ``build(current)`` in one operation."""
+    ) -> bytes | None:
+        """Write ``build(current)`` and return the record as the heater then holds it.
+
+        The heater acknowledges writes it doesn't apply (Setback 7 degC kept
+        8 degC, hardware 2026-11-25), so only the readback tells what it kept.
+        """
         async with self._operation(f"update {address[0]}/0x{address[1]:04x}") as client:
-            payload = build(await _read_optional(client, address))
-            await _write(client, address, payload)
-        return payload
+            await _write(client, address, build(await _read_optional(client, address)))
+            return await _read_optional(client, address)
 
     async def async_write_many(
         self, writes: tuple[tuple[GattAddress, bytes], ...]

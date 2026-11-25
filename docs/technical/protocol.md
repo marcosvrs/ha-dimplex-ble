@@ -188,11 +188,11 @@ ConfigR writes only the low byte of `0/0x1027` followed by `00`. For 1 to 240 mi
 | Byte | Meaning |
 |---|---|
 | 0 | `00` off, `01` on |
-| 1 | Temperature, whole °C, 7 to 18 |
+| 1 | Temperature, whole °C, 8 to 19 |
 
 - **Read**: on the 5-minute settings schedule. AM6532 read `00 08` (off, 8 °C) on 2026-11-19.
-- **Write**: the switch changes byte 0 and the number changes byte 1. Each write reads the live record first and keeps the other byte, inside one link operation.
-- **Evidence**: on AM2086, on and off read back on 2026-11-24. On 2026-11-25 the display showed 8 °C for `08`, and a written `0F` showed 15 °C. The range 7 to 18 °C comes from the PLXE manual, page 23.
+- **Write**: the switch changes byte 0 and the number changes byte 1. Each write reads the live record first, keeps the other byte and reads the record back, inside one link operation. A readback that differs from the write fails the action with "The heater didn't keep the new value".
+- **Evidence**: on AM2086, on and off read back on 2026-11-24. On 2026-11-25 the display showed 8 °C for `08`, and a written `0F` showed 15 °C. The PLXE manual (page 23) gives 7 to 18 °C, but the heater menu offers 8 to 19 °C. On 2026-11-25 AM2086 (UI 5.0) kept a written 19 °C, and AM6532 (UI 1.7) and AM2086 acknowledged a written 7 °C but kept 8 °C. The integration offers 8 to 19 °C.
 
 ## Away
 

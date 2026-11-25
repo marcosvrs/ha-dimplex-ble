@@ -574,6 +574,17 @@ async def test_the_pin_never_reaches_the_esphome_debug_log(
     assert "42" in caplog.text  # other actions are logged unchanged
 
 
+def _keep_setback(proxy):
+    """The heater keeps a Setback write, as AM2086 did for 8 and 15 degC."""
+    from custom_components.dimplex_ble.protocol import SETBACK
+
+    def on_write(address, data):
+        if address == SETBACK:
+            proxy.values[SETBACK] = data
+
+    return on_write
+
+
 async def test_setback_keeps_the_heater_temperature_in_one_operation(
     hass, fake_bt
 ) -> None:
@@ -581,6 +592,7 @@ async def test_setback_keeps_the_heater_temperature_in_one_operation(
 
     proxy = fake_bt.add()
     proxy.services.add(SETBACK)
+    proxy.on_write = _keep_setback(proxy)
     proxy.values[SETBACK] = b"\x00\x0a"  # 10 degC, set on the heater's menu
     coordinator = await setup(hass, make_entry(hass))
     coordinator.settings[SETBACK] = b"\x00\x08"  # cached before the change
@@ -600,6 +612,7 @@ async def test_setback_temperature_keeps_setback_on_in_one_operation(
 
     proxy = fake_bt.add()
     proxy.services.add(SETBACK)
+    proxy.on_write = _keep_setback(proxy)
     proxy.values[SETBACK] = b"\x01\x08"  # Setback switched on at the heater
     coordinator = await setup(hass, make_entry(hass))
     coordinator.settings[SETBACK] = b"\x00\x08"  # cached before the change

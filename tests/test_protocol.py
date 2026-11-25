@@ -420,10 +420,11 @@ def test_setback_round_trips_and_keeps_the_temperature_byte(
     [
         (b"\x00\x08", 8),
         (b"\x01\x0f", 15),
-        (b"\x00\x07", 7),
+        (b"\x00\x07", None),  # refused by AM6532 and AM2086 2026-11-25
         (b"\x00\x12", 18),
         (b"\x00\x06", None),
-        (b"\x00\x13", None),
+        (b"\x00\x13", 19),  # heater menu maximum; kept by AM2086 2026-11-25
+        (b"\x00\x14", None),
         (b"\x02\x08", None),
         (None, None),
     ],
@@ -435,8 +436,8 @@ def test_setback_temperature_is_whole_degrees(payload, temperature) -> None:
 
 def test_setback_temperature_keeps_setback_on_or_off() -> None:
     assert encode_setback(None, b"\x01\x08", 15) == b"\x01\x0f"
-    assert encode_setback(None, b"\x00\x08", 7) == b"\x00\x07"
-    for bad in (6, 19):
+    assert encode_setback(None, b"\x00\x0f", 8) == b"\x00\x08"
+    for bad in (7, 20):
         with pytest.raises(DimplexProtocolError):
             encode_setback(None, b"\x00\x08", bad)
 

@@ -409,6 +409,9 @@
     "boost_unavailable": {
       "message": "This heater has no valid Boost temperature."
     },
+    "setting_not_kept": {
+      "message": "The heater didn't keep the new value."
+    },
     "schedule_not_saved": {
       "message": "The heater didn't keep the new schedule. Try again."
     },

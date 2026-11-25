@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.const import EntityCategory, UnitOfTemperature
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_entities import snapshot
 
@@ -25,7 +25,7 @@ PROXY = "esphome-proxy"
 OFFSET = (2, 0x1019)
 
 
-def make_coordinator(hass, data, *, reads=()):
+def make_coordinator(hass, data, *, reads=(), keep=lambda payload: payload):
     client = SimpleNamespace(
         async_write_raw=AsyncMock(), async_read_raw=AsyncMock(side_effect=reads)
     )
@@ -39,7 +39,7 @@ def make_coordinator(hass, data, *, reads=()):
     async def async_read_then_write(address, build):
         payload = build(await client.async_read_raw(*address))
         await client.async_write_raw(*address, payload)
-        return payload
+        return keep(payload)  # the record as the heater reads back
 
     link = SimpleNamespace(
         address=ADDRESS,
@@ -89,7 +89,7 @@ async def test_setup_adds_the_temperature_settings(hass) -> None:
     assert away.device_class == boost.device_class == setback.device_class
     assert away.device_class == "temperature"
     assert (away.native_min_value, away.native_max_value) == (7, 18)
-    assert (setback.native_min_value, setback.native_max_value) == (7, 18)
+    assert (setback.native_min_value, setback.native_max_value) == (8, 19)
     assert (offset.native_min_value, offset.native_max_value) == (-3.0, 3.0)
     assert offset.native_step == 0.1
     assert all(entity.icon is None for entity in entities)
@@ -248,13 +248,43 @@ async def test_setback_temperature_reads_and_writes_the_setback_record(hass) -> 
 
     coordinator.settings[(0, 0x1016)] = b"\x00\x08"
     assert entity.native_value == 8.0
-    assert (entity.native_min_value, entity.native_max_value) == (7, 18)
+    assert (entity.native_min_value, entity.native_max_value) == (8, 19)
     assert entity.entity_category is EntityCategory.CONFIG
 
     await entity.async_set_native_value(12.0)
 
     client.async_write_raw.assert_awaited_once_with(0, 0x1016, b"\x00\x0c")
     assert entity.native_value == 12.0
+
+
+async def test_a_refused_setback_temperature_is_reported_not_shown(hass) -> None:
+    """AM6532 and AM2086 2026-11-25: a written 7 degC read back as the old 8 degC."""
+    coordinator, client = make_coordinator(
+        hass, snapshot(), reads=[b"\x01\x08"], keep=lambda payload: b"\x01\x08"
+    )
+    coordinator.settings[(0, 0x1016)] = b"\x01\x08"
+    entity = DimplexSetbackTemperatureNumber(coordinator)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_set_setback_temperature(9)
+
+    assert err.value.translation_key == "setting_not_kept"
+    client.async_write_raw.assert_awaited_once_with(0, 0x1016, b"\x01\x09")
+    assert entity.native_value == 8.0
+    with pytest.raises(ServiceValidationError):  # below the kept range
+        await entity.async_set_native_value(7.0)
+
+
+async def test_an_unreadable_setback_after_a_write_is_reported(hass) -> None:
+    coordinator, _ = make_coordinator(
+        hass, snapshot(), reads=[b"\x01\x08"], keep=lambda payload: None
+    )
+    coordinator.settings[(0, 0x1016)] = b"\x01\x08"
+
+    with pytest.raises(HomeAssistantError):
+        await coordinator.async_set_setback_temperature(9)
+
+    assert coordinator.settings[(0, 0x1016)] == b"\x01\x08"
 
 
 async def test_boost_temperature_follows_the_heater_and_its_range(hass) -> None:

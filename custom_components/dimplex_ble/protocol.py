@@ -60,10 +60,12 @@ CLOCK_CENTURY: Final = 20
 SOUND_PAYLOAD_LENGTH: Final = 3
 AWAY_MODE_PAYLOAD_LENGTH: Final = 7
 SETBACK_PAYLOAD_LENGTH: Final = 2
-# Setback holds 7-18 degC (PLXE manual p. 23); byte 1 is whole degC, verified on
-# AM2086 2026-11-25 (display 8 degC = 0x08, a written 0x0F showed 15 degC).
-SETBACK_TEMPERATURE_MIN_C: Final = 7
-SETBACK_TEMPERATURE_MAX_C: Final = 18
+# Setback holds 8-19 degC; byte 1 is whole degC, verified on AM2086 2026-11-25
+# (display 8 degC = 0x08, a written 0x0F showed 15 degC). The PLXE manual (p. 23)
+# says 7-18, but the heater menu offers 8-19, AM2086 (UI 5.0) kept a written 19,
+# and AM6532 (UI 1.7) and AM2086 kept 8 when 7 was written.
+SETBACK_TEMPERATURE_MIN_C: Final = 8
+SETBACK_TEMPERATURE_MAX_C: Final = 19
 
 # Away target bounds of the Dimplex cloud client (7-18 degC); the PLXE manual
 # gives the 7 degC default (p. 17) (docs/technical/research/capability-matrix.md).
@@ -346,7 +348,7 @@ def parse_setback(value: bytes | None) -> bool | None:
 
 
 def parse_setback_temperature(value: bytes | None) -> int | None:
-    """Decode the Setback temperature (whole degC, 7-18) from ``[IsActive, Temp]``."""
+    """Decode the Setback temperature (whole degC, 8-19) from ``[IsActive, Temp]``."""
     if parse_setback(value) is None:
         return None
     assert value is not None  # checked by parse_setback()
