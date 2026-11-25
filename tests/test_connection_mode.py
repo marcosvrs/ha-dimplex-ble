@@ -619,3 +619,20 @@ async def test_setback_keeps_the_heater_temperature_in_one_operation(
     assert [e[2] for e in proxy.events if e[0] == "write"][-1] == b"\x01\x0a"
     assert kinds(proxy.events).count("connect") == 0  # over the held link
     assert coordinator.settings[SETBACK] == b"\x01\x0a"
+
+
+async def test_per_poll_releases_the_link_after_a_refused_write(hass, fake_bt) -> None:
+    """Review round 7: a non-GATT failure must not keep the proxy slot."""
+    from custom_components.dimplex_ble.errors import CharacteristicError
+    from custom_components.dimplex_ble.protocol import SETBACK
+
+    proxy = fake_bt.add()
+    coordinator = await setup(hass, make_entry(hass, **{CONF_KEEP_CONNECTED: False}))
+    proxy.events.clear()
+
+    with pytest.raises(CharacteristicError):
+        await coordinator.link.async_write(SETBACK, b"\x01\x08")  # not on this heater
+
+    assert "connect" in kinds(proxy.events)
+    assert kinds(proxy.events).count("disconnect") == 1
+    assert not coordinator.link.connected

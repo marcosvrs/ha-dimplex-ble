@@ -459,10 +459,12 @@ class HeaterLink:
             except asyncio.CancelledError:
                 await self._disconnect("cancelled")
                 raise
-            if not self.keep_connected:
-                # Connect and pair already ran to their native end (RC-2/RC-3);
-                # only the finished link is released here.
-                await self._disconnect("per_poll")
+            finally:
+                if not self.keep_connected and self._client is not None:
+                    # Connect and pair already ran to their native end
+                    # (RC-2/RC-3); only the finished link is released here, on
+                    # every outcome (a refused write must not hold the slot).
+                    await self._disconnect("per_poll")
 
     def request_clock_check(self) -> None:
         """Check the heater clock on the next operation (a held link lives long)."""
