@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -151,16 +152,46 @@ async def test_transient_failure_recovers_on_the_next_poll(hass, fake_bt) -> Non
     entry = make_entry(hass)
     await setup(hass, entry)
     proxy.clients[0].is_connected = False
-    proxy.pair_errors = [pair_failure(99)]
+    proxy.pair_errors = [pair_failure(99), pair_failure(99)]
 
+    # One missed poll keeps the last state; the second in a row does not.
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
+    await hass.async_block_till_done()
+    assert hass.states.get(UNIT).state == "celsius"
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=122))
     await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "unavailable"
     assert reauth_flows(hass) == []
 
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=122))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=183))
     await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "celsius"
+
+
+async def test_only_misses_in_a_row_make_the_heater_unavailable(
+    hass, fake_bt, caplog
+) -> None:
+    """An isolated connect timeout (1-2 % of polls) must not flash unavailable."""
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    coordinator: DimplexCoordinator = entry.runtime_data
+    kept = coordinator.data
+
+    proxy.sees_heater = False
+    with caplog.at_level(logging.DEBUG):
+        await coordinator.async_refresh()
+    assert coordinator.last_update_success and coordinator.data is kept
+    assert "POLL_MISSED" in caplog.text
+
+    proxy.sees_heater = True  # a good poll resets the count
+    await coordinator.async_refresh()
+    proxy.sees_heater = False
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success
+
+    await coordinator.async_refresh()  # the second miss in a row
+    assert not coordinator.last_update_success
 
 
 async def test_advertisement_on_the_pinned_proxy_refreshes_an_unavailable_heater(
@@ -173,8 +204,9 @@ async def test_advertisement_on_the_pinned_proxy_refreshes_an_unavailable_heater
     coordinator: DimplexCoordinator = entry.runtime_data
     proxy.clients[0].is_connected = False
     proxy.sees_heater = False
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
-    await hass.async_block_till_done()
+    for seconds in (61, 122):  # the second missed poll in a row
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+        await hass.async_block_till_done()
     assert hass.states.get(UNIT).state == "unavailable"  # ROUTE_NOT_SEEN
     refreshes = []
     request_refresh = coordinator.async_request_refresh

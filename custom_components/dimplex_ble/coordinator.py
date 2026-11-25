@@ -156,9 +156,21 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         # save cannot be overwritten by an older waiting one.
         self._schedule_lock = asyncio.Lock()
         self.schedules_read_at: datetime | None = None
+        self._missed_polls = 0
+
+    @property
+    def fresh(self) -> bool:
+        """Return whether the last poll reached the heater (not a kept snapshot)."""
+        return self.last_update_success and self._missed_polls == 0
 
     async def _async_update_data(self) -> HeaterSnapshot:
-        """Read one snapshot; a rejected PIN starts reauth and stops polling."""
+        """Read one snapshot; a rejected PIN starts reauth and stops polling.
+
+        One failed poll after a good one keeps the last snapshot: an isolated
+        Bluetooth connect timeout (1-2 % of polls, soak 2026-11-25) would
+        otherwise flash every entity unavailable. The next failure in a row
+        marks the heater unavailable.
+        """
         try:
             (
                 snapshot,
@@ -181,9 +193,22 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 translation_domain=DOMAIN, translation_key=err.translation_key
             ) from err
         except DimplexError as err:
+            self._missed_polls += 1
+            if self.data is not None and self._missed_polls == 1:
+                _LOGGER.debug(
+                    "POLL_MISSED %s kept last state: %s", self.link.address, err
+                )
+                # The same snapshot notifies nobody; the energy sensor must
+                # stop counting now, not at its next tick.
+                self.async_update_listeners()
+                return self.data
             raise UpdateFailed(
                 translation_domain=DOMAIN, translation_key=err.translation_key
             ) from err
+        if self._missed_polls:
+            self._missed_polls = 0
+            # An unchanged snapshot notifies nobody either: restart counting.
+            self.async_update_listeners()
         self.stall.async_heard()
         if self.schedule_keeper.pending and not self._applying_pending:
             # The heater answers again: write the changes that waited for it.

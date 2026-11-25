@@ -230,7 +230,7 @@ class DimplexEstimatedEnergySensor(DimplexEntity, RestoreSensor):
             self._total_kwh += watts * (now - started) / 3_600_000
         watts_now = (
             estimated_power_w(self.coordinator.data)
-            if self.coordinator.last_update_success
+            if self.coordinator.fresh  # a missed poll's kept snapshot isn't counted
             else None
         )
         self._since = None if watts_now is None else (now, watts_now)

@@ -94,7 +94,21 @@ async def test_an_unreachable_heater_is_not_counted(hass, fake_bt, clock) -> Non
     coordinator = await setup(hass)
     clock.now += 1800
     proxy.sees_heater = False
-    await coordinator.async_refresh()  # fails: counts up to now, then stops
+    await coordinator.async_refresh()  # a missed poll: counts up to now, then stops
+    await hass.async_block_till_done()
+    assert float(energy(hass).state) == pytest.approx(0.25)  # still shown
+
+    clock.now += 600  # the missed poll's kept snapshot isn't counted
+    proxy.sees_heater = True
+    await tick(hass)  # the next poll reaches the heater again, readings unchanged
+    assert float(energy(hass).state) == pytest.approx(0.25)
+    clock.now += 1800  # counting resumed after the recovery
+    await tick(hass)
+    assert float(energy(hass).state) == pytest.approx(0.5)
+
+    proxy.sees_heater = False
+    await coordinator.async_refresh()  # a miss keeps the state
+    await coordinator.async_refresh()  # the second in a row: unavailable
     await hass.async_block_till_done()
 
     clock.now += 7200  # two hours unreachable
@@ -104,7 +118,7 @@ async def test_an_unreachable_heater_is_not_counted(hass, fake_bt, clock) -> Non
     proxy.sees_heater = True  # back: the two hours are not counted
     await coordinator.async_refresh()
     await hass.async_block_till_done()
-    assert float(energy(hass).state) == pytest.approx(0.25)
+    assert float(energy(hass).state) == pytest.approx(0.5)
 
 
 async def test_the_total_survives_a_restart(hass, fake_bt, clock) -> None:

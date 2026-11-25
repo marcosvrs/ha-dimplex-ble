@@ -789,6 +789,8 @@ async def test_a_link_lost_in_a_slow_read_is_not_heard(
         monkeypatch.setattr(link_module, "_read_schedules", lose_link)
 
     await coordinator.async_refresh()
+    assert coordinator.last_update_success  # one missed poll keeps the state
+    await coordinator.async_refresh()
     assert not coordinator.last_update_success
     await advance(hass, STALL_WINDOW + 1)
 

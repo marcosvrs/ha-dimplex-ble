@@ -378,7 +378,7 @@ Each exception type carries a translation key:
 The coordinator maps failures differently for polls and for commands:
 
 - **Poll, `HeaterAuthError`**: `ConfigEntryAuthFailed`, which starts reauthentication and stops polling
-- **Poll, any other `DimplexError`**: `UpdateFailed`, so entities become unavailable until the next good poll
+- **Poll, any other `DimplexError`**: the first failure after a good poll keeps the last snapshot and logs `POLL_MISSED`; the next failure in a row raises `UpdateFailed`, so entities become unavailable until the next good poll. An isolated connect timeout (1–2 % of polls, 25 Nov 2026) no longer makes every entity flash unavailable.
 - **Command, `HeaterAuthError`**: starts reauthentication, then raises `HomeAssistantError`
 - **Command, `CharacteristicError` or `DimplexProtocolError`**: `ServiceValidationError`
 - **Command, any other `DimplexError`**: `HomeAssistantError`

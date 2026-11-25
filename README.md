@@ -137,6 +137,8 @@ The integration polls each heater once a minute: it connects, reads and disconne
 
 A change made on the heater's own buttons shows within a minute, or within 5 minutes for the settings above.
 
+A heater becomes unavailable after two failed updates in a row; a single missed update keeps the last values.
+
 ## Use cases and examples
 
 The heater runs its timer programmes on its own, so set them once from Home Assistant and keep the heater in **Auto**. Use automations for occasional changes you can afford to miss.
