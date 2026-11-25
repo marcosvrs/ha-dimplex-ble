@@ -9,7 +9,6 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.event import async_track_time_interval
@@ -28,11 +27,9 @@ from .const import (
     PLATFORMS,
     SCHEDULE_UPDATE_INTERVAL,
     SETTINGS_UPDATE_INTERVAL,
-    UNIQUE_ID_SUFFIXES,
-    UNVERIFIED_LEGACY_SUFFIXES,
 )
 from .coordinator import DimplexConfigEntry, DimplexCoordinator
-from .entity import device_info_for_coordinator, unique_id
+from .entity import device_info_for_coordinator
 from .link import HeaterLink
 from .schedule_keeper import STORAGE_VERSION, pending_issue_id
 from .services import async_setup_services
@@ -119,35 +116,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
         manufacturer=device_info["manufacturer"],
         name=device_info["name"],
     )
-    _async_remove_orphaned_entities(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
-
-def _async_remove_orphaned_entities(
-    hass: HomeAssistant, entry: DimplexConfigEntry
-) -> None:
-    """Remove this entry's registry entities that the integration no longer creates.
-
-    Earlier versions created raw GATT sensors, text controls and entities whose
-    unique_id followed a since-renamed translation key; they would otherwise
-    stay "unavailable" forever.
-    """
-    registry = er.async_get(hass)
-    address = entry.data[CONF_ADDRESS]
-    current = {
-        unique_id(address, suffix)
-        for suffix in UNIQUE_ID_SUFFIXES | UNVERIFIED_LEGACY_SUFFIXES
-    }
-    orphans = [
-        entity.entity_id
-        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
-        if entity.unique_id not in current
-    ]
-    for entity_id in orphans:
-        registry.async_remove(entity_id)
-    _LOGGER.debug("Removed %d orphaned entities of %s", len(orphans), entry.title)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:

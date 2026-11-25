@@ -30,7 +30,6 @@ Bluetooth proxies. No cloud, no Dimplex app.
 - [What you get](#what-you-get)
 - [Known heater behaviour](#known-heater-behaviour)
 - [Known limitations](#known-limitations)
-- [Upgrade notes](#upgrade-notes)
 - [Troubleshooting](#troubleshooting)
 
 ## Reliability first
@@ -275,43 +274,6 @@ problem.
   check for or install an update, use the Dimplex ConfigR app next to the
   heater (it needs a Dimplex account); Home Assistant cannot connect to the
   heater while the app is connected.
-
-## Upgrade notes
-
-Upgrading from an earlier version:
-
-- **The connection is never held any more.** Every update connects, reads and
-  disconnects once a minute (it was every 10 s over a held link); the
-  **Keep the Bluetooth connection open** option is gone. A saved value of it
-  is ignored.
-
-- **Breaking:** the timer programmes moved to the new **Auto** mode. In Auto
-  the presets are User Timer, Home All Day and Out All Day, and there is no
-  target temperature (a setpoint written in a timer programme is dropped when
-  the programme is selected again). In Heat they are Manual, Eco and Frost
-  Protect. Away is in both. Home Assistant only accepts a preset of the current
-  mode, so in automations switch the mode first: `climate.set_hvac_mode` with
-  `auto` (resumes the last schedule) or `heat` (Manual), then
-  `climate.set_preset_mode`. `climate.set_temperature` is refused in Auto.
-- **Breaking:** the Home All Day preset is now `home_all_day` (was Home
-  Assistant's `home`). Update automations and scripts that call
-  `climate.set_preset_mode` with `preset_mode: home` or check
-  `preset_mode == "home"`.
-- **Breaking:** the Error sensor's state is now text (`no_error`, `code_50`, …,
-  or `Code N`) instead of a number. Update `numeric_state` triggers on it.
-- The Operating mode sensor now uses fixed states (`user_timer`,
-  `home_all_day`, `manual`, …); unknown payloads show as unknown.
-- Raw payload attributes (`raw_bytes`, `power_loading_raw`, `trac_raw`) and the
-  switches' explanation attributes were removed. Raw payloads are in the
-  diagnostics download.
-- Entities that this version no longer creates (old raw sensors, text controls,
-  renamed duplicates) are removed from the entity registry at startup. Entity
-  IDs of current entities do not change.
-- The climate entity's name is now the heater's name (for example "Dimplex
-  Heater AM2086"); its entity ID stays the same.
-- **Away return time** is enabled for new heaters only. On an existing heater,
-  enable it on the device page to use the Away preset.
-- The room temperature now shows one decimal.
 
 ## Troubleshooting
 

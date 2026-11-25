@@ -37,8 +37,9 @@ required ESP-IDF 5.5.5 pin. All of that was removed; see "Rejected" below.
 - `esp32_ble`: `io_capability: keyboard_only`, `auth_req_mode: bond_mitm` (or
   `sc_mitm_bond`), `max_connections: 4` (3 proxy slots + 1 responder; total <= 9).
 - ESPHome >= 2026.11.0 with the default framework. No IDF pin is needed (H9).
-  `CONFIG_BT_BLE_RPA_SUPPORTED: "n"` is retained because production used it
-  successfully; do not add further BLE customization.
+  No other BLE customization: `CONFIG_BT_BLE_RPA_SUPPORTED` was dropped on
+  2026-11-25 (the heaters use public addresses, `address_type` 0, so the proxy
+  never resolves private addresses).
 
 ### Home Assistant side
 

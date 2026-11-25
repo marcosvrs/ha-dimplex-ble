@@ -1,20 +1,11 @@
-# Dimplex PIN responder (stock ESPHome 2026.11, no external component).
-# Spec: docs/investigation-2026-11-24/design-addendum.md section A.
-#
-# Include from a device file with:
-#   packages:
-#     dimplex_pin_responder: !include dimplex_pin_responder.yaml
-# (path relative to the device file; example-bluetooth-proxy.yaml keeps both
-# files in the same folder).
-# The device must set esp32_ble.max_connections: 4 (3 proxy slots + 1 responder)
-# and esp32_ble.io_capability: keyboard_only.
-#
-# The PIN lives only in RAM (globals, restore_value: no) and is never logged.
-# 1000000 means "disarmed": ble_client.passkey_reply is a no-op for values > 999999.
+# Dimplex PIN responder: answers a heater's 6-digit passkey request with the PIN
+# Home Assistant sends just before it pairs (docs/esphome-ble-findings.md).
+# The device needs esp32_ble io_capability: keyboard_only and max_connections: 4.
+# The PIN stays in RAM and is never logged; 1000000 means "disarmed".
 
 esphome:
-  # 2026.11.0 is the first release whose default ESP-IDF (5.5.6) keeps the
-  # heater bond after a failed re-encryption (ESPHome's bond-key wrap).
+  # First release whose default ESP-IDF keeps the heater bond after a failed
+  # re-encryption.
   min_version: 2026.11.0
 
 globals:
@@ -29,19 +20,10 @@ globals:
 
 ble_client:
   - id: dimplex_pin_client
-    mac_address: "00:00:00:00:00:00" # placeholder, retargeted by dimplex_pin_arm
+    mac_address: "00:00:00:00:00:00" # retargeted by dimplex_pin_arm
     auto_connect: false
-    on_connect:
-      - logger.log:
-          level: WARN
-          format: "dimplex_pin_client: unexpected on_connect (auto_connect is false)"
-    on_disconnect:
-      - logger.log:
-          level: WARN
-          format: "dimplex_pin_client: unexpected on_disconnect (auto_connect is false)"
     on_passkey_request:
-      # Tells HA the heater now shows its PIN (no PIN in the event).
-      # HA forwards esphome.* events without "allow actions" (esphome/manager.py).
+      # Tells HA the heater shows its PIN now (the event carries no PIN).
       - homeassistant.event:
           event: esphome.dimplex_passkey_request
           data:
@@ -50,6 +32,7 @@ ble_client:
           condition:
             lambda: "return id(dimplex_pin) <= 999999;"
           timeout: 25s # below the 30 s SMP response timer
+      # Answer only with a PIN armed in the last 3 minutes.
       - if:
           condition:
             lambda: "return id(dimplex_pin) <= 999999 && (millis() - id(dimplex_pin_set_ms)) < 180000;"
@@ -57,19 +40,11 @@ ble_client:
             - ble_client.passkey_reply:
                 id: dimplex_pin_client
                 passkey: !lambda "return id(dimplex_pin);"
-            - logger.log:
-                level: INFO
-                format: "dimplex_pin_client: passkey request answered for %s"
-                args: ["id(dimplex_pin_client).address_str()"]
-          else:
-            - logger.log:
-                level: WARN
-                format: "dimplex_pin_client: passkey request not answered: responder not armed"
 
 api:
   actions:
     # address: 12 hex digits, optionally separated by ':' or '-'.
-    # passkey: 0..999999, or 1000000 = "set target only, PIN follows".
+    # passkey: 0..999999, or 1000000 = "set the target only, the PIN follows".
     - action: dimplex_pin_arm
       variables:
         address: string
@@ -78,38 +53,28 @@ api:
         - lambda: |-
             uint64_t a = 0;
             int digits = 0;
-            bool ok = true;
             for (char c : address) {
               if (c == ':' || c == '-') continue;
               int v;
               if (c >= '0' && c <= '9') v = c - '0';
               else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
               else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-              else { ok = false; break; }
+              else { digits = -1; break; }
               a = (a << 4) | (uint64_t) v;
               digits++;
             }
-            if (!ok || digits != 12) {
+            if (digits != 12) {
               id(dimplex_pin) = 1000000;
-              ESP_LOGW("dimplex_pin", "arm rejected: invalid address '%s'", address.c_str());
               return;
             }
-            bool present = passkey >= 0 && passkey <= 999999;
             id(dimplex_pin_client).set_address(a);
-            id(dimplex_pin) = present ? passkey : 1000000;
+            id(dimplex_pin) = (passkey >= 0 && passkey <= 999999) ? passkey : 1000000;
             id(dimplex_pin_set_ms) = millis();
-            ESP_LOGI("dimplex_pin", "armed address=%02X:%02X:%02X:%02X:%02X:%02X pin_present=%s",
-                     (unsigned) ((a >> 40) & 0xFF), (unsigned) ((a >> 32) & 0xFF),
-                     (unsigned) ((a >> 24) & 0xFF), (unsigned) ((a >> 16) & 0xFF),
-                     (unsigned) ((a >> 8) & 0xFF), (unsigned) (a & 0xFF), present ? "yes" : "no");
 
-    # Disarms and detaches the responder. set_address(0) is safe: the stock client
-    # does the same itself (ble_client_base.cpp:216), parse_device() ignores
-    # address 0 (ble_client_base.cpp:107) and auto_connect is false.
+    # Disarm and detach (set_address(0) is what the stock client does itself).
     - action: dimplex_pin_clear
       then:
         - lambda: |-
             id(dimplex_pin) = 1000000;
             id(dimplex_pin_set_ms) = 0;
             id(dimplex_pin_client).set_address(0);
-            ESP_LOGI("dimplex_pin", "cleared");

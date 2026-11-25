@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -14,7 +13,6 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import EVENT_CALL_SERVICE, EVENT_HOMEASSISTANT_STOP
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -27,8 +25,6 @@ from custom_components.dimplex_ble.const import (
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
     DOMAIN,
-    UNIQUE_ID_SUFFIXES,
-    UNVERIFIED_LEGACY_SUFFIXES,
 )
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.diagnostics import (
@@ -101,58 +97,6 @@ async def test_setup_polls_through_the_pinned_proxy(hass, fake_bt) -> None:
         proxy.actions
     )
     assert service_calls == []
-
-
-async def test_setup_removes_only_entities_the_integration_no_longer_creates(
-    hass, fake_bt, caplog
-) -> None:
-    """Orphans of earlier versions go; current unique_ids (frozen) stay."""
-    fake_bt.add()
-    entry = make_entry(hass)
-    other = MockConfigEntry(domain=DOMAIN, unique_id="other")
-    other.add_to_hass(hass)
-    registry = er.async_get(hass)
-    mac = ADDRESS.lower()
-    kept = {
-        "switch": f"{mac}_preemptive_heating",
-        "light": f"{mac}_pre_emptive_heating",  # unverified legacy: left alone
-        "sensor": f"{mac}_operating_mode_raw",
-        "select": f"{mac}_temperature_unit",
-        "number": f"{mac}_temperature_offset",
-    }
-    for domain, unique_id in kept.items():
-        registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=entry)
-    orphans = [
-        registry.async_get_or_create(
-            platform, DOMAIN, f"{mac}_{suffix}", config_entry=entry
-        ).entity_id
-        for platform, suffix in (
-            ("sensor", "raw_readonly_3_1022"),
-            ("text", "raw_0_1002"),
-            ("sensor", "temperature_units"),
-            ("number", "minimum_temperature"),
-            ("number", "maximum_temperature"),
-        )
-    ]
-    foreign = registry.async_get_or_create(
-        "sensor", DOMAIN, f"{mac}_raw_readonly_1_0007", config_entry=other
-    ).entity_id
-    caplog.set_level(logging.DEBUG, "custom_components.dimplex_ble")
-
-    assert await setup(hass, entry)
-
-    for entity_id in orphans:
-        assert registry.async_get(entity_id) is None
-    assert registry.async_get(foreign) is not None  # another entry's entity
-    for domain, unique_id in kept.items():
-        assert registry.async_get_entity_id(domain, DOMAIN, unique_id) is not None
-    assert "Removed 5 orphaned entities" in caplog.text
-    assert {
-        entity.unique_id
-        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
-    } <= {
-        f"{mac}_{suffix}" for suffix in UNIQUE_ID_SUFFIXES | UNVERIFIED_LEGACY_SUFFIXES
-    }
 
 
 async def test_unavailable_heater_retries_setup_without_connecting(

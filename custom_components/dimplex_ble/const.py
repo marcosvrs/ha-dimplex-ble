@@ -39,10 +39,8 @@ PLATFORMS = (
     Platform.SWITCH,
 )
 
-# Entity unique_id = "<mac>_<suffix>". The suffixes are frozen to the values
-# installed entities already use (they once came from the translation keys),
-# so renaming a translation key never orphans an entity again. Registry
-# entries of an entry whose unique_id is not built from these are removed.
+# Entity unique_id = "<mac>_<suffix>". The suffixes are fixed, independent of
+# the translation keys, so renaming a key never changes an entity's identity.
 UNIQUE_ID_SUFFIXES = frozenset(
     {
         "heater",
@@ -66,7 +64,3 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "schedule_out_all_day",
     }
 )
-# Never created, never removed: no commit ever used this unique_id suffix, but
-# a live entity_id ends in "pre_emptive_heating" and the live entity registry
-# was not inspected, so cleanup leaves such an entry alone.
-UNVERIFIED_LEGACY_SUFFIXES = frozenset({"pre_emptive_heating"})
