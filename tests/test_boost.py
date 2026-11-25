@@ -380,3 +380,22 @@ async def test_written_state_reaches_entities_before_the_poll(hass, fake_bt) -> 
     await coordinator.async_start_boost(30, 22)
 
     assert updates
+
+
+async def test_a_refused_away_request_keeps_boost_running(hass, fake_bt) -> None:
+    """Architecture review round 5: validate the return time before ending Boost."""
+    proxy = heater(fake_bt.add(), FROST)
+    proxy.services.add(AWAY_MODE)
+    proxy.values[AWAY_MODE] = bytes(8)
+    coordinator = await setup(hass, make_entry(hass))
+    await coordinator.async_start_boost(30, 22)
+    proxy.events.clear()
+
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_away_mode(
+            True, until=dt_util.now() - timedelta(hours=1)
+        )
+
+    assert err.value.translation_key == "invalid_away_until"
+    assert [e for e in proxy.events if e[0] == "write"] == []
+    assert coordinator.data.boost_minutes_left == 30

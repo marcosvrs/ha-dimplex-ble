@@ -510,14 +510,6 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         then: tuple[GattAddress, bytes] | None = None,
     ) -> None:
         """Write the Away record; the caller holds the Away lock."""
-        if (
-            active
-            and isinstance(self.data, HeaterSnapshot)
-            and self.data.boost_minutes_left
-        ):
-            # Boost during Away was never tested: end Boost first, as the
-            # climate's Away preset does (also when Away comes from the entity).
-            await self._async_end_boost()
         now = dt_util.now().replace(tzinfo=None)
         data = self.data
         if until is not None and until.tzinfo is not None:
@@ -540,6 +532,14 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 if data is not None and data.away_until is not None
                 else now
             )
+        if (
+            active
+            and isinstance(self.data, HeaterSnapshot)
+            and self.data.boost_minutes_left
+        ):
+            # Boost during Away was never tested: end Boost first (only once
+            # the Away request is known to be valid, so a refused one keeps it).
+            await self._async_end_boost()
         target_temperature = (
             data.away_target_temperature_c
             if data is not None and data.away_target_temperature_c is not None
