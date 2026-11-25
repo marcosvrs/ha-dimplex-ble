@@ -303,14 +303,21 @@ class HeaterLink:
         schedules: dict[int, WeekSchedule] = {}
         async with self._operation("snapshot") as client:
             snapshot = await _read_snapshot(client)
+            # A slow read may fail on its own; a link that ended with it is
+            # not "heard" (re-raised: the operation reports the link loss and
+            # the poll fails, so the stall window is not cleared).
             try:
                 for address in settings:
                     values[address] = await _read_optional(client, address)
             except _GATT_ERRORS as err:
+                if not client.is_connected:
+                    raise
                 self._log_read_failure("settings", err)
             try:
                 schedules = await _read_schedules(client, programmes)
             except _GATT_ERRORS as err:
+                if not client.is_connected:
+                    raise
                 schedules = {}
                 self._log_read_failure("schedules", err)
         _LOGGER.debug(

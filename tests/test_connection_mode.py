@@ -734,3 +734,50 @@ async def test_a_read_failure_on_a_heater_still_heard_raises_nothing(
     await advance(hass, STALL_WINDOW + 1)
 
     assert issue(hass, entry) is None
+
+
+@pytest.mark.parametrize("failing", ["settings", "schedules"])
+async def test_a_link_lost_in_a_slow_read_is_not_heard(
+    hass, fake_bt, monkeypatch, failing
+) -> None:
+    """Codex review: the earlier snapshot must not clear the stall window."""
+    from conftest import gatt_failure
+
+    from custom_components.dimplex_ble import link as link_module
+
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    coordinator.async_settings_due()
+    coordinator.async_schedules_due()
+
+    async def lose_link(*args, **kwargs):
+        proxy.clients[-1].is_connected = False  # supervision timeout
+        proxy.sees_heater = False
+        raise gatt_failure(133)
+
+    if failing == "settings":
+        monkeypatch.setattr(link_module, "_read_optional", _settings_breaker(lose_link))
+    else:
+        monkeypatch.setattr(link_module, "_read_schedules", lose_link)
+
+    await coordinator.async_refresh()
+    assert not coordinator.last_update_success
+    await advance(hass, STALL_WINDOW + 1)
+
+    assert issue(hass, entry) is not None
+
+
+def _settings_breaker(lose_link):
+    """Fail the first slow-setting read (Sound), not the snapshot reads."""
+    from custom_components.dimplex_ble import link as link_module
+    from custom_components.dimplex_ble.protocol import SOUND
+
+    real = link_module._read_optional
+
+    async def read(client, address):
+        if address == SOUND:
+            return await lose_link()
+        return await real(client, address)
+
+    return read
