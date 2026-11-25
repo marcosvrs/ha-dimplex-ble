@@ -10,6 +10,12 @@ esp32_ble:
   io_capability: keyboard_only # the heater shows the PIN; the proxy types it
   max_connections: 4 # 3 proxy slots + this ble_client
 
+# Firmware uploads must use the API key: a plaintext upload could replace the
+# firmware and capture the PINs. ota_esphome is the stock proxy's OTA.
+ota:
+  - id: !extend ota_esphome
+    encryption: {}
+
 globals:
   - id: dimplex_pin
     type: int
