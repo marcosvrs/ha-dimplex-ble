@@ -109,7 +109,7 @@ class StallMonitor:
         carried = store.get(self.issue_id)
         start = monotonic()
         if carried is not None:
-            heard = self._last_heard()
+            heard = self._last_heard(carried[1])
             if heard is not None and heard > carried[0]:
                 self._clear_repair()
             if carried[1] is scanner:
@@ -117,16 +117,20 @@ class StallMonitor:
         store[self.issue_id] = (start, scanner)
         return start
 
-    def _last_heard(self) -> float | None:
+    def _last_heard(self, measured_on: BaseHaScanner | None) -> float | None:
         """Return the newest sighting of the heater on any scanner.
 
         ``async_last_service_info`` keeps the best-signal scanner's record,
-        which can be older than a weaker scanner's sighting (Codex review).
+        which can be older than a weaker scanner's sighting; the scanner the
+        silence was measured on counts too, even after its proxy reconnected
+        (Codex review).
         """
+        scanners = [*bluetooth.async_current_scanners(self._hass), measured_on]
         times = [
             seen
-            for scanner in bluetooth.async_current_scanners(self._hass)
-            if (seen := scanner.discovered_device_timestamps.get(self._address))
+            for scanner in scanners
+            if scanner is not None
+            and (seen := scanner.discovered_device_timestamps.get(self._address))
             is not None
         ]
         return max(times, default=None)

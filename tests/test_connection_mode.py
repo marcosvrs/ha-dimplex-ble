@@ -979,3 +979,30 @@ async def test_a_sighting_after_a_proxy_reconnect_clears_a_shown_repair(
     await advance(hass, 1400)
 
     assert issue(hass, entry) is None
+
+
+async def test_a_sighting_before_a_proxy_reconnect_still_counts(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Codex review round 5: heard on the old scanner, then the proxy reconnects."""
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    clock.now += STALL_WINDOW + 1
+    await advance(hass, 700)
+    assert issue(hass, entry) is not None
+
+    clock.now += 1
+    fake_bt.advertise(PROXY)  # heard on the old scanner
+    proxy.sees_heater = False
+    proxy.reconnect_api()  # then the proxy reconnects
+    clock.now += 5
+    await advance(hass, 1400)
+
+    assert issue(hass, entry) is None
