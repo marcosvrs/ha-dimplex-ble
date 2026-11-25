@@ -167,6 +167,7 @@ Each heater becomes one device with:
 | Away temperature | What Away holds, 7–18 °C (default 7 °C). Can be changed only while Away is on: the heater starts Away whenever this value is written. During Away the climate's target shows and sets this temperature. |
 | Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
 | Setback | In Auto, holds the Setback temperature during Heating Off periods instead of letting the room cool. |
+| Boost temperature | What the Boost preset heats to, within the heater's setpoint range (whole degrees). A running Boost keeps its target; the next Boost uses the new value. |
 | Setback temperature | What Setback holds, 7–18 °C (whole degrees). Can be changed whether Setback is on or off. |
 | Sound | Button sounds on the heater. |
 | Adaptive start | Dimplex "Adaptive Start": heats early so a timer period starts at its target. Only affects User Timer and Home All Day. Learns continuously, plans at most 2 hours ahead; turn it on or off for all heaters in a room together. |

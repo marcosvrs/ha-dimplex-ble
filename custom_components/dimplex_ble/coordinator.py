@@ -37,6 +37,7 @@ from .protocol import (
     AWAY_TEMPERATURE_MAX_C,
     AWAY_TEMPERATURE_MIN_C,
     BOOST_REMAINING,
+    BOOST_TEMPERATURE,
     GDID,
     HEATING_MODE,
     PRESET_AWAY,
@@ -59,6 +60,7 @@ from .protocol import (
     SchedulePeriod,
     encode_away_mode,
     encode_boost_minutes,
+    encode_boost_temperature,
     encode_schedule_day,
     encode_setback,
     encode_setpoint,
@@ -514,6 +516,14 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 },
             ) from err
         await self.async_write_setting(ROOM_TEMPERATURE_OFFSET, payload)
+
+    async def async_set_boost_temperature(self, temperature_c: float) -> None:
+        """Set the Boost temperature within the heater's setpoint range.
+
+        A Boost already running keeps its target; the next Boost uses this.
+        """
+        value = self.check_setpoint(temperature_c)
+        await self.async_write(BOOST_TEMPERATURE, encode_boost_temperature(value))
 
     async def async_set_away_temperature(self, temperature_c: float) -> None:
         """Change the Away target, keeping Away's state and return time."""

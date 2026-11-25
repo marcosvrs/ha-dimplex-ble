@@ -14,6 +14,7 @@ from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE,
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.number import (
     DimplexAwayTemperatureNumber,
+    DimplexBoostTemperatureNumber,
     DimplexSetbackTemperatureNumber,
     DimplexTemperatureOffsetNumber,
     async_setup_entry,
@@ -68,11 +69,13 @@ async def test_setup_adds_the_temperature_settings(hass) -> None:
 
     assert [entity.unique_id.split("_", 1)[1] for entity in entities] == [
         "away_temperature",
+        "boost_temperature",
         "setback_temperature",
         "temperature_offset",
     ]
     assert all(e.entity_category is EntityCategory.CONFIG for e in entities)
     assert [e.entity_registry_enabled_default for e in entities] == [
+        True,
         True,
         True,
         False,
@@ -81,9 +84,10 @@ async def test_setup_adds_the_temperature_settings(hass) -> None:
         e.native_unit_of_measurement == UnitOfTemperature.CELSIUS for e in entities
     )
     # The offset is a difference: never converted like an absolute temperature.
-    away, setback, offset = entities
+    away, boost, setback, offset = entities
     assert offset.device_class is None
-    assert away.device_class == setback.device_class == "temperature"
+    assert away.device_class == boost.device_class == setback.device_class
+    assert away.device_class == "temperature"
     assert (away.native_min_value, away.native_max_value) == (7, 18)
     assert (setback.native_min_value, setback.native_max_value) == (7, 18)
     assert (offset.native_min_value, offset.native_max_value) == (-3.0, 3.0)
@@ -251,3 +255,27 @@ async def test_setback_temperature_reads_and_writes_the_setback_record(hass) -> 
 
     client.async_write_raw.assert_awaited_once_with(0, 0x1016, b"\x00\x0c")
     assert entity.native_value == 12.0
+
+
+async def test_boost_temperature_follows_the_heater_and_its_range(hass) -> None:
+    """AM2086 2026-11-25: display 21 degC read 15 00; a written 17 00 showed 23."""
+    coordinator, client = make_coordinator(
+        hass, snapshot(minimum=7, maximum=30, boost_temperature_c=21)
+    )
+    entity = DimplexBoostTemperatureNumber(coordinator)
+    assert entity.native_value == 21.0
+    assert (entity.native_min_value, entity.native_max_value) == (7.0, 30.0)
+
+    await entity.async_set_native_value(23.0)
+
+    client.async_write_raw.assert_awaited_once_with(0, 0x1028, b"\x17\x00")
+    for bad in (6.0, 31.0, 22.5):
+        with pytest.raises(ServiceValidationError):
+            await entity.async_set_native_value(bad)
+
+
+def test_boost_temperature_without_heater_values(hass) -> None:
+    coordinator, _ = make_coordinator(hass, None)
+    entity = DimplexBoostTemperatureNumber(coordinator)
+    assert entity.native_value is None and not entity.available
+    assert (entity.native_min_value, entity.native_max_value) == (7.0, 35.0)

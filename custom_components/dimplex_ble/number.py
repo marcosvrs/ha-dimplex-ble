@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homeassistant.components.climate import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP
 from homeassistant.components.number import (
     NumberDeviceClass,
     NumberEntity,
@@ -39,6 +40,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             DimplexAwayTemperatureNumber(coordinator),
+            DimplexBoostTemperatureNumber(coordinator),
             DimplexSetbackTemperatureNumber(coordinator),
             DimplexTemperatureOffsetNumber(coordinator),
         ]
@@ -79,6 +81,39 @@ class DimplexAwayTemperatureNumber(_DimplexTemperatureNumber):
     async def async_set_native_value(self, value: float) -> None:
         """Write the Away target."""
         await self.coordinator.async_set_away_temperature(value)
+
+
+class DimplexBoostTemperatureNumber(_DimplexTemperatureNumber):
+    """The temperature the Boost preset heats to (the heater's own setting)."""
+
+    _attr_translation_key = "boost_temperature"
+    _unique_suffix = "boost_temperature"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the Boost temperature reported by the heater."""
+        data = self.coordinator.data
+        if data is None or data.boost_temperature_c is None:
+            return None
+        return float(data.boost_temperature_c)
+
+    @property
+    def native_min_value(self) -> float:
+        """The heater's lowest setpoint (ConfigR clamps Boost to the range)."""
+        data = self.coordinator.data
+        low = data.minimum_temperature_c if data is not None else None
+        return float(low) if low is not None else DEFAULT_MIN_TEMP
+
+    @property
+    def native_max_value(self) -> float:
+        """The heater's highest setpoint."""
+        data = self.coordinator.data
+        high = data.maximum_temperature_c if data is not None else None
+        return float(high) if high is not None else DEFAULT_MAX_TEMP
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write the Boost temperature."""
+        await self.coordinator.async_set_boost_temperature(value)
 
 
 class DimplexSetbackTemperatureNumber(_DimplexTemperatureNumber):

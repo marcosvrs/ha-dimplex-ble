@@ -569,6 +569,15 @@ def _parse_whole_degrees(value: bytes | None) -> int | None:
     return value[0]
 
 
+def encode_boost_temperature(temperature_c: int) -> bytes:
+    """Encode the Boost temperature as ``[degC, 0]`` (ConfigR RunbackSetpoint).
+
+    Verified on AM2086 2026-11-25: display 21 degC read ``15 00``; a written
+    ``17 00`` showed 23 degC and read back (restored).
+    """
+    return bytes((temperature_c, 0))
+
+
 def encode_boost_minutes(minutes: int) -> bytes:
     """Encode a Boost length (0 ends Boost); the heater ignores more than 240."""
     if isinstance(minutes, bool) or not 0 <= minutes <= BOOST_MAX_MINUTES:

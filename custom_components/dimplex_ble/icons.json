@@ -44,6 +44,9 @@
       },
       "setback_temperature": {
         "default": "mdi:thermometer-low"
+      },
+      "boost_temperature": {
+        "default": "mdi:thermometer-chevron-up"
       }
     },
     "select": {

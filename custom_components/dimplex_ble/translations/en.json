@@ -201,6 +201,9 @@
       },
       "setback_temperature": {
         "name": "Setback temperature"
+      },
+      "boost_temperature": {
+        "name": "Boost temperature"
       }
     },
     "switch": {

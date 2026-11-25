@@ -60,6 +60,7 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "advance",
         "setback",
         "away_temperature",
+        "boost_temperature",
         "setback_temperature",
         "temperature_offset",
         "schedule_user_timer",
