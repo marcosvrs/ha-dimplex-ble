@@ -30,7 +30,9 @@ async def async_setup_entry(
 ) -> None:
     """Offer firmware updates; they need the Dimplex sign-in (heater settings)."""
     await account(hass).async_signed_in()  # load the stored sign-in
-    async_add_entities([DimplexFirmwareUpdate(entry.runtime_data)])
+    async_add_entities(
+        [DimplexFirmwareUpdate(entry.runtime_data)], update_before_add=True
+    )
 
 
 class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
@@ -82,8 +84,7 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
 
     async def _latest(self) -> cloud.Firmware:
         label = self._label
-        if label is None:
-            raise cloud.CloudError("The heater id was not read yet")
+        assert label is not None  # only called while available, which needs it
         shared = account(self.hass)
         token = await shared.async_access_token()
         return await cloud.async_latest_firmware(shared.session, token, label)
@@ -99,12 +100,6 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
             )
         try:
             firmware = await self._latest()
-            if version is not None and version != firmware.version:
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="firmware_version_gone",
-                    translation_placeholders={"version": version},
-                )
             release = await cloud.async_download(account(self.hass).session, firmware)
             image = ota.load_release(release, data.product_code)
         except (cloud.CloudError, ValueError) as err:

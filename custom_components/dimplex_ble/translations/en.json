@@ -386,9 +386,6 @@
     "firmware_unknown_heater": {
       "message": "The heater has not reported its model yet. Try again after the next update."
     },
-    "firmware_version_gone": {
-      "message": "Version {version} is no longer offered by Dimplex."
-    },
     "firmware_download_failed": {
       "message": "Couldn't get the firmware: {error}"
     },
