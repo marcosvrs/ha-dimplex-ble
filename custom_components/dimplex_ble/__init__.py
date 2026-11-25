@@ -50,29 +50,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-# aioesphomeapi logs every executed action with its arguments at DEBUG, which
-# includes the PIN sent to the responder; the integration cannot redact it.
-_ESPHOME_CONNECTION_LOGGER = "aioesphomeapi.connection"
-
-
-def _warn_if_pin_may_be_logged(hass: HomeAssistant) -> None:
-    """Warn once per run when library debug logging could record the PIN."""
-    flags: dict[str, object] = hass.data.setdefault(DOMAIN, {})
-    if flags.get("pin_log_warned"):
-        return
-    if logging.getLogger(_ESPHOME_CONNECTION_LOGGER).isEnabledFor(logging.DEBUG):
-        flags["pin_log_warned"] = True
-        _LOGGER.warning(
-            "Debug logging is enabled for %s: the heater PIN sent to the proxy "
-            "may appear in the Home Assistant log. Set it back to info "
-            "(see the README, Privacy and logging)",
-            _ESPHOME_CONNECTION_LOGGER,
-        )
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> bool:
     """Set up one panel heater on its pinned proxy."""
-    _warn_if_pin_may_be_logged(hass)
     link = HeaterLink(
         hass,
         entry.data[CONF_ADDRESS],

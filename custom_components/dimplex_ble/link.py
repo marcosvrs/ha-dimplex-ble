@@ -357,6 +357,16 @@ class HeaterLink:
         """Write one characteristic; the next refresh is the readback."""
         await self.async_write_many(((address, payload),))
 
+    async def async_read_then_write(
+        self, address: GattAddress, build: Callable[[bytes | None], bytes]
+    ) -> bytes:
+        """Read a record and write ``build(current)`` in one operation."""
+        validate_raw_access(*address, write=True)
+        async with self._operation(f"update {address[0]}/0x{address[1]:04x}") as client:
+            payload = build(await _read_optional(client, address))
+            await _write(client, address, payload)
+        return payload
+
     async def async_write_many(
         self, writes: tuple[tuple[GattAddress, bytes], ...]
     ) -> None:

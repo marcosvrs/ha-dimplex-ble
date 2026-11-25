@@ -33,12 +33,18 @@ def _link(client):
     async def async_read(address):
         return await client.async_read_raw(*address)
 
+    async def async_read_then_write(address, build):
+        payload = build(await client.async_read_raw(*address))
+        await client.async_write_raw(*address, payload)
+        return payload
+
     return SimpleNamespace(
         address=ADDRESS,
         source=PROXY,
         keep_connected=True,
         async_write=async_write,
         async_read=async_read,
+        async_read_then_write=async_read_then_write,
     )
 
 
@@ -306,34 +312,35 @@ def test_setback_switch_requires_a_verified_value(hass) -> None:
     assert entity.is_on is True
 
 
-async def test_setback_switch_keeps_the_temperature_and_reads_back(hass) -> None:
+async def test_setback_switch_keeps_the_temperature_set_on_the_heater(hass) -> None:
+    """The heater's menu changed the temperature (8 -> 10) since the last poll."""
     client = SimpleNamespace(
         address=ADDRESS,
         async_write_raw=AsyncMock(),
-        async_read_raw=AsyncMock(side_effect=[b"\x01\x08", b"\x00\x08"]),
+        async_read_raw=AsyncMock(side_effect=[b"\x00\x0a", b"\x01\x0a"]),
     )
     coordinator = make_coordinator(hass, preemptive=False, client=client)
     coordinator.settings[SETBACK] = b"\x00\x08"
     entity = DimplexSetbackSwitch(coordinator)
 
     await entity.async_turn_on()
-    assert coordinator.settings[SETBACK] == b"\x01\x08"
+    assert coordinator.settings[SETBACK] == b"\x01\x0a"
     await entity.async_turn_off()
 
     assert [call.args for call in client.async_write_raw.await_args_list] == [
-        (0, 0x1016, b"\x01\x08"),
-        (0, 0x1016, b"\x00\x08"),
-    ]
-    assert [call.args for call in client.async_read_raw.await_args_list] == [
-        (0, 0x1016),
-        (0, 0x1016),
+        (0, 0x1016, b"\x01\x0a"),
+        (0, 0x1016, b"\x00\x0a"),
     ]
     assert entity.is_on is False
     coordinator.async_request_refresh.assert_not_awaited()
 
 
-async def test_setback_switch_refuses_without_a_known_value(hass) -> None:
-    client = SimpleNamespace(address=ADDRESS, async_write_raw=AsyncMock())
+async def test_setback_switch_refuses_without_a_readable_record(hass) -> None:
+    client = SimpleNamespace(
+        address=ADDRESS,
+        async_write_raw=AsyncMock(),
+        async_read_raw=AsyncMock(return_value=None),
+    )
     coordinator = make_coordinator(hass, preemptive=False, client=client)
 
     with pytest.raises(ServiceValidationError) as err:
@@ -350,11 +357,10 @@ async def test_setting_readback_failure_keeps_the_written_value(hass) -> None:
         async_read_raw=AsyncMock(side_effect=DimplexError("offline")),
     )
     coordinator = make_coordinator(hass, preemptive=False, client=client)
-    coordinator.settings[SETBACK] = b"\x00\x08"
 
-    await DimplexSetbackSwitch(coordinator).async_turn_on()
+    await DimplexSoundSwitch(coordinator).async_turn_on()
 
-    assert coordinator.settings[SETBACK] == b"\x01\x08"
+    assert coordinator.sound_value == b"\x01\x00\x00"
 
 
 async def test_per_poll_setting_write_is_read_back_by_the_next_poll(hass) -> None:
@@ -362,12 +368,11 @@ async def test_per_poll_setting_write_is_read_back_by_the_next_poll(hass) -> Non
     coordinator = make_coordinator(hass, preemptive=False, client=client)
     coordinator.link.keep_connected = False
     coordinator._settings_due = False
-    coordinator.settings[SETBACK] = b"\x00\x08"
 
-    await DimplexSetbackSwitch(coordinator).async_turn_on()
+    await DimplexSoundSwitch(coordinator).async_turn_on()
 
     assert coordinator._settings_due is True
-    assert coordinator.settings[SETBACK] == b"\x01\x08"
+    assert coordinator.sound_value == b"\x01\x00\x00"
 
 
 def _advance_coordinator(hass, client, *, mode_hex, away=False, advance=False):

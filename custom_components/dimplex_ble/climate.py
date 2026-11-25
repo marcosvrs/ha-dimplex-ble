@@ -179,8 +179,17 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def native_target_temperature(self) -> float | None:
-        """Return the target read back from the panel heater (none in Auto)."""
+        """Return the target read back from the panel heater (none in Auto).
+
+        In Away the heater holds the Away temperature, not the setpoint.
+        """
         data = self.coordinator.data
+        if (
+            data is not None
+            and data.away_active
+            and data.away_target_temperature_c is not None
+        ):
+            return float(data.away_target_temperature_c)
         if data is None or data.setpoint_c is None:
             return None
         if self.hvac_mode == HVACMode.AUTO and not self._boosting:
@@ -305,6 +314,10 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         requested = kwargs.get(ATTR_TEMPERATURE)
         if isinstance(requested, bool) or not isinstance(requested, (int, float)):
             raise self._invalid_setpoint()
+        if self.preset_mode == PRESET_AWAY:
+            # The target shown in Away is the Away temperature (7-18 degC).
+            await self.coordinator.async_set_away_temperature(float(requested))
+            return
         temperature_c = float(requested)
         data = self.coordinator.data
         if (

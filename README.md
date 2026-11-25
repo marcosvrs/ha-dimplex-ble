@@ -110,13 +110,9 @@ itself, even if that one is closer; moving it means pairing again with the PIN.
 
 ## Privacy and logging
 
-- Keep the `aioesphomeapi.connection` logger at `info` (the default). At `debug`
-  the ESPHome API library logs every action it sends with its arguments, which
-  includes the PIN sent to the proxy's PIN responder. This integration cannot
-  redact that library's log lines.
-- When that logger is at `debug`, Home Assistant logs a one-time warning at
-  startup that the PIN may appear in the log (the warning itself contains no
-  PIN).
+- At `debug`, the `aioesphomeapi.connection` logger records every action sent
+  to a proxy with its arguments. The integration blanks the arguments of its
+  PIN action there (`**REDACTED**`), so the PIN never reaches the log.
 - Debug logging for `custom_components.dimplex_ble` is safe to enable: it names
   the heater and the proxy, never the PIN.
 
@@ -129,7 +125,7 @@ Each heater becomes one device with:
 | Climate (named after the heater) | Room temperature (0.1 °C), heating/idle action and two modes. **Heat**: heats to a target you set (whole degrees); presets **Manual**, **Eco**, **Frost Protect**, **Boost**, **Away**. **Auto**: follows the heater's schedule, which sets the temperature; presets **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**. **Boost** heats at the heater's Boost temperature for the Boost length, then the heater returns to the mode it left; the target can be changed while it runs. No Off. |
 | User Timer schedule (calendar) | Heating periods of the User Timer programme, as stored on the heater (Home All Day and Out All Day calendars exist but are disabled by default). Read after setup and every 6 hours, and right after a change with **Set schedule**. |
 | Away return time | When Away ends. Setting it starts Away. Selecting the Away preset needs a future return time here first. |
-| Away temperature | What Away holds, 7–18 °C (default 7 °C). Changing it keeps Away on or off. |
+| Away temperature | What Away holds, 7–18 °C (default 7 °C). Changing it keeps Away on or off. During Away the climate's target shows and sets this temperature. |
 | Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
 | Setback | In Auto, holds the heater's Setback temperature during Heating Off periods instead of letting the room cool. The Setback temperature itself is set on the heater. |
 | Sound | Button sounds on the heater. |

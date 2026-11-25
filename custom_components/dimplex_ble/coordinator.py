@@ -222,6 +222,10 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                     )
                 )
             )
+            # Before the lock is released, so an Away write right after sees
+            # the running Boost and ends it first.
+            if isinstance(self.data, HeaterSnapshot):
+                self.data = dataclasses.replace(self.data, boost_minutes_left=minutes)
         await self.async_refresh()
 
     async def async_cancel_boost(self) -> None:
@@ -398,14 +402,25 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         await self.async_write_setting(SOUND, encode_sound(enabled))
 
     async def async_set_setback(self, enabled: bool) -> None:
-        """Switch Setback, keeping the heater's Setback temperature."""
-        try:
-            payload = encode_setback(enabled, self.settings.get(SETBACK))
-        except DimplexProtocolError as err:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN, translation_key="setting_unavailable"
-            ) from err
-        await self.async_write_setting(SETBACK, payload)
+        """Switch Setback, keeping the heater's Setback temperature.
+
+        The record is read and written in one link operation, so a temperature
+        changed on the heater's menu since the last poll is kept.
+        """
+
+        def build(current: bytes | None) -> bytes:
+            try:
+                return encode_setback(enabled, current)
+            except DimplexProtocolError as err:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="setting_unavailable"
+                ) from err
+
+        payload = await self._async_command(
+            self.link.async_read_then_write(SETBACK, build)
+        )
+        self.settings[SETBACK] = payload
+        self.async_update_listeners()
 
     async def async_set_temperature_offset(self, offset_c: float) -> None:
         """Write the room-temperature offset in 0.1 degC steps."""

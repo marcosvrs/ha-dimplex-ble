@@ -260,7 +260,8 @@ class FakeProxy:
         self.runtime = SimpleNamespace(
             client=self.api,
             services={
-                key: SimpleNamespace(name=name) for key, name in enumerate(names)
+                key: SimpleNamespace(name=name, key=key)
+                for key, name in enumerate(names)
             },
             available=True,
             device_info=SimpleNamespace(bluetooth_mac_address=source, mac_address="x"),

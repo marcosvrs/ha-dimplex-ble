@@ -556,3 +556,51 @@ async def test_a_repair_raised_before_a_reload_is_cleared_when_heard(
     entry.runtime_data.stall.async_heard()
 
     assert issue(hass, entry) is None
+
+
+# --- Review round 3 ------------------------------------------------------------
+
+
+async def test_the_pin_never_reaches_the_esphome_debug_log(
+    hass, fake_bt, caplog
+) -> None:
+    fake_bt.add()
+    await setup(hass, make_entry(hass))  # arms the responder with the PIN
+    logger = logging.getLogger("aioesphomeapi.connection")
+    caplog.set_level(logging.DEBUG, "aioesphomeapi.connection")
+
+    logger.debug(
+        "%s: Sending %s: %s",
+        "proxy",
+        "ExecuteServiceRequest",
+        {"key": 0, "args": [{"string": ADDRESS}, {"int": int(PIN)}]},
+    )
+    logger.debug(
+        "%s: Sending %s: %s",
+        "proxy",
+        "ExecuteServiceRequest",
+        {"key": 7, "args": [{"int": 42}]},
+    )
+
+    assert PIN not in caplog.text
+    assert "**REDACTED**" in caplog.text
+    assert "42" in caplog.text  # other actions are logged unchanged
+
+
+async def test_setback_keeps_the_heater_temperature_in_one_operation(
+    hass, fake_bt
+) -> None:
+    from custom_components.dimplex_ble.protocol import SETBACK
+
+    proxy = fake_bt.add()
+    proxy.services.add(SETBACK)
+    proxy.values[SETBACK] = b"\x00\x0a"  # 10 degC, set on the heater's menu
+    coordinator = await setup(hass, make_entry(hass))
+    coordinator.settings[SETBACK] = b"\x00\x08"  # cached before the change
+    proxy.events.clear()
+
+    await coordinator.async_set_setback(True)
+
+    assert [e[2] for e in proxy.events if e[0] == "write"][-1] == b"\x01\x0a"
+    assert kinds(proxy.events).count("connect") == 0  # over the held link
+    assert coordinator.settings[SETBACK] == b"\x01\x0a"

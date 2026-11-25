@@ -347,3 +347,28 @@ async def test_entering_away_without_boost_writes_only_away(hass, fake_bt) -> No
     )
 
     assert "1027" not in [e[1][4:8] for e in proxy.events if e[0] == "write"]
+
+
+async def test_boost_is_recorded_before_the_away_lock_is_released(
+    hass, fake_bt
+) -> None:
+    heater(fake_bt.add(), FROST)
+    coordinator = await setup(hass, make_entry(hass))
+    coordinator.async_refresh = AsyncMock()  # the poll after Boost is slow
+
+    await coordinator.async_start_boost(30, 22)
+
+    assert coordinator.data.boost_minutes_left == 30
+
+
+async def test_in_away_the_target_is_the_away_temperature(hass) -> None:
+    coordinator, entity = climate(
+        hass, mode_hex="010500000000", away_active=True, away_target_temperature_c=10
+    )
+    coordinator.async_set_away_temperature = AsyncMock()
+
+    assert entity.native_target_temperature == 10
+    await entity.async_set_temperature(temperature=12)
+
+    coordinator.async_set_away_temperature.assert_awaited_once_with(12.0)
+    coordinator.async_write.assert_not_awaited()

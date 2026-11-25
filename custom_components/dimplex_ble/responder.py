@@ -26,6 +26,29 @@ CLEAR_ACTION = "dimplex_pin_clear"
 TARGET_ONLY = 1_000_000
 
 _LOGGER = logging.getLogger(__name__)
+# Keys of the proxies' PIN actions: aioesphomeapi logs every action it sends,
+# with its arguments, at DEBUG ("%s: Sending %s: %s"), which would include the PIN.
+_ARM_KEYS: set[int] = set()
+_REDACTED = "**REDACTED**"
+
+
+class _RedactPinFilter(logging.Filter):
+    """Blank the arguments of our PIN action in aioesphomeapi's debug log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (
+            isinstance(args, tuple)
+            and len(args) == 3
+            and args[1] == "ExecuteServiceRequest"
+            and isinstance(args[2], dict)
+            and args[2].get("key") in _ARM_KEYS
+        ):
+            record.args = (args[0], args[1], {**args[2], "args": _REDACTED})
+        return True
+
+
+logging.getLogger("aioesphomeapi.connection").addFilter(_RedactPinFilter())
 
 
 class _ProxyRuntime(Protocol):
@@ -113,6 +136,8 @@ async def _execute(
     action = _action(runtime, name)
     if runtime is None or action is None:
         raise ResponderMissingError(f"Proxy {source} has no {name} action")
+    if name == ARM_ACTION:
+        _ARM_KEYS.add(action.key)
     try:
         await runtime.client.execute_service(action, data)
     except APIConnectionError as err:
