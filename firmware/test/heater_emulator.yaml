@@ -1,0 +1,414 @@
+# Dimplex panel-heater emulator for rehearsing the firmware update through HA.
+# TEST ONLY (USB test ESP32): never flash to a proxy. Serves the GATT layout HA
+# polls with AM2086's captured values, pairs with a static passkey, and plays
+# the ESP32 OTA channel (docs/ota-research.md): checks every frame and the
+# CRC-16/AUG-CCITT of the image. Each install attempt plays the next case:
+#   0: refuses row 50   1: stops answering at row 50
+#   2: reboots at row 50 (link drop)   3+: succeeds, then reports UI 5.0
+# The attempt counter and the reported version survive reboots.
+
+esphome:
+  name: dimplex-heater-emulator
+  min_version: 2026.11.0
+  includes:
+    - emulator_includes.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          esp_ble_gatt_set_local_mtu(517);
+          id(ui_reply) = {1, (uint8_t) id(ui_major), (uint8_t) id(ui_minor)};
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+esp32_ble:
+  name: "AM9086<Dimplex>"
+  io_capability: display_only
+  auth_req_mode: sc_mitm_bond
+
+globals:
+  - {id: ota_enabled, type: bool, restore_value: no, initial_value: "false"}
+  - {id: ota_active, type: bool, restore_value: no, initial_value: "false"}
+  - {id: ota_verified, type: bool, restore_value: no, initial_value: "false"}
+  - {id: ota_size, type: uint32_t, restore_value: no, initial_value: "0"}
+  - {id: ota_received, type: uint32_t, restore_value: no, initial_value: "0"}
+  - {id: ota_rows, type: uint32_t, restore_value: no, initial_value: "0"}
+  - {id: ota_crc, type: uint16_t, restore_value: no, initial_value: "0x1D0F"}
+  - {id: attempt, type: int, restore_value: yes, initial_value: "0"}
+  - {id: ui_major, type: int, restore_value: yes, initial_value: "1"}
+  - {id: ui_minor, type: int, restore_value: yes, initial_value: "7"}
+  - {id: reply, type: "std::vector<uint8_t>", restore_value: no}
+  - {id: reply_due, type: bool, restore_value: no, initial_value: "false"}
+  - {id: ui_reply, type: "std::vector<uint8_t>", restore_value: no}
+
+esp32_ble_server:
+  id: heater
+  passkey: !secret emulator_passkey
+  services:
+    - uuid: 00000000-0000-1000-8000-00805f9b34fb
+      characteristics:
+        - id: c0_0006
+          uuid: 00000006-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x14, 0x1a, 0x0b, 0x10, 0x07, 0x39, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_0006
+                  value: !lambda return x;
+        - id: c0_1001
+          uuid: 00001001-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x03, 0x00, 0x00, 0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1001
+                  value: !lambda return x;
+        - id: c0_1005
+          uuid: 00001005-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1005
+                  value: !lambda return x;
+        - id: c0_1006
+          uuid: 00001006-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x07, 0x00, 0x1e, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1006
+                  value: !lambda return x;
+        - id: c0_1007
+          uuid: 00001007-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1007
+                  value: !lambda return x;
+        - id: c0_1008
+          uuid: 00001008-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1008
+                  value: !lambda return x;
+        - id: c0_100d
+          uuid: 0000100d-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_100d
+                  value: !lambda return x;
+        - id: c0_1011
+          uuid: 00001011-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1011
+                  value: !lambda return x;
+        - id: c0_1016
+          uuid: 00001016-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x08]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1016
+                  value: !lambda return x;
+        - id: c0_1023
+          uuid: 00001023-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x12, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1023
+                  value: !lambda return x;
+        - id: c0_1027
+          uuid: 00001027-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1027
+                  value: !lambda return x;
+        - id: c0_1028
+          uuid: 00001028-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x15, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1028
+                  value: !lambda return x;
+        - id: c0_102a
+          uuid: 0000102a-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x07]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_102a
+                  value: !lambda return x;
+        - id: c0_1002
+          uuid: 00001002-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c0_1002
+                  value: !lambda |-
+                    std::vector<uint8_t> r(31, 0);
+                    if (x.size() >= 3) { r[1] = x[1]; r[2] = x[2]; }
+                    return r;
+    - uuid: 00000000-0001-1000-8000-00805f9b34fb
+      characteristics:
+        - id: c1_0008
+          uuid: 00000008-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c1_0008
+                  value: !lambda |-
+                    return x.size() && x[0] == 2 ? std::vector<uint8_t>{2, 0xC8, 0} : std::vector<uint8_t>{1, 0xC3, 0};
+        - id: c1_0002
+          uuid: 00000002-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c1_0002
+                  value: !lambda |-
+                    return std::vector<uint8_t>{x.size() ? x[0] : (uint8_t) 1, 0, 0};
+        - id: c1_300e
+          uuid: 0000300e-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - lambda: |-
+                  id(ota_enabled) = x.size() == 1 && x[0] == 1;
+                  ESP_LOGI("emu", "OTA mode %s", id(ota_enabled) ? "on" : "off");
+                  if (!id(ota_enabled)) id(ota_active) = false;
+              - ble_server.characteristic.set_value:
+                  id: c1_300e
+                  value: !lambda return x;
+    - uuid: 00000000-0002-1000-8000-00805f9b34fb
+      characteristics:
+        - id: c2_0005
+          uuid: 00000005-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x01, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c2_0005
+                  value: !lambda return x;
+        - id: c2_1019
+          uuid: 00001019-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c2_1019
+                  value: !lambda return x;
+    - uuid: 00000000-0003-1000-8000-00805f9b34fb
+      characteristics:
+        - id: c3_2002
+          uuid: 00002002-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x3a, 0x00, 0xc0, 0x23, 0x04, 0x01]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_2002
+                  value: !lambda return x;
+        - id: c3_2005
+          uuid: 00002005-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x50, 0x4c, 0x58, 0x30, 0x35, 0x30, 0x45, 0x3b, 0x43, 0x3b]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_2005
+                  value: !lambda return x;
+        - id: c3_200a
+          uuid: 0000200a-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x45, 0x50, 0x34, 0x32, 0x31, 0x33]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_200a
+                  value: !lambda return x;
+        - id: c3_2009
+          uuid: 00002009-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x05]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_2009
+                  value: !lambda return x;
+        - id: c3_000a
+          uuid: 0000000a-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0xf4, 0x01, 0x98, 0x08, 0x00, 0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_000a
+                  value: !lambda return x;
+        - id: c3_2001
+          uuid: 00002001-0000-1000-8000-00805f9b34fb
+          read: true
+          write: true
+          value: [0x00, 0x00, 0x00]
+          on_write:
+            then:
+              - ble_server.characteristic.set_value:
+                  id: c3_2001
+                  value: !lambda |-
+                    if (x.size() && x[0] == 1) return id(ui_reply);
+                    if (x.size() && x[0] == 2) return std::vector<uint8_t>{2, 0xFF, 0xFF};
+                    return std::vector<uint8_t>{x.size() ? x[0] : (uint8_t) 0, 0, 0};
+    - uuid: 00060000-f8ce-11e4-abf4-0002a5d5c51d
+      characteristics:
+        - id: ota_cmd
+          uuid: 00060001-f8ce-11e4-abf4-0002a5d5c51d
+          read: true
+          write: true
+          write_no_response: true
+          notify: true
+          value: [0x00]
+          on_write:
+            then:
+              - lambda: |-
+                  // ConfigR frame: 01 | cmd | len LE16 | payload | cksum | 17
+                  id(reply_due) = false;
+                  auto answer = [&](uint8_t status) {
+                    id(reply) = {0x01, status, (uint8_t) (-(0x17 + 0x01 + status)), 0x17};
+                    id(reply_due) = true;
+                  };
+                  size_t n = x.size();
+                  if (n < 6 || x[0] != 0x01 || x[n - 1] != 0x17) {
+                    ESP_LOGE("emu", "bad frame envelope (%u bytes)", (unsigned) n);
+                    answer(0x0A); return;
+                  }
+                  uint16_t len = x[2] | (x[3] << 8);
+                  if (len != n - 6) { ESP_LOGE("emu", "bad length %u for %u bytes", len, (unsigned) n); answer(0x0A); return; }
+                  uint8_t sum = 0x17;
+                  for (size_t i = 0; i < n - 1; i++) sum += x[i];
+                  if (sum != 0) { ESP_LOGE("emu", "bad checksum"); answer(0x0A); return; }
+                  uint8_t cmd = x[1];
+                  const uint8_t *p = x.data() + 4;
+                  if (cmd == 0x38) {
+                    if (!id(ota_enabled) || len != 13 || memcmp(p, "4213", 4) != 0) {
+                      ESP_LOGE("emu", "enter refused (mode %d, len %u)", id(ota_enabled), len); answer(0x0B); return;
+                    }
+                    id(ota_size) = p[9] | (p[10] << 8) | (p[11] << 16) | ((uint32_t) p[12] << 24);
+                    id(ota_received) = 0; id(ota_rows) = 0; id(ota_crc) = 0x1D0F;
+                    id(ota_active) = true; id(ota_verified) = false;
+                    ESP_LOGI("emu", "enter: %u bytes, attempt %d", id(ota_size), id(attempt));
+                    answer(0x00); return;
+                  }
+                  if (cmd == 0x39) {
+                    if (!id(ota_active) || len == 0 || len > 236 || id(ota_received) + len > id(ota_size)) {
+                      ESP_LOGE("emu", "row refused (active %d, len %u)", id(ota_active), len); answer(0x0C); return;
+                    }
+                    id(ota_rows)++;
+                    if (id(ota_rows) == 50 && id(attempt) < 3) {
+                      int a = id(attempt)++;
+                      ESP_LOGW("emu", "case %d at row 50", a);
+                      if (a == 0) { answer(0x0C); return; }
+                      if (a == 1) { return; }  // no reply: HA must time out
+                      App.safe_reboot();      // a = 2: the link drops
+                      return;
+                    }
+                    for (size_t i = 0; i < len; i++) {
+                      id(ota_crc) ^= (uint16_t) p[i] << 8;
+                      for (int b = 0; b < 8; b++)
+                        id(ota_crc) = (id(ota_crc) & 0x8000) ? (uint16_t) ((id(ota_crc) << 1) ^ 0x1021) : (uint16_t) (id(ota_crc) << 1);
+                    }
+                    id(ota_received) += len;
+                    if (id(ota_rows) % 500 == 0) ESP_LOGI("emu", "row %u, %u/%u bytes", id(ota_rows), id(ota_received), id(ota_size));
+                    answer(0x00); return;
+                  }
+                  if (cmd == 0x35) {
+                    uint16_t want = p[0] | (p[1] << 8);
+                    bool ok = id(ota_active) && len == 2 && id(ota_received) == id(ota_size) && want == id(ota_crc);
+                    ESP_LOGI("emu", "verify: %s (got %u/%u bytes, crc %04X, sent %04X)", ok ? "OK" : "FAILED",
+                             id(ota_received), id(ota_size), id(ota_crc), want);
+                    id(ota_verified) = ok;
+                    answer(ok ? 0x00 : 0x15); return;
+                  }
+                  if (cmd == 0x3B) {
+                    ESP_LOGI("emu", "exit (verified %d)", id(ota_verified));
+                    id(ota_active) = false;
+                    if (id(ota_verified)) {
+                      id(ui_major) = 5; id(ui_minor) = 0;
+                      id(ui_reply) = {1, 5, 0};
+                      ESP_LOGI("emu", "now reporting UI 5.0");
+                    }
+                    answer(0x00); return;
+                  }
+                  ESP_LOGE("emu", "unknown command 0x%02X", cmd);
+                  answer(0x0A);
+              - if:
+                  condition:
+                    lambda: return id(reply_due);
+                  then:
+                    - ble_server.characteristic.set_value:
+                        id: ota_cmd
+                        value: !lambda return id(reply);
+                    - ble_server.characteristic.notify:
+                        id: ota_cmd
