@@ -108,12 +108,12 @@ class StallMonitor:
         store = silent_since(self._hass)
         carried = store.get(self.issue_id)
         start = monotonic()
-        if carried is not None and carried[1] is scanner:
-            start = carried[0]
+        if carried is not None:
             heard = self._last_heard()
-            if heard is not None and heard > start:
-                start = heard
+            if heard is not None and heard > carried[0]:
                 self._clear_repair()
+            if carried[1] is scanner:
+                start = carried[0] if heard is None else max(carried[0], heard)
         store[self.issue_id] = (start, scanner)
         return start
 
