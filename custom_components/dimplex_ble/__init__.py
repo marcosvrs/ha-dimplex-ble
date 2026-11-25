@@ -14,6 +14,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
 from . import responder
@@ -35,6 +36,7 @@ from .const import (
 from .coordinator import DimplexConfigEntry, DimplexCoordinator, keep_connected
 from .entity import device_info_for_coordinator, unique_id
 from .link import HeaterLink
+from .schedule_keeper import STORAGE_VERSION, pending_issue_id
 from .services import async_setup_services
 from .stall import stall_issue_id
 
@@ -65,6 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     )
     coordinator = DimplexCoordinator(hass, entry, link)
     entry.runtime_data = coordinator
+    await coordinator.schedule_keeper.async_load()
 
     async def _async_close_on_stop(event: Event) -> None:
         """Close the link cleanly so the proxy does not keep it (core#187087)."""
@@ -173,8 +176,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> 
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> None:
-    """Drop the entry's stalled-heater repair together with the entry."""
+    """Drop the entry's repairs and its schedule backup together with the entry."""
     ir.async_delete_issue(hass, DOMAIN, stall_issue_id(entry.entry_id))
+    ir.async_delete_issue(hass, DOMAIN, pending_issue_id(entry.entry_id))
+    await Store(
+        hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.schedules"
+    ).async_remove()
 
 
 async def async_remove_config_entry_device(

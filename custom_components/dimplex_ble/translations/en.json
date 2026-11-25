@@ -246,7 +246,7 @@
   "services": {
     "set_schedule": {
       "name": "Set schedule",
-      "description": "Saves the periods to the chosen days of a timer programme on the heater. Each day is replaced and then read back.",
+      "description": "Saves the periods to the chosen days of a timer programme on the heater. Each day is replaced and then read back. If the heater can't be reached, the change waits and is written when it is next reachable.",
       "fields": {
         "device_id": {
           "name": "Heater",
@@ -273,6 +273,34 @@
         "device_id": {
           "name": "Heater",
           "description": "The Dimplex panel heater to inspect."
+        }
+      }
+    },
+    "get_schedule": {
+      "name": "Get schedule",
+      "description": "Returns each timer programme as the heater holds it, the changes still waiting for the heater, and Home Assistant's backup copy.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex panel heater."
+        },
+        "programme": {
+          "name": "Programme",
+          "description": "Only this programme. Leave empty for all three."
+        }
+      }
+    },
+    "restore_schedule": {
+      "name": "Restore schedule",
+      "description": "Writes Home Assistant's backup copy of the programmes back to the heater. If the heater can't be reached, the change waits and is written when it is next reachable.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex panel heater."
+        },
+        "programme": {
+          "name": "Programme",
+          "description": "Only this programme. Leave empty for all three."
         }
       }
     }
@@ -341,14 +369,18 @@
     "boost_not_in_away": {
       "message": "Boost isn't available during Away."
     },
-    "schedule_partly_saved": {
-      "message": "Saved {saved} of {total} days before the heater stopped responding. Run the action again."
+    "no_schedule_backup": {
+      "message": "There is no backup of this programme yet."
     }
   },
   "issues": {
     "heater_stalled": {
       "title": "{name} stopped responding",
       "description": "The heater's Bluetooth has stopped. If your installation has a mains isolator switch: switch it off, wait at least 5 seconds, then switch it on. If there is no isolator switch: switch off the circuit breaker or remove the fuse supplying the unit, wait at least 5 seconds, then switch it on. Home Assistant reconnects automatically."
+    },
+    "schedule_pending": {
+      "title": "{name}: schedule change waiting",
+      "description": "The heater couldn't be reached when its schedule was changed. Home Assistant keeps the change and writes it as soon as the heater answers again; until then the heater keeps running its previous schedule."
     }
   },
   "selector": {

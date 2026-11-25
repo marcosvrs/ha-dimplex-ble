@@ -116,6 +116,12 @@
     },
     "set_schedule": {
       "service": "mdi:calendar-edit"
+    },
+    "get_schedule": {
+      "service": "mdi:calendar-search"
+    },
+    "restore_schedule": {
+      "service": "mdi:calendar-refresh"
     }
   }
 }

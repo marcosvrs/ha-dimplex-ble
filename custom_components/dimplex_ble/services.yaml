@@ -1,3 +1,35 @@
+get_schedule:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: dimplex_ble
+    programme:
+      required: false
+      selector:
+        select:
+          translation_key: programme
+          options:
+            - user_timer
+            - home_all_day
+            - out_all_day
+restore_schedule:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: dimplex_ble
+    programme:
+      required: false
+      selector:
+        select:
+          translation_key: programme
+          options:
+            - user_timer
+            - home_all_day
+            - out_all_day
 set_schedule:
   fields:
     device_id:

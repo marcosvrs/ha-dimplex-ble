@@ -204,6 +204,23 @@ data:
       temperature: 21
 ```
 
+If the heater can't be reached when you save (its Bluetooth has stopped, or it
+is out of range), the action still succeeds: Home Assistant keeps the change,
+even across restarts, shows the repair "*Heater*: schedule change waiting", and
+writes and verifies it as soon as the heater answers again. Until then the
+heater keeps running its previous schedule.
+
+**Get schedule** (`dimplex_ble.get_schedule`) returns each programme as the
+heater holds it, the changes still waiting for the heater, and the backup copy
+(per day, as `[start, end, temperature]` periods), for example to copy one day
+to others in a script.
+
+**Restore schedule** (`dimplex_ble.restore_schedule`) writes Home Assistant's
+backup copy back to the heater (one programme or all three), for example after
+the heater was reset or replaced. The backup is taken from the first complete
+read of the heater and then follows only the changes saved through Home
+Assistant, so a reset heater's factory schedule never overwrites it.
+
 Developer diagnostic: the action **List Bluetooth services (developer)**
 (`dimplex_ble.get_gatt_services`) lists the heater's Bluetooth services and
 characteristics without reading values. It is only useful when reporting a

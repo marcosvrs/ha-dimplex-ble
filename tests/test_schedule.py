@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, time, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
@@ -13,6 +13,7 @@ from conftest import FakeProxy
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 from test_connection_mode import advance, kinds, make_entry, setup
 
@@ -476,39 +477,192 @@ def fail_saving(proxy: FakeProxy, day: int) -> None:
     proxy.on_write = on_write
 
 
-async def test_a_failure_part_way_keeps_the_saved_days(hass, fake_bt) -> None:
+PERIOD = {"start": "07:00", "end": "09:00", "temperature": 21}
+SAVED = (SchedulePeriod(time(7), time(9), 21),)
+
+
+def pending_issue(hass, entry):
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, f"schedule_pending_{entry.entry_id}"
+    )
+
+
+async def test_an_unreachable_heater_gets_the_change_later(hass, fake_bt) -> None:
+    """Part-way failure: day 0 is saved; day 2 waits and is written later."""
     proxy = with_schedules(fake_bt.add())
     entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     fail_saving(proxy, day=2)
-    period = {"start": "07:00", "end": "09:00", "temperature": 21}
 
-    with pytest.raises(HomeAssistantError) as err:
-        await set_schedule(
-            hass, entry, programme="user_timer", days=["mon", "wed"], periods=[period]
-        )
-    assert err.value.translation_key == "schedule_partly_saved"
-    assert err.value.translation_placeholders == {"saved": "1", "total": "2"}
-    saved = (SchedulePeriod(time(7), time(9), 21),)
-    assert coordinator.schedules["user_timer"][0] == saved
+    await set_schedule(
+        hass, entry, programme="user_timer", days=["mon", "wed"], periods=[PERIOD]
+    )  # no error: the change is kept
 
-    # Every programme is read again, so the calendars show what the heater holds.
+    keeper = coordinator.schedule_keeper
+    assert coordinator.schedules["user_timer"][0] == SAVED
+    assert keeper.backup["user_timer"][0] == SAVED
+    assert keeper.pending == {"user_timer": {2: SAVED}}
+    assert pending_issue(hass, entry) is not None
+
+    # The heater answers again: the next poll writes the waiting day.
     proxy.on_write = None
     await coordinator.async_refresh()
-    assert coordinator.schedules["user_timer"][2] == saved
+    await hass.async_block_till_done()
+
+    assert keeper.pending == {}
+    assert pending_issue(hass, entry) is None
+    assert proxy.schedule[(3, 2)][3:9] == bytes.fromhex("070009001500")
+    assert keeper.backup["user_timer"][2] == SAVED
 
 
-async def test_a_failure_on_the_first_day_reports_the_link_error(hass, fake_bt) -> None:
+async def test_a_link_error_on_the_first_day_queues_every_day(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    fail_saving(proxy, day=0)
+    coordinator.async_refresh = AsyncMock()  # the heater stays away for now
+
+    await set_schedule(
+        hass, entry, programme="home_all_day", days=["mon", "tue"], periods=[PERIOD]
+    )
+
+    assert coordinator.schedule_keeper.pending == {"home_all_day": {0: SAVED, 1: SAVED}}
+
+
+async def test_a_pending_change_survives_a_restart(hass, fake_bt, hass_storage) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    hass_storage[f"{DOMAIN}.{entry.entry_id}.schedules"] = {
+        "version": 1,
+        "key": f"{DOMAIN}.{entry.entry_id}.schedules",
+        "data": {
+            "backup": {},
+            "pending": {"user_timer": {"4": [["07:00", "09:00", 21]]}},
+        },
+    }
+
+    await setup(hass, entry)
+    await hass.async_block_till_done()
+
+    assert proxy.schedule[(3, 4)][3:9] == bytes.fromhex("070009001500")
+    assert entry.runtime_data.schedule_keeper.pending == {}
+    assert pending_issue(hass, entry) is None
+
+
+async def test_a_refused_day_is_not_retried(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    coordinator.schedule_keeper.queue("user_timer", {1: SAVED})
+    proxy.saves_schedules = False  # the heater keeps its own record
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.schedule_keeper.pending == {}
+
+
+async def test_the_backup_is_not_overwritten_by_a_reset_heater(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    keeper = coordinator.schedule_keeper
+    assert keeper.backup["home_all_day"][0] == parse_schedule_day(
+        record(2, 0, HOME), 2, 0
+    )  # seeded from the first complete read
+
+    await set_schedule(
+        hass, entry, programme="user_timer", days=["mon"], periods=[PERIOD]
+    )
+    proxy.schedule = defaults()  # the heater is reset to its factory programmes
+    coordinator.async_schedules_due()
+    await coordinator.async_refresh()
+
+    assert coordinator.schedules["user_timer"][0] != SAVED  # the heater lost it
+    assert keeper.backup["user_timer"][0] == SAVED  # the backup kept it
+
+    await hass.services.async_call(
+        DOMAIN,
+        "restore_schedule",
+        {"device_id": device_id(hass, entry), "programme": "user_timer"},
+        blocking=True,
+    )
+    assert coordinator.schedules["user_timer"][0] == SAVED
+
+
+async def test_restore_without_a_backup_is_refused(hass, fake_bt) -> None:
+    fake_bt.add()  # a heater without readable schedules: nothing to back up
+    entry = make_entry(hass)
+    await setup(hass, entry)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            "restore_schedule",
+            {"device_id": device_id(hass, entry)},
+            blocking=True,
+        )
+    assert err.value.translation_key == "no_schedule_backup"
+
+
+async def test_restore_writes_every_backed_up_programme(hass, fake_bt) -> None:
     proxy = with_schedules(fake_bt.add())
     entry = make_entry(hass)
     await setup(hass, entry)
-    fail_saving(proxy, day=0)
+    proxy.events.clear()
 
-    with pytest.raises(HomeAssistantError) as err:
-        await set_schedule(
-            hass, entry, programme="user_timer", days=["mon"], periods=[]
-        )
-    assert err.value.translation_key == "cannot_connect"
+    await hass.services.async_call(
+        DOMAIN, "restore_schedule", {"device_id": device_id(hass, entry)}, blocking=True
+    )
+
+    saves = [w for w in schedule_writes(proxy) if w[0] == 1]
+    assert len(saves) == 21  # 3 programmes x 7 days
+
+
+async def test_get_schedule_returns_heater_pending_and_backup(hass, fake_bt) -> None:
+    with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    coordinator.schedule_keeper.queue("home_all_day", {6: SAVED})
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "get_schedule",
+        {"device_id": device_id(hass, entry), "programme": "home_all_day"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert list(result) == ["home_all_day"]
+    entry_result = result["home_all_day"]
+    assert entry_result["heater"]["mon"] == [["08:00", "21:00", 21]]
+    assert entry_result["pending"] == {"sun": [["07:00", "09:00", 21]]}
+    assert entry_result["backup"]["sun"] == [["08:00", "21:00", 21]]
+
+    everything = await hass.services.async_call(
+        DOMAIN,
+        "get_schedule",
+        {"device_id": device_id(hass, entry)},
+        blocking=True,
+        return_response=True,
+    )
+    assert list(everything) == ["user_timer", "home_all_day", "out_all_day"]
+
+
+async def test_get_schedule_before_any_read(hass, fake_bt) -> None:
+    fake_bt.add()
+    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    coordinator = await setup(hass, entry)
+    coordinator.schedules = {}
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "get_schedule",
+        {"device_id": device_id(hass, entry)},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["user_timer"] == {"heater": None, "pending": {}, "backup": None}
 
 
 @pytest.mark.parametrize("temperature", [21.9, "21.5", True, "warm"])
@@ -599,3 +753,22 @@ async def test_a_schedule_read_failure_keeps_the_poll_and_retries(
     assert coordinator.schedules == {}  # nothing decoded, so nothing stored
     assert coordinator._schedules_due  # retried next poll
     assert coordinator.link.connected  # the held link was not dropped
+
+
+async def test_a_save_refused_for_another_reason_is_not_queued(hass, fake_bt) -> None:
+    """Only an unreachable heater queues; e.g. a missing characteristic raises."""
+    from custom_components.dimplex_ble.errors import CharacteristicError
+
+    with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    coordinator.link.async_save_schedule = AsyncMock(
+        side_effect=CharacteristicError("no schedule characteristic")
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon"], periods=[PERIOD]
+        )
+    assert err.value.translation_key == "characteristic_unavailable"
+    assert coordinator.schedule_keeper.pending == {}

@@ -28,7 +28,12 @@ from .const import (
     DOMAIN,
     POLL_INTERVAL_PER_POLL,
 )
-from .errors import DimplexError, HeaterAuthError, to_homeassistant_error
+from .errors import (
+    DimplexError,
+    HeaterAuthError,
+    HeaterUnavailableError,
+    to_homeassistant_error,
+)
 from .link import HeaterLink, WeekSchedule
 from .protocol import (
     AWAY_MODE,
@@ -65,6 +70,7 @@ from .protocol import (
     parse_sound_enabled,
     parse_temperature_offset,
 )
+from .schedule_keeper import ScheduleKeeper
 from .stall import StallMonitor
 
 _LOGGER = logging.getLogger(__name__)
@@ -147,6 +153,8 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             hass, entry.entry_id, entry.title, link.address, link.source
         )
         link.on_link_lost = self.stall.async_link_lost
+        self.schedule_keeper = ScheduleKeeper(hass, entry.entry_id, entry.title)
+        self._applying_pending = False
 
     async def _async_update_data(self) -> HeaterSnapshot:
         """Read one snapshot; a rejected PIN starts reauth and stops polling."""
@@ -176,7 +184,27 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 translation_domain=DOMAIN, translation_key=err.translation_key
             ) from err
         self.stall.async_heard()
+        if self.schedule_keeper.pending and not self._applying_pending:
+            # The heater answers again: write the changes that waited for it.
+            self._applying_pending = True
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self._async_apply_pending(),
+                "dimplex_ble pending schedule",
+            )
         return snapshot
+
+    async def _async_apply_pending(self) -> None:
+        """Write the schedule changes saved while the heater was unreachable."""
+        try:
+            for preset, days in list(self.schedule_keeper.pending.items()):
+                await self.async_save_schedule(preset, dict(days))
+        except HomeAssistantError as err:
+            _LOGGER.debug(
+                "Pending schedule for %s not written: %s", self.link.address, err
+            )
+        finally:
+            self._applying_pending = False
 
     async def async_shutdown(self) -> None:
         """Cancel the stall window, then stop polling."""
@@ -300,6 +328,10 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 translation_key="invalid_schedule",
                 translation_placeholders={"reason": str(err)},
             ) from err
+        expected = {
+            day: tuple(sorted(periods, key=lambda period: period.start))
+            for day, periods in days.items()
+        }
         readback: dict[int, tuple[SchedulePeriod, ...] | None] = {}
         try:
             await self.async_command(
@@ -308,25 +340,48 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         except HomeAssistantError as err:
             self._store_schedule_days(preset, readback)
             self._schedules_due = True  # every programme is read again
-            if not readback:
+            saved = self._note_saved(preset, expected, readback)
+            if err.translation_key != HeaterUnavailableError.translation_key:
                 raise
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="schedule_partly_saved",
-                translation_placeholders={
-                    "saved": str(len(readback)),
-                    "total": str(len(days)),
-                },
-            ) from err
+            # Unreachable: the days not yet saved wait for the heater (on disk);
+            # the heater runs its programme without Bluetooth meanwhile.
+            self.schedule_keeper.queue(
+                preset, {d: p for d, p in expected.items() if d not in saved}
+            )
+            return
         self._store_schedule_days(preset, readback)
-        expected = {
-            day: tuple(sorted(periods, key=lambda period: period.start))
-            for day, periods in days.items()
-        }
-        if any(readback[day] != expected[day] for day in days):
+        if self._note_saved(preset, expected, readback) != set(expected):
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="schedule_not_saved"
             )
+
+    def _note_saved(
+        self,
+        preset: str,
+        expected: dict[int, tuple[SchedulePeriod, ...]],
+        readback: dict[int, tuple[SchedulePeriod, ...] | None],
+    ) -> set[int]:
+        """Back up the days the heater kept; a refused day is not retried."""
+        saved = set()
+        for day, periods in readback.items():
+            if periods == expected[day]:
+                self.schedule_keeper.note_saved(preset, day, periods)
+                saved.add(day)
+            else:
+                self.schedule_keeper.drop(preset, day)
+        return saved
+
+    async def async_restore_schedule(self, preset: str | None = None) -> None:
+        """Write the backup copy of one programme (or all) back to the heater."""
+        backup = self.schedule_keeper.backup
+        presets = [preset] if preset is not None else list(backup)
+        if not presets or any(p not in backup for p in presets):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="no_schedule_backup"
+            )
+        for name in presets:
+            days = {d: p for d, p in enumerate(backup[name]) if p is not None}
+            await self.async_save_schedule(name, days)
 
     def _store_schedule_days(
         self, preset: str, readback: dict[int, tuple[SchedulePeriod, ...] | None]
@@ -363,6 +418,8 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             for preset, programme in SCHEDULE_PROGRAMMES.items()
             if programme in schedules
         }
+        for preset, week in by_preset.items():
+            self.schedule_keeper.note_read(preset, week)
         if by_preset != self.schedules:
             self.schedules = by_preset
             self.async_update_listeners()
