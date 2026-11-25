@@ -420,6 +420,9 @@
     },
     "firmware_update_failed": {
       "message": "The firmware update stopped: {error}. Try again."
+    },
+    "firmware_not_confirmed": {
+      "message": "The update was sent, but the heater reports {installed} instead of {version}."
     }
   },
   "issues": {

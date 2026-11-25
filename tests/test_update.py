@@ -20,7 +20,7 @@ from custom_components.dimplex_ble.const import (
     DOMAIN,
 )
 from custom_components.dimplex_ble.firmware import account
-from custom_components.dimplex_ble.protocol import GDID, PRODUCT_CODE
+from custom_components.dimplex_ble.protocol import GDID, PRODUCT_CODE, UI_VERSION
 from custom_components.dimplex_ble.settings import CONF_REFRESH_TOKEN
 
 pytestmark = pytest.mark.usefixtures("skip_dependencies")
@@ -31,7 +31,11 @@ FIRMWARE = cloud.Firmware("5.0", "https://blob.example/f.zip", "1.7.0")
 
 def heater(fake_bt, gdid: bytes | None = GDID_RAW, *, ep: bytes | None = b"EP4213"):
     proxy = fake_bt.add()
-    for address, value in ((GDID, gdid), (PRODUCT_CODE, ep)):
+    for address, value in (
+        (GDID, gdid),
+        (PRODUCT_CODE, ep),
+        (UI_VERSION, b"\x01\x01\x07"),
+    ):
         if value is not None:
             proxy.services.add(address)
             proxy.values[address] = value
@@ -59,6 +63,13 @@ def entity_id(hass) -> str:
     return er.async_get(hass).async_get_entity_id(
         "update", DOMAIN, f"{ADDRESS.lower()}_firmware"
     )
+
+
+@pytest.fixture(autouse=True)
+def no_confirm_wait(monkeypatch) -> None:
+    from custom_components.dimplex_ble import update
+
+    monkeypatch.setattr(update, "CONFIRM_WAIT_S", 0)
 
 
 @pytest.fixture
@@ -149,7 +160,7 @@ async def test_a_failed_check_keeps_the_last_answer(
 async def test_install_downloads_checks_and_flashes(
     hass, fake_bt, dimplex, monkeypatch
 ) -> None:
-    heater(fake_bt)
+    proxy = heater(fake_bt)
     coordinator = await setup(hass, make_entry(hass))
     image = ota.Image("EP4213", "5.0", b"x")
     flashed = []
@@ -165,6 +176,7 @@ async def test_install_downloads_checks_and_flashes(
         progress(0.5)
         progress(1.0)
         flashed.append(img)
+        proxy.values[UI_VERSION] = b"\x01\x05\x00"  # the heater now runs 5.0
 
     monkeypatch.setattr(cloud, "async_download", download)
     monkeypatch.setattr(ota, "load_release", load)
@@ -381,3 +393,29 @@ async def test_the_shared_session_outlives_a_heater_reload(hass, fake_bt) -> Non
     hass.bus.async_fire(EVENT_HOMEASSISTANT_CLOSE)
     await hass.async_block_till_done()
     assert session.closed
+
+
+@pytest.mark.usefixtures("signed_in")
+async def test_an_unconfirmed_version_is_reported(
+    hass, fake_bt, dimplex, monkeypatch
+) -> None:
+    """Codex review: never report success while the heater keeps 1.7."""
+    heater(fake_bt)
+    coordinator = await setup(hass, make_entry(hass))
+
+    async def download(session, firmware):
+        return b"zip"
+
+    async def flash(img, progress):
+        return None  # the heater keeps its old firmware
+
+    monkeypatch.setattr(cloud, "async_download", download)
+    monkeypatch.setattr(ota, "load_release", lambda z, ep: ota.Image(ep, "5.0", b"x"))
+    monkeypatch.setattr(coordinator.link, "async_flash", flash)
+
+    with pytest.raises(HomeAssistantError) as raised:
+        await hass.services.async_call(
+            "update", "install", {"entity_id": entity_id(hass)}, blocking=True
+        )
+    assert raised.value.translation_key == "firmware_not_confirmed"
+    assert hass.states.get(entity_id(hass)).attributes["installed_version"] == "1.7"

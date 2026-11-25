@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -21,6 +22,9 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 1
 SCAN_INTERVAL = FIRMWARE_CHECK_INTERVAL
+# After a flash the heater may reboot: re-read it for up to a minute.
+CONFIRM_ATTEMPTS = 6
+CONFIRM_WAIT_S = 10.0
 
 
 async def async_setup_entry(
@@ -127,7 +131,23 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
             self._attr_in_progress = False
             self._attr_update_percentage = None
             self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
+        await self._async_confirm(image.version)
+
+    async def _async_confirm(self, version: str) -> None:
+        """Re-read the heater (it may be rebooting) until it reports ``version``."""
+        for _ in range(CONFIRM_ATTEMPTS):
+            await asyncio.sleep(CONFIRM_WAIT_S)
+            await self.coordinator.async_refresh()
+            if self.installed_version == version:
+                return
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="firmware_not_confirmed",
+            translation_placeholders={
+                "version": version,
+                "installed": str(self.installed_version),
+            },
+        )
 
     def _on_progress(self, fraction: float) -> None:
         percentage = int(fraction * 100)
