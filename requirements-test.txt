@@ -1,6 +1,6 @@
 coverage==7.16.2
 mutmut==3.8.1
-mypy==1.20.0
+mypy==2.4.1
 pytest==9.0.3
 pytest-cov==7.1.0
 pytest-homeassistant-custom-component==0.13.375
