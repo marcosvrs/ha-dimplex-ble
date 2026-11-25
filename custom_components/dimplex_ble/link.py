@@ -273,6 +273,17 @@ class HeaterLink:
                 return scanner, seen.ble_device
         return None
 
+    def _log_read_failure(self, what: str, err: BaseException) -> None:
+        """Log a non-fatal slow-read failure (the snapshot still succeeded)."""
+        _LOGGER.debug(
+            "GATT %s %s read failed att=%s %s: %s",
+            self.address,
+            what,
+            att_error_code(err),
+            type(err).__name__,
+            err,
+        )
+
     async def async_snapshot(
         self,
         settings: tuple[GattAddress, ...] = (),
@@ -283,8 +294,9 @@ class HeaterLink:
         """Read the snapshot, then any due settings and programmes, in one operation.
 
         Every poll uses it, so slow reads never need their own connection. A
-        failed settings read does not fail the snapshot; that setting and the
-        rest are then omitted, and so are the schedules.
+        failed settings read does not fail the snapshot: that setting and the
+        rest are omitted (and retried next poll). The schedule read is separate,
+        so a settings failure never suppresses it.
         """
         started = time.monotonic()
         values: dict[GattAddress, bytes | None] = {}
@@ -294,15 +306,13 @@ class HeaterLink:
             try:
                 for address in settings:
                     values[address] = await _read_optional(client, address)
+            except _GATT_ERRORS as err:
+                self._log_read_failure("settings", err)
+            try:
                 schedules = await _read_schedules(client, programmes)
             except _GATT_ERRORS as err:
-                _LOGGER.debug(
-                    "GATT %s settings read failed att=%s %s: %s",
-                    self.address,
-                    att_error_code(err),
-                    type(err).__name__,
-                    err,
-                )
+                schedules = {}
+                self._log_read_failure("schedules", err)
         _LOGGER.debug(
             "GATT %s snapshot+settings ok %.2fs",
             self.address,

@@ -545,3 +545,54 @@ async def test_set_schedule_accepts_whole_degrees_as_floats(hass, fake_bt) -> No
     )
     assert coordinator.schedules["user_timer"][0][0].temperature_c == 21
     assert proxy.schedule[(3, 0)][7] == 21
+
+
+async def test_a_failed_setting_read_does_not_starve_the_schedule_read(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """Codex review: a slow-setting GATT error must not hide the calendars."""
+    from custom_components.dimplex_ble import link as link_module
+    from custom_components.dimplex_ble.protocol import SOUND
+
+    real = link_module._read_optional
+
+    async def read(client, address):
+        if address == SOUND:
+            raise BleakError("sound characteristic errored")
+        return await real(client, address)
+
+    monkeypatch.setattr(link_module, "_read_optional", read)
+    proxy = with_schedules(fake_bt.add())
+
+    coordinator = await setup(hass, make_entry(hass))
+
+    # The failing setting never confirms, but the schedules still loaded.
+    assert len(schedule_writes(proxy)) == 21
+    assert coordinator.schedules["user_timer"][0] is not None
+    assert coordinator._settings_due  # Sound retried next poll
+    assert not coordinator._schedules_due  # schedules are in hand
+
+
+async def test_a_schedule_read_failure_keeps_the_poll_and_retries(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """The snapshot and settings succeed; only the schedule read errors."""
+    from custom_components.dimplex_ble import link as link_module
+    from custom_components.dimplex_ble.protocol import SCHEDULE
+
+    real = link_module._read_optional
+
+    async def read(client, address):
+        if address == SCHEDULE:
+            raise BleakError("schedule read errored")
+        return await real(client, address)
+
+    monkeypatch.setattr(link_module, "_read_optional", read)
+    with_schedules(fake_bt.add())
+
+    coordinator = await setup(hass, make_entry(hass))
+
+    assert coordinator.last_update_success  # the poll still succeeded
+    assert coordinator.schedules == {}  # nothing decoded, so nothing stored
+    assert coordinator._schedules_due  # retried next poll
+    assert coordinator.link.connected  # the held link was not dropped
