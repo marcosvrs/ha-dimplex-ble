@@ -177,7 +177,7 @@ cd firmware
 {
   echo "wifi_ssid: dummy-ssid"
   echo "wifi_password: dummy-password"
-  echo "living_room_api_key: \"$(openssl rand -base64 32)\""
+  echo "api_encryption_key: \"$(openssl rand -base64 32)\""
 } > secrets.yaml
 echo "emulator_passkey: $(python3 -c 'import secrets; print(100000 + secrets.randbelow(900000))')" > test/secrets.yaml
 ```

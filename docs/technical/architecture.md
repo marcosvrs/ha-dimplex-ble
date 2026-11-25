@@ -177,7 +177,7 @@ The handler first fires an event that carries only the heater address. It then w
 - **`dimplex_pin_arm(address, passkey)`**: retargets the client at the heater and arms the PIN; 1000000 means "target only, the PIN follows"
 - **`dimplex_pin_clear()`**: disarms the PIN and detaches the client
 
-The proxy configuration needs `io_capability: keyboard_only`, `auth_req_mode: sc_mitm_bond` and `max_connections: 4` (three proxy slots plus the responder), on ESPHome 2026.11.0 or newer. [`firmware/example-bluetooth-proxy.yaml`](../../firmware/example-bluetooth-proxy.yaml) shows a complete proxy.
+The package sets `io_capability: keyboard_only` and `max_connections: 4` (three proxy slots plus the responder) and requires ESPHome 2026.11.0 or newer. ESP-IDF's default authentication request is already `SC_MITM_BOND`: ESP-IDF 5.5.6 sets it in `bta_dm_co_security_param_init()` (`components/bt/host/bluedroid/bta/dm/bta_dm_co.c`), and ESPHome overrides it only when `auth_req_mode` is set. The package must be merged after the stock proxy package, whose `min_version` would otherwise win. [`firmware/example-bluetooth-proxy.yaml`](../../firmware/example-bluetooth-proxy.yaml) shows a complete proxy.
 
 ### How Home Assistant arms the PIN
 
