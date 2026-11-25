@@ -172,7 +172,8 @@ Each heater becomes one device with:
 | Adaptive start | Dimplex "Adaptive Start": heats early so a timer period starts at its target. Only affects User Timer and Home All Day. Learns continuously, plans at most 2 hours ahead; turn it on or off for all heaters in a room together. |
 | Open window detection | Stops heating ("Heating Off") when the room temperature drops suddenly. Can trigger in drafty or poorly insulated rooms. |
 | Display temperature unit | Only changes the heater's own display. Home Assistant always uses your system unit. |
-| Estimated power | Rated power × output %, in W. Can be added to the Energy dashboard (Home Assistant then estimates kWh). |
+| Estimated power | Rated power × output %, in W. The heater has no power meter. |
+| Estimated energy | Estimated power over time, in kWh; add it to the Energy dashboard. Time while the heater is unreachable or Home Assistant is stopped is not counted. |
 | Error (diagnostic) | "No error", a fault from the Dimplex manual (for example "Open window detected (50)"), or "Code N" for an undocumented code. |
 | Operating mode, Rated power, Controller temperature, Output power (diagnostic, disabled) | Enable them on the device page if needed. |
 | Firmware | Installed display firmware and Dimplex's latest, checked every 12 hours; **Install** updates the heater over Bluetooth (about 7 minutes). Needs the Dimplex sign-in. |

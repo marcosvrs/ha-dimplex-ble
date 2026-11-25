@@ -278,6 +278,9 @@
       },
       "calculated_power_consumption": {
         "name": "Estimated power"
+      },
+      "estimated_energy": {
+        "name": "Estimated energy"
       }
     },
     "update": {

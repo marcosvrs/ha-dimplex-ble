@@ -71,7 +71,7 @@ The settings menu enum lists the user-facing feature names (VERIFIED):
 | Open window detection switch | `0/0x1007` OpenWindowDetection |
 | Sound switch | `2/0x0005` Sound |
 | Display unit select | `0/0x1005` TemperatureUnit |
-| Energy | calculated from power; there is no device counter |
+| Estimated energy (kWh) | estimated power integrated over time; there is no device counter |
 | `DeviceInfo.sw_version` | `3/0x2001` UI and `3/0x2009` RF |
 
 ## Missing high-value user features (ranked)

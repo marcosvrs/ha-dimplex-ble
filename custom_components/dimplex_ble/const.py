@@ -53,6 +53,7 @@ UNIQUE_ID_SUFFIXES = frozenset(
         "lcd_temperature",
         "output_power",
         "calculated_power_consumption",
+        "estimated_energy",
         "sound",
         "open_window_detection",
         "preemptive_heating",

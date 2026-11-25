@@ -1,6 +1,11 @@
 """Diagnostic sensors for panel-heater-provided values; raw payloads are in diagnostics."""
 
+from datetime import datetime, timedelta
+from decimal import Decimal
+from time import monotonic
+
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
@@ -8,17 +13,27 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
+    UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 
-from .coordinator import DimplexConfigEntry
+from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
-from .protocol import HEATING_MODE_KEYS, PRESET_AWAY, error_code_state, heating_mode_of
+from .protocol import (
+    HEATING_MODE_KEYS,
+    PRESET_AWAY,
+    HeaterSnapshot,
+    error_code_state,
+    heating_mode_of,
+)
 
 PARALLEL_UPDATES = 1
+# The energy total grows in steps of this while the heater's output is unchanged.
+ENERGY_STEP = timedelta(minutes=1)
 
 
 async def async_setup_entry(
@@ -36,6 +51,7 @@ async def async_setup_entry(
             DimplexLcdTemperatureSensor(entry.runtime_data),
             DimplexOutputPowerSensor(entry.runtime_data),
             DimplexCalculatedPowerSensor(entry.runtime_data),
+            DimplexEstimatedEnergySensor(entry.runtime_data),
         ]
     )
 
@@ -140,11 +156,79 @@ class DimplexCalculatedPowerSensor(DimplexEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         """Calculate power from output percentage and rated power."""
-        data = self.coordinator.data
-        if (
-            data is None
-            or data.rated_power_w is None
-            or data.trac_output_power_percent is None
-        ):
-            return None
-        return data.rated_power_w * data.trac_output_power_percent / 100
+        return estimated_power_w(self.coordinator.data)
+
+
+def estimated_power_w(data: HeaterSnapshot | None) -> float | None:
+    """Rated power x output percentage; the heater has no power meter."""
+    if (
+        data is None
+        or data.rated_power_w is None
+        or data.trac_output_power_percent is None
+    ):
+        return None
+    return data.rated_power_w * data.trac_output_power_percent / 100
+
+
+class DimplexEstimatedEnergySensor(DimplexEntity, RestoreSensor):
+    """Energy from the estimated power over time, for the Energy dashboard.
+
+    The heater has no energy counter. The power reported at one poll holds
+    until the next (the output only changes in steps), so each interval counts
+    with the power at its start. Time without a successful poll (heater
+    unreachable, Home Assistant stopped) is not counted.
+    """
+
+    _attr_translation_key = "estimated_energy"
+    _unique_suffix = "estimated_energy"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, coordinator: DimplexCoordinator) -> None:
+        """Start from zero until the stored total is restored."""
+        super().__init__(coordinator)
+        self._total_kwh = 0.0
+        self._since: tuple[float, float] | None = None  # (monotonic, watts)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the total, then count on every poll and every minute."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None and isinstance(last.native_value, (int, float, Decimal)):
+            self._total_kwh = float(last.native_value)
+        self._count()
+        self.async_on_remove(
+            async_track_time_interval(self.hass, self._async_tick, ENERGY_STEP)
+        )
+
+    @property
+    def native_value(self) -> float:
+        """Return the total in kWh."""
+        return round(self._total_kwh, 6)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._count()
+        super()._handle_coordinator_update()
+
+    @callback
+    def _async_tick(self, now: datetime) -> None:
+        del now
+        if self._since is not None:
+            self._count()
+            self.async_write_ha_state()
+
+    def _count(self) -> None:
+        """Add the energy since the last sample, then start a new one."""
+        now = monotonic()
+        if self._since is not None:
+            started, watts = self._since
+            self._total_kwh += watts * (now - started) / 3_600_000
+        watts_now = (
+            estimated_power_w(self.coordinator.data)
+            if self.coordinator.last_update_success
+            else None
+        )
+        self._since = None if watts_now is None else (now, watts_now)
