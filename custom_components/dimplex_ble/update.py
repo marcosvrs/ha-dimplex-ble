@@ -22,7 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 1
 SCAN_INTERVAL = FIRMWARE_CHECK_INTERVAL
-# After a flash the heater may reboot: re-read it for up to a minute.
+# After a flash the heater may reboot: re-read it for about a minute.
 CONFIRM_ATTEMPTS = 6
 CONFIRM_WAIT_S = 10.0
 
@@ -134,7 +134,7 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
         await self._async_confirm(image.version)
 
     async def _async_confirm(self, version: str) -> None:
-        """Re-read the heater (it may be rebooting) until it reports ``version``."""
+        """Re-read the heater (it may be rebooting) about a minute for ``version``."""
         for _ in range(CONFIRM_ATTEMPTS):
             await asyncio.sleep(CONFIRM_WAIT_S)
             await self.coordinator.async_refresh()
