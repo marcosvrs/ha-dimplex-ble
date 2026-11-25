@@ -54,6 +54,7 @@ from .protocol import (
     SchedulePeriod,
     encode_away_mode,
     encode_boost_minutes,
+    encode_schedule_day,
     encode_setback,
     encode_setpoint,
     encode_sound,
@@ -287,12 +288,22 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         is safe: it replaces the same days. (No rollback: undoing would need
         more writes over the link that just failed.)
         """
+        programme = SCHEDULE_PROGRAMMES[preset]
+        try:
+            payloads = {
+                day: encode_schedule_day(programme, day, periods)
+                for day, periods in days.items()
+            }
+        except DimplexProtocolError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_schedule",
+                translation_placeholders={"reason": str(err)},
+            ) from err
         readback: dict[int, tuple[SchedulePeriod, ...] | None] = {}
         try:
             await self.async_command(
-                self.link.async_save_schedule(
-                    SCHEDULE_PROGRAMMES[preset], days, readback
-                )
+                self.link.async_save_schedule(programme, payloads, readback)
             )
         except HomeAssistantError as err:
             self._store_schedule_days(preset, readback)

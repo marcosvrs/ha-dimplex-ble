@@ -12,7 +12,6 @@ from homeassistant.core import (
     SupportsResponse,
     callback,
 )
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import service
 
@@ -20,9 +19,7 @@ from .const import DOMAIN
 from .coordinator import SCHEDULE_PROGRAMMES, DimplexConfigEntry
 from .protocol import (
     SCHEDULE_PERIODS,
-    DimplexProtocolError,
     SchedulePeriod,
-    encode_schedule_day,
 )
 
 _DEVICE_ID = "device_id"
@@ -95,15 +92,6 @@ def async_setup_services(hass: HomeAssistant) -> None:
         )
         for period in periods:
             coordinator.check_setpoint(period.temperature_c)
-        try:
-            # Validates the periods before anything is written.
-            encode_schedule_day(1, 0, periods)
-        except DimplexProtocolError as err:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_schedule",
-                translation_placeholders={"reason": str(err)},
-            ) from err
         await coordinator.async_save_schedule(
             call.data["programme"],
             {DAYS.index(day): periods for day in call.data["days"]},

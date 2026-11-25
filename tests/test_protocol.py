@@ -13,7 +13,6 @@ from custom_components.dimplex_ble.protocol import (
     _parse_selected_version,
     characteristic_uuid,
     encode_away_mode,
-    encode_heating_mode,
     encode_preset_mode,
     encode_setback,
     encode_setpoint,
@@ -23,8 +22,8 @@ from custom_components.dimplex_ble.protocol import (
     gatt_uuid_candidates,
     heating_mode_key,
     heating_mode_of,
-    parse_advance,
     parse_away_mode,
+    parse_flag,
     parse_model,
     parse_setback,
     parse_snapshot,
@@ -230,12 +229,6 @@ def test_preset_mode_encoding_rejects_unverified_modes() -> None:
     assert str(err.value) == "Unsupported preset mode"
 
 
-def test_heating_mode_encoding_rejects_unknown_modes() -> None:
-    with pytest.raises(DimplexProtocolError) as err:
-        encode_heating_mode(0xFF)
-    assert str(err.value) == "Unsupported heating mode"
-
-
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [(b"\x00\x00\x00", False), (b"\x01\x00\x00", True)],
@@ -420,14 +413,6 @@ def test_given_invalid_away_payload_or_encodable_limits_then_protocol_errors_are
         encode_away_mode(True, datetime(2026, 1, 1), 256)
 
 
-def test_given_an_unknown_timer_submode_then_encoding_rejects_it() -> None:
-    """Given an unsupported timer submode, no unsafe command is encoded."""
-    from custom_components.dimplex_ble.protocol import encode_timer_mode
-
-    with pytest.raises(DimplexProtocolError, match="timer"):
-        encode_timer_mode(255)
-
-
 def test_out_all_day_preset_round_trips_the_timer_submode() -> None:
     payload = encode_preset_mode("out_all_day")
     assert payload == b"\x01\x01\x00\x00\x00\x00"
@@ -436,14 +421,14 @@ def test_out_all_day_preset_round_trips_the_timer_submode() -> None:
 
 @pytest.mark.parametrize(("payload", "active"), [(b"\x00", False), (b"\x01", True)])
 def test_advance_reads_off_and_on(payload: bytes, active: bool) -> None:
-    assert parse_advance(payload) is active
+    assert parse_flag(payload) is active
 
 
 @pytest.mark.parametrize("payload", [None, b"", b"\x02", b"\x06", b"\x81", b"\x00\x00"])
 def test_advance_leaves_boost_variants_and_bad_lengths_unknown(
     payload: bytes | None,
 ) -> None:
-    assert parse_advance(payload) is None
+    assert parse_flag(payload) is None
 
 
 def test_parse_snapshot_decodes_advance() -> None:

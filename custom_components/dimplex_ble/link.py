@@ -43,7 +43,6 @@ from .protocol import (
     HeaterSnapshot,
     SchedulePeriod,
     encode_clock,
-    encode_schedule_day,
     encode_schedule_request,
     gatt_uuid_candidates,
     parse_clock,
@@ -337,18 +336,14 @@ class HeaterLink:
     async def async_save_schedule(
         self,
         programme: int,
-        days: dict[int, tuple[SchedulePeriod, ...]],
+        payloads: dict[int, bytes],
         readback: dict[int, tuple[SchedulePeriod, ...] | None],
     ) -> None:
-        """Save whole days of one programme, reading each back before the next.
+        """Save encoded days of one programme, reading each back before the next.
 
         ``readback`` collects each day as the heater returns it, so a caller
         knows which days were saved even when a later one fails.
         """
-        payloads = {
-            day: encode_schedule_day(programme, day, periods)
-            for day, periods in days.items()
-        }
         async with self._operation("save schedule") as client:
             for day, payload in payloads.items():
                 await _write(client, SCHEDULE, payload)

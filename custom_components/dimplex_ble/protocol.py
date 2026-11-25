@@ -221,11 +221,16 @@ HEATING_MODE_KEYS: Final = (
     PRESET_FROST_PROTECT,
 )
 
-_PRESET_MODE_CODES: Final[dict[str, int]] = {
-    PRESET_MANUAL: HEATING_MODE_MANUAL,
-    PRESET_USER_TIMER: HEATING_MODE_TIMER,
-    "eco": HEATING_MODE_ECO,
-    PRESET_FROST_PROTECT: HEATING_MODE_FROST_PROTECT,
+# Verified HeatingMode writes (hardware 2026-11-24): [mode, timer submode, 0...].
+_PRESET_PAYLOADS: Final[dict[str, bytes]] = {
+    PRESET_MANUAL: bytes((HEATING_MODE_MANUAL, 0, 0, 0, 0, 0)),
+    "eco": bytes((HEATING_MODE_ECO, 0, 0, 0, 0, 0)),
+    PRESET_FROST_PROTECT: bytes((HEATING_MODE_FROST_PROTECT, 0, 0, 0, 0, 0)),
+    PRESET_USER_TIMER: bytes(
+        (HEATING_MODE_TIMER, TIMER_SUBMODE_USER_TIMER, 0, 0, 0, 0)
+    ),
+    PRESET_HOME_ALL_DAY: bytes((HEATING_MODE_TIMER, TIMER_SUBMODE_HOME, 0, 0, 0, 0)),
+    PRESET_OUT_ALL_DAY: bytes((HEATING_MODE_TIMER, TIMER_SUBMODE_OUT, 0, 0, 0, 0)),
 }
 
 
@@ -296,33 +301,12 @@ def parse_model(value: str | None) -> str | None:
     return " ".join(parts)
 
 
-def encode_timer_mode(submode: int) -> bytes:
-    """Encode a verified timer-mode selection."""
-    if submode not in _TIMER_SUBMODE_NAMES:
-        raise DimplexProtocolError("Unsupported timer submode")
-    return bytes((HEATING_MODE_TIMER, submode, 0, 0, 0, 0))
-
-
-def encode_heating_mode(mode_code: int) -> bytes:
-    """Encode a verified operating-mode command."""
-    if mode_code not in _HEATING_MODE_NAMES:
-        raise DimplexProtocolError("Unsupported heating mode")
-    if mode_code == HEATING_MODE_TIMER:
-        return encode_timer_mode(TIMER_SUBMODE_USER_TIMER)
-    return bytes((mode_code, 0, 0, 0, 0, 0))
-
-
 def encode_preset_mode(preset: str) -> bytes:
     """Encode a verified panel-heater preset command."""
-    if preset == PRESET_HOME_ALL_DAY:
-        return encode_timer_mode(TIMER_SUBMODE_HOME)
-    if preset == PRESET_OUT_ALL_DAY:
-        return encode_timer_mode(TIMER_SUBMODE_OUT)
     try:
-        code = _PRESET_MODE_CODES[preset]
+        return _PRESET_PAYLOADS[preset]
     except KeyError as err:
         raise DimplexProtocolError("Unsupported preset mode") from err
-    return encode_heating_mode(code)
 
 
 def parse_sound_enabled(value: bytes | None) -> bool | None:
@@ -339,8 +323,11 @@ def encode_sound(enabled: bool) -> bytes:
     return bytes((int(enabled), 0, 0))
 
 
-def parse_advance(value: bytes | None) -> bool | None:
-    """Decode AdvanceHeating: ``Off=0``/``On=1``; boost variants are unknown."""
+def parse_flag(value: bytes | None) -> bool | None:
+    """Decode a one-byte ``Off=0``/``On=1`` setting; anything else is unknown.
+
+    AdvanceHeating also has boost variants (2-6, 0x81-0x8D): unknown here.
+    """
     if value is None or len(value) != 1 or value[0] not in (0, 1):
         return None
     return bool(value[0])
@@ -491,16 +478,12 @@ def parse_snapshot(
         else None
     )
     preemptive = values.get(PREEMPTIVE_HEATING)
-    preemptive_heating = (
-        bool(preemptive[0])
-        if preemptive is not None and len(preemptive) == 1 and preemptive[0] in (0, 1)
-        else None
-    )
+    preemptive_heating = parse_flag(preemptive)
     away_mode = parse_away_mode(values.get(AWAY_MODE))
     away_active = away_mode[0] if away_mode is not None else None
     away_until = away_mode[1] if away_mode is not None else None
     away_target_temperature_c = away_mode[2] if away_mode is not None else None
-    advance_active = parse_advance(values.get(ADVANCE_HEATING))
+    advance_active = parse_flag(values.get(ADVANCE_HEATING))
 
     power_loading = values.get(POWER_LOADING)
     rated_power_w = (

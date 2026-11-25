@@ -26,7 +26,6 @@ from .const import CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES, DOMAIN
 from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .protocol import (
-    HEATING_MODE_MANUAL,
     PRESET_FROST_PROTECT,
     PRESET_HOME_ALL_DAY,
     PRESET_MANUAL,
@@ -34,7 +33,6 @@ from .protocol import (
     PRESET_USER_TIMER,
     SETPOINT,
     TIMER_MODE_KEYS,
-    encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
     heating_mode_of,
@@ -264,7 +262,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         await self.coordinator.async_set_heating_mode(
             encode_preset_mode(self._last_schedule)
             if hvac_mode == HVACMode.AUTO
-            else encode_heating_mode(HEATING_MODE_MANUAL)
+            else encode_preset_mode(PRESET_MANUAL)
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
