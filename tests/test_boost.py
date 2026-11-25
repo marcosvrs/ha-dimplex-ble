@@ -134,18 +134,20 @@ async def test_start_writes_minutes_then_the_setpoint_in_one_link(
     assert coordinator.data.operating_mode_hex == "020000020000"
 
 
-async def test_cancel_writes_zero_and_reads_the_restored_mode(hass, fake_bt) -> None:
+async def test_a_mode_write_ends_boost_first_and_reads_the_result(
+    hass, fake_bt
+) -> None:
     proxy = heater(fake_bt.add(), USER_TIMER)
     coordinator = await setup(hass, make_entry(hass))
     await coordinator.async_start_boost(60, 22)
     assert coordinator.data.operating_mode_hex == "010300020000"
     proxy.events.clear()
 
-    await coordinator.async_cancel_boost()
+    await coordinator.async_set_heating_mode(bytes((2, 0, 0, 0, 0, 0)))
 
-    assert writes(proxy) == [("1027", b"\x00\x00")]
+    assert writes(proxy) == [("1027", b"\x00\x00"), ("1001", bytes((2, 0, 0, 0, 0, 0)))]
     assert coordinator.data.boost_minutes_left == 0
-    assert coordinator.data.operating_mode_hex == "010300000000"
+    assert coordinator.data.operating_mode_hex == "020000000000"
 
 
 # --- The climate entity -------------------------------------------------------
@@ -168,8 +170,7 @@ def climate(hass, *, minutes=0, mode_hex="040000000000", boost_temperature=22, *
         ),
     )
     coordinator.async_start_boost = AsyncMock()
-    coordinator.async_cancel_boost = AsyncMock()
-    coordinator.async_write_mode = AsyncMock()
+    coordinator.async_set_heating_mode = AsyncMock()
     coordinator.async_write = AsyncMock()
     coordinator.async_set_away_mode = AsyncMock()
     return coordinator, DimplexClimate(coordinator)
@@ -222,31 +223,30 @@ async def test_boost_from_a_timer_programme_stays_auto_with_a_target(hass) -> No
         await entity.async_set_temperature(temperature=23, hvac_mode=HVACMode.HEAT)
 
 
-async def test_another_preset_ends_boost_first(hass) -> None:
+async def test_another_preset_is_a_mode_write(hass) -> None:
+    """The coordinator ends Boost first (see the link-level test above)."""
     coordinator, entity = climate(hass, minutes=29, mode_hex="020000010000")
-    order: list[str] = []
-    coordinator.async_cancel_boost.side_effect = lambda: order.append("cancel")
-    coordinator.async_write_mode.side_effect = lambda *a, **k: order.append("mode")
 
     await entity.async_set_preset_mode("eco")
 
-    assert order == ["cancel", "mode"]
+    coordinator.async_set_heating_mode.assert_awaited_once_with(
+        b"\x03\x00\x00\x00\x00\x00"
+    )
 
 
-async def test_away_ends_boost_first(hass) -> None:
+async def test_away_during_boost_goes_to_the_away_write(hass) -> None:
     coordinator, entity = climate(hass, minutes=29, mode_hex="020000010000")
     await entity.async_set_preset_mode("away")
-    coordinator.async_cancel_boost.assert_awaited_once()
     coordinator.async_set_away_mode.assert_awaited_once_with(True)
+    coordinator.async_set_heating_mode.assert_not_awaited()
 
 
-async def test_a_mode_change_ends_boost_first(hass) -> None:
+async def test_a_mode_change_during_boost_is_a_mode_write(hass) -> None:
     coordinator, entity = climate(hass, minutes=29, mode_hex="010300010000")
 
     await entity.async_set_hvac_mode(HVACMode.HEAT)
 
-    coordinator.async_cancel_boost.assert_awaited_once()
-    coordinator.async_write_mode.assert_awaited_once()
+    coordinator.async_set_heating_mode.assert_awaited_once()
 
 
 async def test_the_same_mode_keeps_boost_running(hass) -> None:
@@ -255,8 +255,7 @@ async def test_the_same_mode_keeps_boost_running(hass) -> None:
 
     await entity.async_set_hvac_mode(HVACMode.HEAT)
 
-    coordinator.async_cancel_boost.assert_not_awaited()
-    coordinator.async_write_mode.assert_not_awaited()
+    coordinator.async_set_heating_mode.assert_not_awaited()
 
 
 def test_boost_is_not_offered_in_away(hass) -> None:

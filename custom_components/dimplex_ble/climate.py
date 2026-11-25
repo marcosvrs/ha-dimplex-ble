@@ -26,7 +26,6 @@ from .const import CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES, DOMAIN
 from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .protocol import (
-    HEATING_MODE,
     HEATING_MODE_MANUAL,
     PRESET_FROST_PROTECT,
     PRESET_HOME_ALL_DAY,
@@ -262,15 +261,10 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             )
         if self.hvac_mode == hvac_mode:
             return  # idempotent: a running Boost keeps running
-        if self._boosting:
-            await self.coordinator.async_cancel_boost()
-        payload = (
+        await self.coordinator.async_set_heating_mode(
             encode_preset_mode(self._last_schedule)
             if hvac_mode == HVACMode.AUTO
             else encode_heating_mode(HEATING_MODE_MANUAL)
-        )
-        await self.coordinator.async_write_mode(
-            HEATING_MODE, payload, leave_away=self._in_away
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -306,14 +300,10 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         if preset_mode == PRESET_BOOST:
             await self._async_start_boost()
             return
-        if self._boosting:
-            await self.coordinator.async_cancel_boost()
         if preset_mode == PRESET_AWAY:
-            await self.coordinator.async_set_away_mode(True)
+            await self.coordinator.async_set_away_mode(True)  # ends Boost first
             return
-        await self.coordinator.async_write_mode(
-            HEATING_MODE, encode_preset_mode(preset_mode), leave_away=self._in_away
-        )
+        await self.coordinator.async_set_heating_mode(encode_preset_mode(preset_mode))
 
     async def _async_start_boost(self) -> None:
         """Start Boost at the heater's Boost temperature for the chosen length."""
@@ -339,7 +329,3 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             )
         )
         await self.coordinator.async_start_boost(minutes, temperature)
-
-    def _in_away(self) -> bool:
-        """Return whether the heater is in Away now (checked under the Away lock)."""
-        return self.preset_mode == PRESET_AWAY

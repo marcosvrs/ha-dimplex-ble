@@ -643,7 +643,7 @@ async def test_per_poll_leaves_away_and_sets_the_mode_in_one_connection(
     hass, fake_bt
 ) -> None:
     """Review round 10: two connections would be 10 s apart (settle)."""
-    from custom_components.dimplex_ble.protocol import AWAY_MODE, HEATING_MODE
+    from custom_components.dimplex_ble.protocol import AWAY_MODE
 
     proxy = fake_bt.add()
     proxy.services.add(AWAY_MODE)
@@ -651,9 +651,7 @@ async def test_per_poll_leaves_away_and_sets_the_mode_in_one_connection(
     coordinator = await setup(hass, make_entry(hass, **{CONF_KEEP_CONNECTED: False}))
     proxy.events.clear()
 
-    await coordinator.async_write_mode(
-        HEATING_MODE, bytes((2, 0, 0, 0, 0, 0)), leave_away=lambda: True
-    )
+    await coordinator.async_set_heating_mode(bytes((2, 0, 0, 0, 0, 0)))
 
     writes = [e[1][4:8] for e in proxy.events if e[0] == "write"]
     assert writes[writes.index("102a") + 1] == "1001"

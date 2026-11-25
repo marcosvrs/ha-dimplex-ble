@@ -35,6 +35,8 @@ from .protocol import (
     AWAY_TEMPERATURE_MAX_C,
     AWAY_TEMPERATURE_MIN_C,
     BOOST_REMAINING,
+    HEATING_MODE,
+    PRESET_AWAY,
     PRESET_HOME_ALL_DAY,
     PRESET_OUT_ALL_DAY,
     PRESET_USER_TIMER,
@@ -56,6 +58,7 @@ from .protocol import (
     encode_setpoint,
     encode_sound,
     encode_temperature_offset,
+    heating_mode_of,
     parse_away_mode,
     parse_setback,
     parse_sound_enabled,
@@ -251,11 +254,6 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             # Before the lock is released, so an Away write right after sees
             # the running Boost and ends it first.
             self._apply_written(boost_minutes_left=minutes)
-        await self.async_refresh()
-
-    async def async_cancel_boost(self) -> None:
-        """End Boost; the heater returns to its previous mode by itself."""
-        await self._async_end_boost()
         await self.async_refresh()
 
     async def _async_end_boost(self) -> None:
@@ -515,27 +513,29 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             await self._async_write_away_mode(active, until)
         await self.async_request_refresh()
 
-    async def async_write_mode(
-        self,
-        address: GattAddress,
-        payload: bytes,
-        *,
-        leave_away: Callable[[], bool],
-    ) -> None:
-        """Leave Away first when ``leave_away()``, then write a mode, as one sequence.
+    async def async_set_heating_mode(self, payload: bytes) -> None:
+        """Write a heating mode, ending Boost and leaving Away first.
 
-        ``leave_away`` is evaluated under the Away lock, and holding the lock
-        across both writes keeps an Away temperature change from re-entering
-        Away between them.
+        Under the Away lock, so an Away temperature change cannot re-enter Away
+        between the writes.
         """
         async with self._away_lock:
-            if leave_away():
+            data = self.data
+            if isinstance(data, HeaterSnapshot) and data.boost_minutes_left:
+                await self._async_end_boost()
+            data = self.data
+            if data is not None and (
+                data.away_active
+                or heating_mode_of(data.operating_mode_hex) == PRESET_AWAY
+            ):
                 # One link operation: in per-poll mode separate writes would be
                 # 10 s apart, and the Away write alone can leave the heater in
                 # Away (any Away-record write enters it; the mode write ends it).
-                await self._async_write_away_mode(False, None, then=(address, payload))
+                await self._async_write_away_mode(
+                    False, None, then=(HEATING_MODE, payload)
+                )
             else:
-                await self.async_write(address, payload, refresh=False)
+                await self.async_write(HEATING_MODE, payload, refresh=False)
         # Not the debounced request: the next action of a script (a preset of
         # the new mode) is validated against the state, so it must be current.
         await self.async_refresh()
