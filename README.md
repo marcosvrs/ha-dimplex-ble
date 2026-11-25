@@ -2,7 +2,8 @@
 
 Unofficial Home Assistant custom integration that controls Dimplex Bluetooth
 panel heaters (tested on the PLX050E Series C) locally, through ESPHome
-Bluetooth proxies. No cloud, no Dimplex app.
+Bluetooth proxies. No Dimplex app; the Dimplex cloud is used only for firmware
+updates, and only after you sign in.
 
 > [!WARNING]
 > **Treat every Home Assistant automation for these heaters as unreliable.**
@@ -95,14 +96,18 @@ The warning above in practice:
 The heater is added as "Dimplex Heater AMxxxx". To change its proxy later, use
 **Reconfigure** on the integration entry.
 
-**Settings** (the heater's **Configure**; the clock option is also in setup and
-**Reconfigure**):
+**Settings for all heaters** (optional): **Add device** → **Dimplex settings
+for all heaters** adds one **Dimplex** entry; change it later with its
+**Configure**. Without it, heaters use the defaults.
 
 - **Sync the heater clock** (on by default): sets the heater clock to Home
   Assistant's time whenever it is more than a minute off, as the Dimplex app
   does. Timer schedules run on the heater clock, so leave it on unless another
   app manages the clock.
 - **Boost length**: how long the Boost preset lasts, 1–240 minutes (default 60).
+- **Dimplex email and password** (for firmware updates): your Dimplex (ConfigR)
+  account, entered once. Home Assistant keeps only a sign-in token; when
+  Dimplex stops accepting it, Home Assistant asks you to sign in again.
 
 ## Choosing a Bluetooth proxy
 
@@ -169,6 +174,7 @@ Each heater becomes one device with:
 | Estimated power | Rated power × output %, in W. Can be added to the Energy dashboard (Home Assistant then estimates kWh). |
 | Error (diagnostic) | "No error", a fault from the Dimplex manual (for example "Open window detected (50)"), or "Code N" for an undocumented code. |
 | Operating mode, Rated power, Controller temperature, Output power (diagnostic, disabled) | Enable them on the device page if needed. |
+| Firmware | Installed display firmware and Dimplex's latest, checked every 12 hours; **Install** updates the heater over Bluetooth (about 7 minutes). Needs the Dimplex sign-in. |
 | Temperature offset (installer setting, disabled) | Corrects the room reading, −3.0 to +3.0 °C in 0.1 °C steps. Dimplex reserves it for service staff. |
 
 Sound, Setback and Temperature offset are read every 5 minutes (and right after
@@ -269,11 +275,10 @@ problem.
   or remove the fuse supplying the unit, wait at least 5 seconds, then switch it
   on."
 - Otherwise, power-cycling a heater is a last resort, not a routine fix.
-- **Heater firmware updates are not handled.** The integration is fully local
-  and only shows the installed heater firmware version on the device page. To
-  check for or install an update, use the Dimplex ConfigR app next to the
-  heater (it needs a Dimplex account); Home Assistant cannot connect to the
-  heater while the app is connected.
+- **Firmware updates** come from Dimplex and need the Dimplex sign-in. During
+  an update Home Assistant cannot control the heater; keep it switched on and
+  its proxy online. If an update stops, Home Assistant says why and you can
+  install again. Updates are never installed automatically.
 
 ## Troubleshooting
 
@@ -335,7 +340,8 @@ names are used only to identify compatibility.
 
 The repository does not distribute the ConfigR application, decompiled source,
 extracted binaries, proprietary assets, Dimplex firmware, credentials, or cloud
-access. The project does not bypass authentication or security controls;
+access. Firmware is downloaded from Dimplex with the user's own Dimplex
+account. The project does not bypass authentication or security controls;
 pairing uses the PIN displayed by the user's own heater. It is based on
 independently written code, observed behaviour of user-owned devices and public
 documentation.
