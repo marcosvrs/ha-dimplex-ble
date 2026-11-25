@@ -274,6 +274,9 @@ async def test_the_menu_adds_the_dimplex_entry_with_a_sign_in(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": "settings"}
     )
+    signup = result["description_placeholders"]["signup_url"]
+    assert signup.startswith(f"{cloud.OAUTH}/authorize?")
+    assert "B2C_1A_DimplexToolkitSignupSignin" in signup
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
@@ -337,6 +340,7 @@ async def test_without_a_sign_in_the_settings_offer_it(hass, fake_bt, dimplex) -
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert {str(key) for key in result["data_schema"].schema} >= {"email", "password"}
+    assert result["description_placeholders"] == {"signup_url": cloud.SIGNUP_URL}
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {**shared, "email": "me@x"}
     )

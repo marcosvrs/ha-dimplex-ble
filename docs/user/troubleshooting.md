@@ -17,8 +17,9 @@ The heater must be heard by a proxy running the PIN responder.
 
 ## No PIN appears
 
-The proxy refused or lost the connection.
+The connection didn't reach the PIN request. Check, in order:
 
+- **Proxy offline**: the proxy is online under **ESPHome**
 - **Proxy busy**: choose another proxy, especially one not tagged **⚠ already serves 2 heaters** or **⚠ full**
 - **Another heater pairing**: wait until it finishes
 - **PIN gone before you typed it**: choose **Show PIN again**
@@ -26,7 +27,7 @@ The proxy refused or lost the connection.
 
 ## Heater stopped responding
 
-This repair appears when a heater's connection ended unexpectedly and no proxy heard the heater for 60 seconds while its proxy stayed online. On the tested heaters this meant the heater's Bluetooth had stopped, and only a power cycle restarted it. First check that other Bluetooth devices on the same proxy still report.
+This repair appears when no proxy heard the heater for 60 seconds while its proxy stayed online, after a connection ended unexpectedly or the proxy stopped hearing the heater. On the tested heaters this meant the heater's Bluetooth had stopped, and only a power cycle restarted it. First check that other Bluetooth devices on the same proxy still report.
 
 1. Switch the heater off at its isolator switch, or at the circuit breaker or fuse, for at least 5 seconds.
 2. Switch it on. Home Assistant reconnects without a PIN and clears the repair once it hears the heater.
@@ -35,7 +36,7 @@ No phone app can reach a stalled heater either.
 
 ## A heater is unavailable
 
-An unavailable heater isn't a PIN problem: Home Assistant keeps retrying and asks for the PIN only when the heater rejects the saved one.
+An unavailable heater isn't a PIN problem: Home Assistant keeps retrying. It asks for the PIN only when the heater asks for one that Home Assistant can't answer: the saved PIN was rejected, or the entry has none because the proxy was already paired with the heater.
 
 1. If every heater on the same proxy is unavailable, check the proxy: is it online, and does it still report other Bluetooth devices?
 2. If only this heater is unavailable right after a restart, count the heaters on its proxy. With 3 or more, move one with **Reconfigure**.

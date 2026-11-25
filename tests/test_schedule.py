@@ -777,16 +777,14 @@ async def test_a_save_refused_for_another_reason_is_not_queued(hass, fake_bt) ->
     assert coordinator.schedule_keeper.pending == {}
 
 
-async def test_an_incomplete_backup_is_filled_in_and_only_restored_whole(
-    hass, fake_bt
-) -> None:
-    """Codex review: a day unreadable at first is filled in by a later read."""
+async def test_only_a_complete_read_seeds_the_backup(hass, fake_bt) -> None:
+    """Codex review: a partial read could later be completed from a reset heater."""
     proxy = with_schedules(fake_bt.add())
     proxy.schedule[(3, 5)] = bytes(31)  # Saturday reads back as nothing usable
     entry = make_entry(hass)
     coordinator = await setup(hass, entry)
     keeper = coordinator.schedule_keeper
-    assert keeper.backup["user_timer"][5] is None
+    assert "user_timer" not in keeper.backup
 
     with pytest.raises(ServiceValidationError):  # half a week is not restored
         await coordinator.async_restore_schedule("user_timer")

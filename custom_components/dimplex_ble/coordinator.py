@@ -203,9 +203,13 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 for preset, days in list(self.schedule_keeper.pending.items()):
                     await self._async_save_schedule(preset, dict(days))
         except HomeAssistantError as err:
-            _LOGGER.debug(
-                "Pending schedule for %s not written: %s", self.link.address, err
+            # A refused day is dropped (it would never be kept): say so.
+            log = (
+                _LOGGER.warning
+                if err.translation_key == "schedule_not_saved"
+                else _LOGGER.debug
             )
+            log("Pending schedule for %s not written: %s", self.link.address, err)
         finally:
             self._applying_pending = False
 

@@ -120,11 +120,11 @@ The integration provides these actions, all targeting one heater:
 | Action | What it does | Fields |
 | --- | --- | --- |
 | `dimplex_ble.set_schedule` | Replaces the heating periods of one programme on the chosen days | `device_id`; `programme`: `user_timer`, `home_all_day` or `out_all_day`; `days`: any of `mon` to `sun`; `periods`: up to 4 per day, each with `start` and `end` (`HH:MM`) and `temperature` (°C). `[]` removes all periods. |
-| `dimplex_ble.get_schedule` | Returns, per programme, the periods as last read with `read_at`, the changes waiting for the heater (`pending`) and the backup copy (`backup`) | `device_id`; optional `programme` (default: all three) |
+| `dimplex_ble.get_schedule` | Returns `read_at`, the time of the last read, and per programme the periods as last read (`heater`), the changes waiting for the heater (`pending`) and the backup copy (`backup`) | `device_id`; optional `programme` (default: all three) |
 | `dimplex_ble.restore_schedule` | Writes the backup copy back to the heater. Only complete weeks are restored. | `device_id`; optional `programme` (default: every programme with a backup) |
 | `dimplex_ble.get_gatt_services` | Returns the heater's Bluetooth services and characteristics, for bug reports | `device_id` |
 
-`set_schedule` reads each day back from the heater and fails if the heater didn't keep it. If the heater can't be reached, the action still succeeds: Home Assistant keeps the change across restarts, shows a repair, and writes the change as soon as the heater answers. The backup copy starts from the first complete read and then follows only changes saved through Home Assistant, so a heater reset to factory programmes never overwrites it. See [Timer programmes](docs/user/schedules.md) for the format.
+`set_schedule` reads each day back from the heater and fails if the heater didn't keep it. If the heater can't be reached, the action still succeeds: Home Assistant keeps the change across restarts, shows a repair, and writes the change as soon as the heater answers. The backup copy starts from the first read of all 7 days and then follows only changes saved through Home Assistant, so a heater reset to factory programmes never overwrites it. See [Timer programmes](docs/user/schedules.md) for the format.
 
 ## Data updates
 
@@ -195,7 +195,7 @@ These limits come from the heaters and the Bluetooth proxies:
 Check the layers in order: the proxy, the Bluetooth connection, then the heater. Re-entering the PIN rarely helps. The [troubleshooting guide](docs/user/troubleshooting.md) covers:
 
 - **No proxy offered**: install the PIN responder on a proxy near the heater and close any phone app
-- **No PIN appears**: the proxy couldn't connect; choose another proxy
+- **No PIN appears**: the connection didn't reach the PIN request; check the proxy, then choose another
 - **Heater stopped responding**: switch the heater off at the wall for 5 seconds
 - **Unavailable after a restart**: move heaters so no proxy serves more than 2
 

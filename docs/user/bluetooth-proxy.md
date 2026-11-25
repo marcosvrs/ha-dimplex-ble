@@ -27,9 +27,9 @@ The setup dialog lists every proxy that hears the heater and runs the PIN respon
 
 | Tag | Meaning |
 | --- | --- |
-| **Recommended** | A free connection, fewest heaters, then the strongest signal |
+| **Recommended** | The first in the list. Proxies are ordered by: a free connection and fewer than 2 heaters or open connections; then the heater's current proxy; then the strongest signal. |
 | **current** | The proxy the heater uses now. Keeping it needs no PIN. |
-| **⚠ already serves 2 heaters** | A third heater on this proxy won't reconnect after Home Assistant restarts |
+| **⚠ already serves 2 heaters** | 2 or more heaters, or open Bluetooth connections, on this proxy. A third heater won't reconnect after Home Assistant restarts. |
 | **⚠ full** | No free connection, so pairing can't start |
 
 Proxies that hear the heater but can't be used are listed under **Not shown**: they lack the PIN responder or are offline.
@@ -44,6 +44,6 @@ Keep at most 2 heaters per ESP32-S3 proxy. With 3, the proxy refuses one heater 
 
 ## Keep the PIN private
 
-Home Assistant stores each heater's PIN in its configuration storage so it can restore the pairing without you. The PIN never appears in this integration's logs or diagnostics, and the integration blanks it from the `aioesphomeapi.connection` debug log.
+Home Assistant stores the PIN you type in its configuration storage so it can restore the pairing without you. A heater added on a proxy that was already paired with it stores no PIN; if that pairing is lost, Home Assistant asks for the PIN. The PIN never appears in this integration's logs or diagnostics, and the integration blanks it from the `aioesphomeapi.connection` debug log.
 
 Don't call the `dimplex_pin_arm` proxy action from automations or scripts: Home Assistant records action data, including the PIN.

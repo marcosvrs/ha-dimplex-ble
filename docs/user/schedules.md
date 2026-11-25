@@ -41,15 +41,15 @@ Home Assistant writes one day at a time and reads it back. The action fails if t
 
 ## When the heater can't be reached
 
-A change saved while the heater is unreachable isn't lost. The action succeeds, Home Assistant keeps the change across restarts and shows the repair **Heater: schedule change waiting**. It writes the change after the next successful update. Days written before the heater dropped the link apply at once; the other days keep their previous periods until then. `get_schedule` shows which days still wait.
+A change saved while the heater is unreachable isn't lost. The action succeeds, Home Assistant keeps the change across restarts and shows the repair **Heater: schedule change waiting**. It writes the change after the next successful update. Days written before the heater dropped the link apply at once; the other days keep their previous periods until then. `get_schedule` shows which days still wait. If the heater then refuses a waiting day, Home Assistant drops it and logs a warning.
 
 ## Read a programme
 
-`dimplex_ble.get_schedule` returns, per programme:
+`dimplex_ble.get_schedule` returns `read_at`, the time of the last read, and per programme:
 
-- **the programme** as last read from the heater, with `read_at`
-- **waiting changes** not yet written
-- **the backup copy** kept by Home Assistant
+- `heater`: the programme as last read from the heater
+- `pending`: waiting changes not yet written
+- `backup`: the backup copy kept by Home Assistant
 
 Days are lists of `[start, end, temperature]` periods, so a script can copy one day to others.
 
@@ -57,4 +57,4 @@ Days are lists of `[start, end, temperature]` periods, so a script can copy one 
 
 `dimplex_ble.restore_schedule` writes the backup copy back to the heater, for one programme or every programme with a backup. Use it after a factory reset. The backup belongs to the heater's entry: deleting the entry deletes it, so a replacement heater starts without one. Copy the programmes from `get_schedule` before removing an entry.
 
-The backup starts from the first complete read of each programme and then follows only the changes saved through Home Assistant. A heater reset to its factory programmes therefore never overwrites it. Only complete weeks are restored.
+The backup starts from the first read that returns all 7 days of a programme and then follows only the changes saved through Home Assistant. A heater reset to its factory programmes therefore never overwrites it. A reset before that first complete read leaves no backup of the earlier programme. Only complete weeks are restored; when one requested programme has no complete backup, nothing is restored.

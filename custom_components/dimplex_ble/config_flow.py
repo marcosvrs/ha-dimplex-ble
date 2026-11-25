@@ -298,6 +298,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="settings",
             data_schema=_settings_schema(user_input or {}, sign_in=True),
             errors=errors,
+            description_placeholders=_SIGNUP,
         )
 
     async def async_step_heater(
@@ -822,6 +823,9 @@ def _sign_in_fields(*, required: bool) -> dict[Any, Any]:
     }
 
 
+_SIGNUP = {"signup_url": cloud.SIGNUP_URL}
+
+
 def _settings_schema(values: Mapping[str, Any], *, sign_in: bool) -> probatio.Schema:
     """Clock sync, Boost length and (until signed in) the Dimplex sign-in."""
     schema: dict[Any, Any] = {
@@ -897,4 +901,5 @@ class DimplexOptionsFlow(OptionsFlow):
                 {**entry.options, **(user_input or {})}, sign_in=not signed_in
             ),
             errors=errors,
+            description_placeholders=_SIGNUP,
         )

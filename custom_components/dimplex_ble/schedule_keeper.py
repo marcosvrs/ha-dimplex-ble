@@ -72,12 +72,13 @@ class ScheduleKeeper:
         self._update_issue()
 
     def note_read(self, preset: str, week: list[Day | None]) -> None:
-        """Seed the backup from a read: only days the backup does not know yet.
+        """Seed the backup from a complete read: only days it does not know yet.
 
         Days saved through Home Assistant are never replaced by a read, so a
-        reset heater cannot overwrite them; unknown days are filled in.
+        reset heater cannot overwrite them. A partial read seeds nothing: its
+        missing days could later be filled from a reset heater, mixing weeks.
         """
-        if all(periods is None for periods in week):
+        if any(periods is None for periods in week):
             return
         backup = self.backup.setdefault(preset, [None] * SCHEDULE_DAYS)
         filled = False

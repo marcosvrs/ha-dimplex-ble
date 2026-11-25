@@ -92,7 +92,7 @@
         "data_description": {
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
           "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
-          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
+          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates. No account? [Create one]({signup_url}) with **Sign up now**."
         }
       },
       "reauth_account": {
@@ -141,7 +141,7 @@
         "data_description": {
           "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
           "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min).",
-          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates."
+          "email": "For firmware updates: your Dimplex (ConfigR) account. Home Assistant keeps only a sign-in token, not the password. Leave empty for no updates. No account? [Create one]({signup_url}) with **Sign up now**."
         }
       }
     },

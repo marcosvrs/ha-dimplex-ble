@@ -222,7 +222,8 @@ On any failure the integration tries to take the heater out of update mode befor
 - **Cleanup**: on any exception between step 3 and step 6, the integration sends ExitOTA, then writes `1/0x300E` = `00`, then re-raises. A failed `300E = 01` write is cleaned up too, because the heater may apply the write and lose the acknowledgement.
 - **Cleanup errors**: suppressed, so a dead link never replaces the reason the update stopped.
 - **Dropped link**: the reply wait checks the connection once a second. A drop fails the step within 1 second, not after the 30-second timeout.
-- **GATT errors**: a Bleak, timeout or OS error during the transfer is reported as "The heater dropped the link". A rebooting heater fails the write in flight with GATT status 133 after the supervision timeout.
+- **GATT errors**: a Bleak or OS error, or a GATT operation timeout, during the transfer is reported as "The heater dropped the link".
+- **Reply timeout**: no reply within 30 seconds is reported as "No reply to" and the step name. A rebooting heater fails the write in flight with GATT status 133 after the supervision timeout.
 - **Refusal**: a reply with a nonzero status fails the step and names the status.
 - **Malformed reply**: fails the step.
 

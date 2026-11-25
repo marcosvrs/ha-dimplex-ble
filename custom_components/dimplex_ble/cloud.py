@@ -44,6 +44,17 @@ API_HEADERS = {
     "Accept": "application/json",
 }
 TIMEOUT = aiohttp.ClientTimeout(total=30)
+# The sign-in page of the same policy; its "Sign up now" link creates an account.
+SIGNUP_URL = f"{OAUTH}/authorize?" + urlencode(
+    {
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "response_type": "code",
+        "scope": SCOPE,
+        "ui_locales": "en",
+        "prompt": "login",
+    }
+)
 VERIFY_VALID = 1  # EVerifyApplianceResult.Valid
 
 
