@@ -33,7 +33,11 @@ _REDACTED = "**REDACTED**"
 
 
 class _RedactPinFilter(logging.Filter):
-    """Blank the arguments of our PIN action in aioesphomeapi's debug log."""
+    """Blank the arguments of our PIN action in aioesphomeapi's debug log.
+
+    The message is logged as the protobuf request itself (a dict from
+    ``MessageToDict`` on Windows only).
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
@@ -41,10 +45,15 @@ class _RedactPinFilter(logging.Filter):
             isinstance(args, tuple)
             and len(args) == 3
             and args[1] == "ExecuteServiceRequest"
-            and isinstance(args[2], dict)
-            and args[2].get("key") in _ARM_KEYS
         ):
-            record.args = (args[0], args[1], {**args[2], "args": _REDACTED})
+            request = args[2]
+            key = (
+                request.get("key")
+                if isinstance(request, dict)
+                else getattr(request, "key", None)
+            )
+            if key in _ARM_KEYS:
+                record.args = (args[0], args[1], f"key: {key} args: {_REDACTED}")
         return True
 
 

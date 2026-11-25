@@ -7,6 +7,7 @@ import logging
 from datetime import timedelta
 
 import pytest
+from aioesphomeapi.api_pb2 import ExecuteServiceArgument, ExecuteServiceRequest
 from conftest import ADDRESS, PIN, PROXY, FakeProxy
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import CoreState
@@ -569,6 +570,20 @@ async def test_the_pin_never_reaches_the_esphome_debug_log(
     logger = logging.getLogger("aioesphomeapi.connection")
     caplog.set_level(logging.DEBUG, "aioesphomeapi.connection")
 
+    # As aioesphomeapi logs it on Linux: the protobuf request object.
+    logger.debug(
+        "%s: Sending %s: %s",
+        "proxy",
+        "ExecuteServiceRequest",
+        ExecuteServiceRequest(
+            key=0,
+            args=[
+                ExecuteServiceArgument(string_=ADDRESS),
+                ExecuteServiceArgument(int_=int(PIN)),
+            ],
+        ),
+    )
+    # On Windows it is converted with MessageToDict first.
     logger.debug(
         "%s: Sending %s: %s",
         "proxy",
@@ -583,7 +598,7 @@ async def test_the_pin_never_reaches_the_esphome_debug_log(
     )
 
     assert PIN not in caplog.text
-    assert "**REDACTED**" in caplog.text
+    assert caplog.text.count("**REDACTED**") == 2
     assert "42" in caplog.text  # other actions are logged unchanged
 
 
