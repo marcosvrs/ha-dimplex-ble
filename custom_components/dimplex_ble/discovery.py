@@ -1,15 +1,18 @@
-"""Helpers for model-neutral Dimplex advertisement discovery."""
+"""Recognize supported Dimplex panel-heater advertisements."""
 
 from .const import ADVERTISEMENT_SUFFIX
 
 
 def is_dimplex_advertisement(name: str | None) -> bool:
-    """Recognize observed Dimplex names without depending on a specific model."""
-    if not name:
+    """Match the manifest: ``AL``/``AM`` and 4 digits, with or without ``<Dimplex>``.
+
+    Other Dimplex products also advertise ``<Dimplex>`` (e.g. ``FXnnnn``
+    fan heaters) and must not be offered as panel heaters.
+    """
+    label = advertisement_label(name)
+    if label is None:
         return False
-    normalized = name.casefold()
-    if normalized.endswith(ADVERTISEMENT_SUFFIX.casefold()):
-        return True
+    normalized = label.casefold()
     return (
         len(normalized) == 6
         and normalized[:2] in {"al", "am"}

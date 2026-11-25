@@ -16,14 +16,13 @@ def synthetic_local_name(prefix: tuple[int, int], suffix: str) -> str:
 @pytest.mark.parametrize(
     "name",
     [
-        "heater<Dimplex>",
-        "QRAD100E<Dimplex>",
-        "<DIMPLEX>",
         synthetic_local_name((65, 76), "1234"),
         synthetic_local_name((65, 77), "9876"),
+        synthetic_local_name((65, 77), "9876<Dimplex>"),
+        synthetic_local_name((97, 109), "0001 <DIMPLEX>"),
     ],
 )
-def test_recognizes_suffix_and_six_character_local_names(name: str) -> None:
+def test_recognizes_supported_panel_heater_names(name: str) -> None:
     assert is_dimplex_advertisement(name) is True
 
 
@@ -39,6 +38,11 @@ def test_recognizes_suffix_and_six_character_local_names(name: str) -> None:
         synthetic_local_name((65, 76), "12A4"),
         synthetic_local_name((65, 76), "A234"),
         "QRAD100E<Dimplex>extra",
+        # Other Dimplex products also advertise the suffix.
+        "heater<Dimplex>",
+        "QRAD100E<Dimplex>",
+        "<DIMPLEX>",
+        synthetic_local_name((70, 88), "2000<Dimplex>"),
     ],
 )
 def test_rejects_nonmatching_advertisements(name: str | None) -> None:
