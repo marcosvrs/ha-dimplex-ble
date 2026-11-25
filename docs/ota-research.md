@@ -46,7 +46,8 @@ targets shows the **opposite** mapping, and that the row-frame checksum is a
 
 The PLX Series C panel heaters are non-Zigbee (service/char `…C51D`, `.bin`
 images), so **the integration's path is row command `0x39` + whole-file
-CRC-16/CCITT-FALSE**. This is now VERIFIED, not inferred.
+CRC-16/AUG-CCITT** (see §B.3, corrected 2026-11-25). This is VERIFIED, not
+inferred.
 
 ---
 
@@ -155,6 +156,23 @@ ExtraInfo`. `UpdateFirmwareVersion` request (`UpdateFirmwareRequest`):
 `ApplianceId, NewVersion`.
 
 ### A.3 Does the heater have to be registered first?
+
+**Corrected 2026-11-25 (live): no.** `POST /api/ToolkitV2/VerifyApplianceIdAndCodeV2`
+with `{ApplianceId, SecurityCode, CheckIfAlreadyHasWallController:false}` for an
+unclaimed heater returns `ResultCode` 1 (`Valid`) and `ApplianceDetails`
+including `LatestBluetoothFirmware{Id, Version, Location, MinAppVersion}`,
+`FirmwareVersion` (cloud record), `BleIdentifier` (`AM2086<Dimplex>`),
+`ApplianceModel`, and per-appliance `AuthKey`/`EncKey` (secrets; never log).
+`ApplianceId` and `SecurityCode` come from the heater's QR label
+(`<12-hex id>,<6-digit code>,0,<model>,<series>`); the BLE address and the BLE
+pairing PIN are **not** these values (verify returns `NotValid`, 0).
+API calls need ConfigR's default headers (`Common Client::AddDefaultHeaders`):
+`app_name: DimplexToolkit`, `api_version: 1.0`, `app_version`, `app_device_os`,
+`device_version`, `device_manufacturer`; without them every call is HTTP 500.
+Sign-in needs `ui_locales` `en` or `de` (hosted page templates); without it the
+policy fails with `AADB2C90037`.
+
+The original static reading follows (superseded for the download):
 
 **VERIFIED (effectively yes).** The firmware `Location` only ever reaches the
 app inside an `Appliance` object returned by `GetAppliancesAndGroups`, which
@@ -296,9 +314,18 @@ ASCII "4213").
 - Frame checksum `OtaHelper::CalcChecksum` — 8-bit two's complement described
   above.
 - Whole-file image CRC (non-Zigbee) `OtaHelper::CalculateFileChecksum`
-  (1358531) — **CRC-16/CCITT-FALSE**: init `0xFFFF`, poly `0x1021`, MSB-first,
-  no final XOR, processed over the whole file. Stored in `CrcNumer`, sent in the
-  `0x35` frame.
+  (1358531) — **augmented** bitwise CRC: register `0xFFFF`, poly `0x1021`,
+  message bits shifted in MSB-first, then 16 zero bits (IL_009e–IL_00fb loop
+  `k ≤ 1` over 8 bits). That is the standard **CRC-16/AUG-CCITT** (direct form
+  init `0x1D0F`, check value `0xE5CC`). Stored in `CrcNumer`, sent in the `0x35`
+  frame. (Corrected 2026-11-25: an earlier note said CCITT-FALSE.)
+- `release_config.json` `verification` is **never read** by ConfigR (no
+  caller of `Esp32OtaReleaseConfigItem::get_Verification`). For
+  `EP4213_IUI_5_0_PRD_240514` it is `0xB8AB`; AUG-CCITT over the image is
+  `0x37E5`, CCITT-FALSE `0xED2E`; none of the common CRC-16 variants give
+  `0xB8AB`. The heater gets `0x37E5` from ConfigR.
+- `Appliance.IsZigbeeProduct` is true only for ApplianceType
+  `"Zigbee UHF Wall Tstat"` / `"Zigbee PH Control Unit"`; PLXE is not Zigbee.
 - Incremental CRC (Zigbee) `Esp32OtaReleaseConfigItem::Crc16` (1359413) — same
   poly `0x1021`/init `0xFFFF`, accumulated per 236-byte row.
 
@@ -452,7 +479,7 @@ equal → skip flash, sync cloud only. (Zigbee products read
 - Read `3/0x200A` EP id; abort if not in `{EP} ∪ ProductCodes`.
 - Build frames exactly per §B.2 (envelope `01|cmd|lenLE16|payload|cksum|17`,
   `CalcChecksum` 8-bit two's complement seeded with `0x17`; row cmd **`0x39`**,
-  236-byte chunks; whole-file **CRC-16/CCITT-FALSE** in the `0x35` frame).
+  236-byte chunks; whole-file **CRC-16/AUG-CCITT** in the `0x35` frame).
 - Subscribe to `…C51D`; write `300E = 1`; wait 2 s; EnterOTA(`0x38`); drive rows
   from notifications with a 30 s per-row watchdog; after last row send CRC
   (`0x35`); on "verified" send ExitOTA(`0x3B`); wait 1 s; write `300E = 0`.
@@ -474,3 +501,17 @@ equal → skip flash, sync cloud only. (Zigbee products read
 - No secret values (client secret [none exists], API/subscription key [none
   exists], instrumentation key [exists, redacted], SAS token [server-side]) are
   reproduced.
+
+## Live findings 2026-11-25: latest PLX050E firmware
+
+- `EP4213_IUI_5_0_PRD_240514.zip` (552,647 bytes, MD5 matches the blob's
+  `Content-MD5`; sha256 `06389400d4adcadea953b73a0e68c302550fbed29cf2cfaae403b7894efc9e94`).
+- `release_config.json`: one file, module `UI`, seqid 1, desc `PLXE_EU_ESP32`,
+  version `5.0`, verification `0xB8AB` (unused, §B.3).
+- Image: ESP32 app image (magic `0xE9`, chip id 0), project `GD_PLXE_Graphic`,
+  ESP-IDF `v4.4.4-dirty`; its `esp_app_desc` version string is
+  `EP4213_IUI_4_0_PRD_240327` (4.0), not 5.0.
+- Version check: ConfigR compares the heater's UI version (`3/0x2001`) with the
+  file version; all four test heaters report UI 1.7 / RF 5, so ConfigR would
+  flash. No changelog exists in the API, the APK or the ZIP; older images are
+  not offered by the API.
