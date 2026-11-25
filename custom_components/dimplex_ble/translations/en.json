@@ -348,7 +348,7 @@
   "issues": {
     "heater_stalled": {
       "title": "{name} stopped responding",
-      "description": "The heater's Bluetooth has stopped. Switch the heater off and on at the wall; Home Assistant reconnects automatically."
+      "description": "The heater's Bluetooth has stopped. If your installation has a mains isolator switch: switch it off, wait at least 5 seconds, then switch it on. If there is no isolator switch: switch off the circuit breaker or remove the fuse supplying the unit, wait at least 5 seconds, then switch it on. Home Assistant reconnects automatically."
     }
   },
   "selector": {

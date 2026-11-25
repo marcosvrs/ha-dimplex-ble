@@ -208,7 +208,11 @@ problem.
   receiver hears it until it is switched off and on at the wall. Home Assistant
   then raises the repair "*Heater* stopped responding" (after 60 s of silence;
   not when the proxy itself is offline) and clears it once the heater is heard
-  again. If a heater does this often, turn off **Keep the Bluetooth connection
+  again. To power-cycle it, as the Dimplex app words it: "If your installation
+  has a mains isolator switch: switch it off, wait at least 5 seconds, then
+  switch it on. If there is no isolator switch: switch off the circuit breaker
+  or remove the fuse supplying the unit, wait at least 5 seconds, then switch it
+  on." If a heater does this often, turn off **Keep the Bluetooth connection
   open** under the heater's **Configure**: each update (every 60 s instead of
   10 s) and each command then connects briefly and disconnects. Controls react
   more slowly. This option is an experiment; it changes the update interval
