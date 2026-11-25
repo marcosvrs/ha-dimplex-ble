@@ -20,6 +20,10 @@ DISPLAY_UNIT: Final[GattAddress] = (0, 0x1005)
 ROOM_TEMPERATURE: Final[GattAddress] = (1, 0x0008)
 TRAC: Final[GattAddress] = (1, 0x0002)
 UI_VERSION: Final[GattAddress] = (3, 0x2001)
+# Firmware update: 1 = update mode (display image), 0 = normal (ConfigR
+# Esp32OtaEnableParameter); the update frames go to OTA_COMMAND.
+OTA_ENABLE: Final[GattAddress] = (1, 0x300E)
+OTA_COMMAND_UUID: Final = "00060001-f8ce-11e4-abf4-0002a5d5c51d"
 AWAY_MODE: Final[GattAddress] = (0, 0x102A)
 SOUND: Final[GattAddress] = (2, 0x0005)
 # ConfigR AdvanceHeatingParameter, SetpointRange, SetbackParameter and

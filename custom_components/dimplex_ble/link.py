@@ -22,7 +22,7 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from . import responder
+from . import ota, responder
 from .const import DOMAIN
 from .errors import (
     CharacteristicError,
@@ -33,6 +33,8 @@ from .errors import (
 )
 from .protocol import (
     CLOCK,
+    OTA_COMMAND_UUID,
+    OTA_ENABLE,
     ROOM_TEMPERATURE,
     SCHEDULE,
     SCHEDULE_DAYS,
@@ -51,6 +53,7 @@ from .protocol import (
 )
 
 CONNECT_TIMEOUT = 15.0
+OTA_SUBSCRIBE_WAIT_S = 2.0
 _GATT_ERRORS = (BleakError, TimeoutError, OSError)
 # Quiet time a heater needs after a link ends before it accepts a new one.
 # Evidence: reconnecting 20-23 ms after a disconnect made the heater accept and
@@ -377,6 +380,61 @@ class HeaterLink:
                 }
                 for service in client.services or ()
             ]
+
+    async def async_flash(
+        self, image: ota.Image, progress: Callable[[float], None] | None = None
+    ) -> None:
+        """Update the heater's firmware on a fresh link (holds the link lock).
+
+        A connect without the service cache makes the proxy exchange the MTU
+        (517; with the cache it stays 23, 800+ connects on 2026-11-25), which
+        rows of ConfigR's 236 bytes need.
+        """
+        async with self._lock:
+            client = await self._ensure_link(self._passkey, fresh=True)
+            try:
+                target = next(
+                    (
+                        char
+                        for service in client.services or ()
+                        for char in service.characteristics
+                        if char.uuid.lower() == OTA_COMMAND_UUID
+                    ),
+                    None,
+                )
+                mtu = getattr(client, "mtu_size", 23)
+                if target is None or mtu < ota.MAX_ROW + 11:
+                    raise ota.UpdateError(
+                        f"Update channel missing or link too small (MTU {mtu})"
+                    )
+                replies: asyncio.Queue[bytes] = asyncio.Queue()
+                await client.start_notify(
+                    target, lambda *args: replies.put_nowait(bytes(args[-1]))
+                )
+                await asyncio.sleep(OTA_SUBSCRIBE_WAIT_S)  # ConfigR waits 2 s
+
+                async def set_mode(on: bool) -> None:
+                    await _write(client, OTA_ENABLE, bytes((1 if on else 0,)))
+
+                async def send(data: bytes) -> None:
+                    await client.write_gatt_char(target, data, response=True)
+
+                async def reply(wait_s: float) -> bytes:
+                    return await asyncio.wait_for(replies.get(), wait_s)
+
+                _LOGGER.info(
+                    "Updating %s to %s %s (MTU %d)",
+                    self.address,
+                    image.ep,
+                    image.version,
+                    mtu,
+                )
+                await ota.async_flash(
+                    ota.Transport(set_mode, send, reply), image, ota.MAX_ROW, progress
+                )
+            finally:
+                if self._client is not None:
+                    await self._disconnect("ota")
 
     async def async_pair(self, passkey: int | None) -> None:
         """Commission: fresh connect and pair, answering with ``passkey``.
