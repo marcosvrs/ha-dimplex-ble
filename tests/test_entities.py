@@ -489,6 +489,21 @@ async def test_rule_climate_auto_resumes_the_last_schedule(hass) -> None:
     )
 
 
+async def test_rule_climate_resumes_the_programme_seen_at_creation(hass) -> None:
+    """No update yet since setup: Auto still resumes the startup programme."""
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010100000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexClimate(coordinator)
+    coordinator.data = snapshot(mode_hex="020000000000")  # switched to Heat
+
+    await entity.async_set_hvac_mode(HVACMode.AUTO)
+
+    assert client.async_write_raw.await_args.args[2] == b"\x01\x01\x00\x00\x00\x00"
+
+
 async def test_rule_climate_auto_defaults_to_user_timer(hass) -> None:
     client = SimpleNamespace(async_write_raw=AsyncMock())
     _, coordinator = make_coordinator(hass, data=snapshot(), client=client)

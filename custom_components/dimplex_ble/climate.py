@@ -24,7 +24,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES, DOMAIN
-from .coordinator import DimplexConfigEntry
+from .coordinator import DimplexConfigEntry, DimplexCoordinator
 from .entity import DimplexEntity
 from .protocol import (
     HEATING_MODE,
@@ -97,6 +97,12 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     _attr_precision = PRECISION_TENTHS
     # The schedule Auto resumes; updated whenever the heater reports one.
     _last_schedule = PRESET_USER_TIMER
+
+    def __init__(self, coordinator: DimplexCoordinator) -> None:
+        """Start from the programme the first poll found, not a default."""
+        super().__init__(coordinator)
+        if (preset := self.preset_mode) in SCHEDULE_PRESETS:
+            self._last_schedule = preset
 
     @property
     def _boosting(self) -> bool:

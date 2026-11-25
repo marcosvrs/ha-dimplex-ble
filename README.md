@@ -18,7 +18,9 @@ Bluetooth proxies. No cloud, no Dimplex app.
 ## Requirements
 
 - Home Assistant 2026.11 or newer with the ESPHome integration.
-- At least one ESP32-S3 (or other ESP32) running ESPHome as a Bluetooth proxy,
+- At least one ESP32-S3 (or other ESP32) running ESPHome 2026.11.0 or newer
+  as a Bluetooth proxy (older versions can lose the heater's pairing; the
+  firmware package refuses to build with them),
   within Bluetooth range of each heater. Plan for **at most 2 heaters per
   proxy** (see [Known limitations](#known-limitations)).
 - The Dimplex phone app closed: the heater accepts one Bluetooth connection at

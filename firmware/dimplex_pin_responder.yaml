@@ -12,6 +12,11 @@
 # The PIN lives only in RAM (globals, restore_value: no) and is never logged.
 # 1000000 means "disarmed": ble_client.passkey_reply is a no-op for values > 999999.
 
+esphome:
+  # 2026.11.0 is the first release whose default ESP-IDF (5.5.6) keeps the
+  # heater bond after a failed re-encryption (ESPHome's bond-key wrap).
+  min_version: 2026.11.0
+
 globals:
   - id: dimplex_pin
     type: int
