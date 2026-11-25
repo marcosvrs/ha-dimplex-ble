@@ -1133,3 +1133,24 @@ async def test_flow_removed_before_a_rejected_pin_starts_no_new_pairing(
     await hass.async_block_till_done()
     assert proxy.events.count("pair_start") == 1
     assert proxy.actions[-1] == CLEAR
+
+
+async def test_a_chosen_proxy_is_not_surveyed_again(hass, fake_bt) -> None:
+    """Architecture review round 6: submitting the choice skips the wait/survey."""
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["step_id"] == "reconfigure"
+    proxy.sees_heater = False  # a second survey would now find no proxy
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PROXY_SOURCE: PROXY}
+    )
+
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert fake_bt.callbacks == []  # no second advertisement wait
+    proxy.sees_heater = True
+    await advance(hass, result["flow_id"])
+    await hass.async_block_till_done()

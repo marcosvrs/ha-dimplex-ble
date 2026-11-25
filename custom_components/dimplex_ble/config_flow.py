@@ -327,8 +327,6 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Re-pair on the chosen proxy."""
         entry = self._get_reauth_entry()
-        if user_input is not None and CONF_PROXY_SOURCE not in user_input:
-            user_input = None  # "look again" submit
         return await self._async_step_proxy("reauth_proxy", user_input, entry)
 
     async def async_step_reconfigure(
@@ -456,6 +454,15 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick the proxy, then start pairing and show the PIN form."""
         assert self._address is not None
         address = self._address
+        if user_input is not None and CONF_PROXY_SOURCE in user_input:
+            # The choice is made: no second release wait or survey (an empty
+            # submit means "look again" and falls through).
+            if CONF_SYNC_CLOCK in user_input:
+                self._sync_clock = bool(user_input[CONF_SYNC_CLOCK])
+            self._link = HeaterLink(
+                self.hass, address, user_input[CONF_PROXY_SOURCE], None
+            )
+            return self._start_pairing()
         repair = entry is not None
         current = entry.data[CONF_PROXY_SOURCE] if entry is not None else None
         entry_id = entry.entry_id if entry is not None else None
@@ -483,33 +490,26 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                 description_placeholders=placeholders,
                 errors={"base": "no_proxy"},
             )
-        if user_input is None or CONF_PROXY_SOURCE not in user_input:
-            options = survey.options
-            schema: dict[Any, Any] = {
-                # The recommended proxy is always listed first.
-                probatio.Required(
-                    CONF_PROXY_SOURCE, default=options[0]["value"]
-                ): SelectSelector(SelectSelectorConfig(options=options))
-            }
-            if step_id != "reauth_proxy":
-                sync = (
-                    entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK)
-                    if entry is not None
-                    else DEFAULT_SYNC_CLOCK
-                )
-                schema[probatio.Required(CONF_SYNC_CLOCK, default=sync)] = bool
-            return self.async_show_form(
-                step_id=step_id,
-                data_schema=probatio.Schema(schema),
-                description_placeholders=placeholders,
-                errors={"base": "proxies_busy"} if survey.all_busy else {},
+        options = survey.options
+        schema: dict[Any, Any] = {
+            # The recommended proxy is always listed first.
+            probatio.Required(
+                CONF_PROXY_SOURCE, default=options[0]["value"]
+            ): SelectSelector(SelectSelectorConfig(options=options))
+        }
+        if step_id != "reauth_proxy":
+            sync = (
+                entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK)
+                if entry is not None
+                else DEFAULT_SYNC_CLOCK
             )
-        if CONF_SYNC_CLOCK in user_input:
-            self._sync_clock = bool(user_input[CONF_SYNC_CLOCK])
-        self._link = HeaterLink(
-            self.hass, self._address, user_input[CONF_PROXY_SOURCE], None
+            schema[probatio.Required(CONF_SYNC_CLOCK, default=sync)] = bool
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=probatio.Schema(schema),
+            description_placeholders=placeholders,
+            errors={"base": "proxies_busy"} if survey.all_busy else {},
         )
-        return self._start_pairing()
 
     async def _async_wait_for_proxy(self, address: str) -> None:
         """Collect which responder proxies hear the released heater again.
