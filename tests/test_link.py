@@ -82,6 +82,12 @@ async def test_live_link_is_reused_and_a_dropped_one_reconnects(hass, fake_bt) -
     assert kinds(proxy.events).count("pair_start") == 2
 
 
+async def read(link: HeaterLink, address: tuple[int, int]) -> bytes | None:
+    """Read one setting the way every poll does."""
+    _, values, _ = await link.async_snapshot_with_settings((address,))
+    return values.get(address)
+
+
 async def test_proxy_api_reconnect_invalidates_the_cached_client(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     link = make_link(hass)
@@ -89,7 +95,7 @@ async def test_proxy_api_reconnect_invalidates_the_cached_client(hass, fake_bt) 
 
     proxy.reconnect_api()
     proxy.disconnect_error = BleakError("API connection is gone")
-    await link.async_read((2, 0x0005))
+    await read(link, (2, 0x0005))
 
     assert len(proxy.clients) == 2
     assert "disconnect" in proxy.events
@@ -392,7 +398,7 @@ async def test_group_zero_characteristic_is_found_in_any_service(hass, fake_bt) 
     del proxy.services.services["00000000-0000-1000-8000-00805f9b34fb"]
     proxy.values[(0, 0x1005)] = b"\x01"
 
-    assert await make_link(hass).async_read((0, 0x1005)) == b"\x01"
+    assert await read(make_link(hass), (0, 0x1005)) == b"\x01"
 
 
 async def test_gatt_services_metadata(hass, fake_bt) -> None:
@@ -405,7 +411,7 @@ async def test_gatt_services_metadata(hass, fake_bt) -> None:
     proxy.services = None
     link = make_link(hass)
     assert await link.async_gatt_services() == []
-    assert await link.async_read((0, 0x1005)) is None
+    assert await read(link, (0, 0x1005)) is None
 
 
 async def test_logs_name_the_heater_and_never_the_pin(hass, fake_bt, caplog) -> None:

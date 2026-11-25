@@ -115,11 +115,10 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self.link = link
         # Last verified raw value of each slow setting.
         self.settings: dict[GattAddress, bytes] = {}
-        # Per-poll mode only: the settings read is due on the next poll's connection.
+        # Slow reads ride on the next poll's connection (both link modes).
         self._settings_due = True
         # Timer programme -> 7 days (Monday first); a day is None when unread.
         self.schedules: dict[str, WeekSchedule] = {}
-        # Per-poll mode only: the schedule read is due on the next poll's connection.
         self._schedules_due = True
         # Serializes every Away check-and-write with the writes that leave Away:
         # ANY write of the Away record makes the heater enter Away (ledger,
@@ -134,27 +133,22 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
     async def _async_update_data(self) -> HeaterSnapshot:
         """Read one snapshot; a rejected PIN starts reauth and stops polling."""
         try:
-            if self.link.keep_connected or not (
-                self._settings_due or self._schedules_due
-            ):
-                snapshot = await self.link.async_snapshot()
-            else:
-                (
-                    snapshot,
-                    settings,
-                    schedules,
-                ) = await self.link.async_snapshot_with_settings(
-                    tuple(SLOW_SETTINGS) if self._settings_due else (),
-                    tuple(SCHEDULE_PROGRAMMES.values()) if self._schedules_due else (),
-                )
-                if self._settings_due:
-                    # Stay due until every setting was read (a failed read
-                    # must not confirm a value just written).
-                    self._settings_due = not set(SLOW_SETTINGS) <= set(settings)
-                    self._apply_settings(settings)
-                if self._schedules_due and schedules:
-                    self._schedules_due = False
-                    self._apply_schedules(schedules)
+            (
+                snapshot,
+                settings,
+                schedules,
+            ) = await self.link.async_snapshot_with_settings(
+                tuple(SLOW_SETTINGS) if self._settings_due else (),
+                tuple(SCHEDULE_PROGRAMMES.values()) if self._schedules_due else (),
+            )
+            if self._settings_due:
+                # Stay due until every setting was read (a failed read must not
+                # confirm a value just written).
+                self._settings_due = not set(SLOW_SETTINGS) <= set(settings)
+                self._apply_settings(settings)
+            if self._schedules_due and schedules:
+                self._schedules_due = False
+                self._apply_schedules(schedules)
         except HeaterAuthError as err:
             raise ConfigEntryAuthFailed(
                 translation_domain=DOMAIN, translation_key=err.translation_key
@@ -297,12 +291,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             )
         except HomeAssistantError as err:
             self._store_schedule_days(preset, readback)
-            self._schedules_due = True
-            self.config_entry.async_create_background_task(
-                self.hass,
-                self.async_refresh_schedules(),
-                "dimplex_ble schedule reread after a failed save",
-            )
+            self._schedules_due = True  # every programme is read again
             if not readback:
                 raise
             raise HomeAssistantError(
@@ -335,37 +324,21 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self.schedules = {**self.schedules, preset: week}
         self.async_update_listeners()
 
-    async def async_refresh_settings(self, now: datetime | None = None) -> None:
-        """Read the slow settings on their own slow schedule."""
+    @callback
+    def async_settings_due(self, now: datetime | None = None) -> None:
+        """Read the slow settings on the next poll."""
         del now
-        if not self.link.keep_connected:
-            # Never open a second connection: the next poll reads them.
-            self._settings_due = True
-            return
-        if not self.last_update_success:
-            return
-        await self._async_read_settings(tuple(SLOW_SETTINGS))
+        self._settings_due = True
 
-    async def async_refresh_schedules(self, now: datetime | None = None) -> None:
-        """Read the three timer programmes (read-only) on their slow schedule.
+    @callback
+    def async_schedules_due(self, now: datetime | None = None) -> None:
+        """Read the timer programmes on the next poll.
 
-        Schedules change only on the heater or in the Dimplex app.
+        Schedules change only on the heater, in the Dimplex app or through the
+        set_schedule action.
         """
         del now
-        if not self.link.keep_connected:
-            # Never open a second connection: the next poll reads them.
-            self._schedules_due = True
-            return
-        if not self.last_update_success:
-            return
-        try:
-            schedules = await self.link.async_read_schedules(
-                tuple(SCHEDULE_PROGRAMMES.values())
-            )
-        except DimplexError as err:
-            _LOGGER.debug("Schedule read failed for %s: %s", self.link.address, err)
-            return
-        self._apply_schedules(schedules)
+        self._schedules_due = True
 
     def _apply_schedules(self, schedules: dict[int, WeekSchedule]) -> None:
         """Store the programmes by preset and notify listeners on change."""
@@ -377,17 +350,6 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         if by_preset != self.schedules:
             self.schedules = by_preset
             self.async_update_listeners()
-
-    async def _async_read_settings(self, addresses: tuple[GattAddress, ...]) -> None:
-        """Read settings over the held link; stop at the first failure."""
-        values: dict[GattAddress, bytes | None] = {}
-        for address in addresses:
-            try:
-                values[address] = await self.link.async_read(address)
-            except DimplexError as err:
-                _LOGGER.debug("Setting read failed for %s: %s", self.link.address, err)
-                break
-        self._apply_settings(values)
 
     def _apply_settings(self, values: dict[GattAddress, bytes | None]) -> None:
         """Store verified setting values and notify listeners on change."""
@@ -404,18 +366,11 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             self.async_update_listeners()
 
     async def async_write_setting(self, address: GattAddress, payload: bytes) -> None:
-        """Write a slow setting, show it at once, then read it back.
-
-        The persistent link reads it back immediately; per-poll mode reads it
-        inside the next poll's connection instead of opening another one.
-        """
+        """Write a slow setting and show it at once; the next poll reads it back."""
         await self.async_write(address, payload, refresh=False)
         self.settings[address] = payload
         self.async_update_listeners()
-        if self.link.keep_connected:
-            await self._async_read_settings((address,))
-        else:
-            self._settings_due = True
+        self._settings_due = True
 
     async def async_set_sound(self, enabled: bool) -> None:
         """Write the sound setting."""

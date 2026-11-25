@@ -369,7 +369,7 @@ async def test_per_poll_sound_due_is_read_inside_the_poll_connection(
     # The slow schedule only marks it due; no connection of its own.
     proxy.events.clear()
     proxy.values[(2, 0x0005)] = b"\x00\x00\x00"
-    await coordinator.async_refresh_settings()
+    coordinator.async_settings_due()
     assert proxy.events == []
     assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
 

@@ -123,86 +123,43 @@ def test_sound_switch_requires_verified_sound_value(hass) -> None:
     assert available.is_on is True
 
 
-async def test_sound_switch_writes_and_reads_back_without_main_refresh(hass) -> None:
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_write_raw=AsyncMock(side_effect=[b"\x01\x00\x00", b"\x00\x00\x00"]),
-        async_read_raw=AsyncMock(side_effect=[b"\x01\x00\x00", b"\x00\x00\x00"]),
-    )
+async def test_sound_switch_writes_and_the_next_poll_reads_back(hass) -> None:
+    client = SimpleNamespace(address=ADDRESS, async_write_raw=AsyncMock())
     coordinator = make_coordinator(
         hass, preemptive=False, sound=b"\x00\x00\x00", client=client
     )
+    coordinator._settings_due = False
     entity = DimplexSoundSwitch(coordinator)
 
     await entity.async_turn_on()
+    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"  # shown at once
     await entity.async_turn_off()
 
-    assert client.async_write_raw.await_args_list[0].args == (
-        2,
-        0x0005,
-        b"\x01\x00\x00",
-    )
-    assert client.async_write_raw.await_args_list[1].args == (
-        2,
-        0x0005,
-        b"\x00\x00\x00",
-    )
+    assert [call.args for call in client.async_write_raw.await_args_list] == [
+        (2, 0x0005, b"\x01\x00\x00"),
+        (2, 0x0005, b"\x00\x00\x00"),
+    ]
     coordinator.async_request_refresh.assert_not_awaited()
-    client.async_write_raw.assert_awaited()
-    # Each write is read back on the held link.
-    assert [call.args for call in client.async_read_raw.await_args_list] == [
-        (2, 0x0005),
-        (2, 0x0005),
-    ]
+    assert coordinator._settings_due  # confirmed by the next poll
     assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
 
 
-async def test_sound_poll_is_independent_and_updates_cache(hass) -> None:
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_read_raw=AsyncMock(return_value=b"\x01\x00\x00"),
-    )
-    coordinator = make_coordinator(
-        hass, preemptive=False, sound=b"\x00\x00\x00", client=client
-    )
-    coordinator.last_update_success = True
+def test_settings_timer_marks_the_next_poll(hass) -> None:
+    coordinator = make_coordinator(hass, preemptive=False)
+    coordinator._settings_due = False
 
-    await coordinator.async_refresh_settings()
+    coordinator.async_settings_due()
 
-    assert coordinator.settings.get(SOUND) == b"\x01\x00\x00"
-    assert [call.args for call in client.async_read_raw.await_args_list] == [
-        (2, 0x0005),
-        (0, 0x1016),
-        (2, 0x1019),
-    ]
+    assert coordinator._settings_due
 
 
-async def test_sound_poll_ignores_failed_and_invalid_reads(hass) -> None:
-    client = SimpleNamespace(
-        address=ADDRESS,
-        async_read_raw=AsyncMock(
-            side_effect=[DimplexError("offline"), b"\x02\x00\x00", None, None]
-        ),
-    )
-    coordinator = make_coordinator(
-        hass, preemptive=False, sound=b"\x00\x00\x00", client=client
-    )
-    coordinator.last_update_success = True
+def test_invalid_setting_reads_keep_the_last_value(hass) -> None:
+    coordinator = make_coordinator(hass, preemptive=False, sound=b"\x00\x00\x00")
 
-    await coordinator.async_refresh_settings()
-    await coordinator.async_refresh_settings()
+    coordinator._apply_settings({SOUND: b"\x02\x00\x00"})
+    coordinator._apply_settings({SOUND: None})
 
     assert coordinator.settings.get(SOUND) == b"\x00\x00\x00"
-
-
-async def test_sound_poll_skips_an_unavailable_coordinator(hass) -> None:
-    client = SimpleNamespace(async_read_raw=AsyncMock())
-    coordinator = make_coordinator(hass, preemptive=False, client=client)
-    coordinator.last_update_success = False
-
-    await coordinator.async_refresh_settings()
-
-    client.async_read_raw.assert_not_awaited()
 
 
 async def test_sound_switch_translates_write_failures(hass) -> None:

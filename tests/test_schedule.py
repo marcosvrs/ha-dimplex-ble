@@ -143,6 +143,7 @@ async def test_persistent_link_reads_all_programmes_after_setup(hass, fake_bt) -
 
     proxy.events.clear()
     await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 1)
+    await advance(hass, SCHEDULE_UPDATE_INTERVAL.total_seconds() + 12)  # next poll
     assert len(schedule_writes(proxy)) == 21
     assert "connect" not in kinds(proxy.events)  # over the held link
 
@@ -157,22 +158,15 @@ async def test_a_failed_schedule_read_keeps_the_last_schedules(hass, fake_bt) ->
     proxy = with_schedules(fake_bt.add())
     coordinator = await setup(hass, make_entry(hass))
     before = coordinator.schedules
-    proxy.read_error = HeaterUnavailableError("gone")
-
-    await coordinator.async_refresh_schedules()
-
-    assert coordinator.schedules is before
-
-
-async def test_no_schedule_read_while_the_heater_is_unreachable(hass, fake_bt) -> None:
-    proxy = with_schedules(fake_bt.add())
-    coordinator = await setup(hass, make_entry(hass))
-    coordinator.last_update_success = False
     proxy.events.clear()
 
-    await coordinator.async_refresh_schedules()
-
+    coordinator.async_schedules_due()  # marks only: no traffic of its own
     assert proxy.events == []
+    proxy.read_error = HeaterUnavailableError("gone")
+    await coordinator.async_refresh()
+
+    assert coordinator.schedules is before
+    assert coordinator._schedules_due  # read again by a later poll
 
 
 async def test_per_poll_reads_schedules_inside_the_poll_connection(
@@ -194,7 +188,7 @@ async def test_per_poll_reads_schedules_inside_the_poll_connection(
 
     # Due again: read inside the following poll, never in an extra connection.
     proxy.events.clear()
-    await coordinator.async_refresh_schedules()
+    coordinator.async_schedules_due()
     assert proxy.events == []
     await advance(hass, 2 * POLL_INTERVAL_PER_POLL + 2)
     assert len(schedule_writes(proxy)) == 21
@@ -499,7 +493,7 @@ async def test_a_failure_part_way_keeps_the_saved_days(hass, fake_bt) -> None:
 
     # Every programme is read again, so the calendars show what the heater holds.
     proxy.on_write = None
-    await hass.async_block_till_done()
+    await coordinator.async_refresh()
     assert coordinator.schedules["user_timer"][2] == saved
 
 

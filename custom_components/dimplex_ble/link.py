@@ -309,12 +309,11 @@ class HeaterLink:
     ) -> tuple[
         HeaterSnapshot, dict[GattAddress, bytes | None], dict[int, WeekSchedule]
     ]:
-        """Read the snapshot and the slow settings inside one operation.
+        """Read the snapshot, then any due settings and programmes, in one operation.
 
-        Used by the per-poll mode so the slow settings share the poll's
-        connection instead of opening a second one. A failed settings read does
-        not fail the snapshot; that setting and the rest are then omitted, and
-        so are the schedules.
+        Every poll uses it, so slow reads never need their own connection. A
+        failed settings read does not fail the snapshot; that setting and the
+        rest are then omitted, and so are the schedules.
         """
         started = time.monotonic()
         values: dict[GattAddress, bytes | None] = {}
@@ -339,18 +338,6 @@ class HeaterLink:
             time.monotonic() - started,
         )
         return snapshot, values, schedules
-
-    async def async_read_schedules(
-        self, programmes: tuple[int, ...]
-    ) -> dict[int, WeekSchedule]:
-        """Read the timer programmes (read-only) in one operation."""
-        async with self._operation("schedules") as client:
-            return await _read_schedules(client, programmes)
-
-    async def async_read(self, address: GattAddress) -> bytes | None:
-        """Read one characteristic, or ``None`` when the heater lacks it."""
-        async with self._operation(f"read {address[0]}/0x{address[1]:04x}") as client:
-            return await _read_optional(client, address)
 
     async def async_write(self, address: GattAddress, payload: bytes) -> None:
         """Write one characteristic; the next refresh is the readback."""

@@ -207,16 +207,17 @@ async def test_away_without_a_valid_return_time_is_not_rewritten(hass) -> None:
     client.async_write_raw.assert_not_awaited()
 
 
-async def test_temperature_offset_writes_signed_tenths_and_reads_back(hass) -> None:
-    coordinator, client = make_coordinator(hass, snapshot(), reads=[b"\xfd"])
+async def test_temperature_offset_writes_signed_tenths(hass) -> None:
+    coordinator, client = make_coordinator(hass, snapshot())
     coordinator.settings[OFFSET] = b"\x00"
+    coordinator._settings_due = False
     entity = DimplexTemperatureOffsetNumber(coordinator)
 
     await entity.async_set_native_value(-0.3)
 
     client.async_write_raw.assert_awaited_once_with(2, 0x1019, b"\xfd")
-    client.async_read_raw.assert_awaited_once_with(2, 0x1019)
     assert entity.native_value == pytest.approx(-0.3)
+    assert coordinator._settings_due  # the next poll reads it back
     coordinator.async_request_refresh.assert_not_awaited()
 
 

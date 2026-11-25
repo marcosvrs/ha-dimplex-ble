@@ -103,12 +103,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     )
     entry.async_on_unload(
         async_track_time_interval(
-            hass, coordinator.async_refresh_settings, SETTINGS_UPDATE_INTERVAL
+            hass, coordinator.async_settings_due, SETTINGS_UPDATE_INTERVAL
         )
     )
     entry.async_on_unload(
         async_track_time_interval(
-            hass, coordinator.async_refresh_schedules, SCHEDULE_UPDATE_INTERVAL
+            hass, coordinator.async_schedules_due, SCHEDULE_UPDATE_INTERVAL
         )
     )
 
@@ -134,18 +134,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     _async_remove_orphaned_entities(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    if link.keep_connected:
-        # Per-poll mode reads settings and schedules inside its first poll.
-        entry.async_create_background_task(
-            hass,
-            coordinator.async_refresh_settings(),
-            "dimplex_ble initial settings read",
-        )
-        entry.async_create_background_task(
-            hass,
-            coordinator.async_refresh_schedules(),
-            "dimplex_ble initial schedule read",
-        )
     return True
 
 
