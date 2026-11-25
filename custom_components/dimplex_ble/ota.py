@@ -160,8 +160,9 @@ async def async_flash(
         if (status := reply_status(reply)) != 0:
             raise UpdateError(f"Heater refused {name} (status {status})")
 
-    await transport.set_ota_mode(True)
     try:
+        # Inside the cleanup: the heater may apply the write and lose the ack.
+        await transport.set_ota_mode(True)
         await step("enter", enter_frame(image))
         rows = range(0, len(image.data), row_size)
         for index, offset in enumerate(rows, 1):

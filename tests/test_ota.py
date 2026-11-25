@@ -220,3 +220,23 @@ async def test_update_mode_is_left_even_without_an_exit_reply() -> None:
 
     assert heater.sent[-1] == ota.frame(ota.EXIT)
     assert heater.modes == [True, False]
+
+
+async def test_a_failed_mode_write_still_cleans_up() -> None:
+    """Codex review: the heater may apply the write and lose the ack."""
+    image = ota.Image("EP4213", "5.0", bytes(10))
+    heater = FakeHeater([])
+    writes: list[bool] = []
+
+    async def set_mode(on: bool) -> None:
+        writes.append(on)
+        if on:
+            raise OSError("acknowledgement lost")
+
+    with pytest.raises(OSError):
+        await ota.async_flash(
+            ota.Transport(set_mode, heater.send, heater.reply), image, 236
+        )
+
+    assert writes == [True, False]
+    assert heater.sent == [ota.frame(ota.EXIT)]
