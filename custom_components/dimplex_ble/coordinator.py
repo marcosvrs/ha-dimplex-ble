@@ -142,7 +142,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                     tuple(SCHEDULE_PROGRAMMES.values()) if self._schedules_due else (),
                 )
                 if self._settings_due:
-                    self._settings_due = False
+                    # Stay due until every setting was read (a failed read
+                    # must not confirm a value just written).
+                    self._settings_due = not set(SLOW_SETTINGS) <= set(settings)
                     self._apply_settings(settings)
                 if self._schedules_due and schedules:
                     self._schedules_due = False

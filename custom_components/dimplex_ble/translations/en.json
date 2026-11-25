@@ -23,7 +23,7 @@
       },
       "reauth_confirm": {
         "title": "Pair {name} again",
-        "description": "The heater rejected the saved PIN. Submit to pair it again."
+        "description": "The heater needs its PIN again. Submit to pair it."
       },
       "reauth_proxy": {
         "title": "Choose a Bluetooth proxy",

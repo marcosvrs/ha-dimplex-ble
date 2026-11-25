@@ -16,6 +16,7 @@ from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
+from . import responder
 from .const import (
     CLOCK_CHECK_INTERVAL,
     CONF_ADDRESS,
@@ -24,6 +25,7 @@ from .const import (
     CONF_SYNC_CLOCK,
     DEFAULT_SYNC_CLOCK,
     DOMAIN,
+    PASSKEY_REQUEST_EVENT,
     PLATFORMS,
     SCHEDULE_UPDATE_INTERVAL,
     SETTINGS_UPDATE_INTERVAL,
@@ -93,6 +95,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimplexConfigEntry) -> b
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_close_on_stop)
     )
+    if not entry.data.get(CONF_PASSKEY):
+
+        @callback
+        def _on_passkey_request(event: Event) -> None:
+            """No PIN is stored, so nothing can answer: ask the user for it.
+
+            The entry was set up on a proxy that already held the bond; once
+            that bond is gone the heater asks for its PIN on every connect.
+            """
+            if str(
+                event.data.get("address", "")
+            ).upper() == link.address and responder.is_proxy_device(
+                hass, link.source, event.data.get("device_id")
+            ):
+                entry.async_start_reauth(hass)
+
+        entry.async_on_unload(
+            hass.bus.async_listen(PASSKEY_REQUEST_EVENT, _on_passkey_request)
+        )
     entry.async_on_unload(
         bluetooth.async_register_advertisement_callback(
             # habluetooth keys addresses upper-case, as HeaterLink stores it.

@@ -48,7 +48,10 @@ class StallMonitor:
         self.issue_id = stall_issue_id(entry_id)
         self._scanner: BaseHaScanner | None = None
         self._cancel_timer: CALLBACK_TYPE | None = None
-        self._raised = False
+        # A repair raised before a reload is still in the registry.
+        self._raised = (
+            ir.async_get(hass).async_get_issue(DOMAIN, self.issue_id) is not None
+        )
         self._stopped = False
 
     def _proxy_online(self, scanner: BaseHaScanner | None) -> bool:

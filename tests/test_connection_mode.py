@@ -408,6 +408,8 @@ async def test_per_poll_sound_failure_keeps_the_snapshot(
     assert coordinator.sound_value is None
     assert kinds(proxy.events).count("connect") == 1
     assert proxy.events[-1] == "disconnect"
+    # Nothing was confirmed, so the next poll reads the settings again.
+    assert coordinator._settings_due
 
 
 async def test_per_poll_commands_connect_and_disconnect(hass, fake_bt) -> None:
@@ -492,3 +494,65 @@ async def test_per_poll_disconnect_is_ours_not_a_stall(hass, fake_bt) -> None:
 
     assert lost == []
     assert proxy.events[-1] == "disconnect"
+
+
+# --- Review round 2 ------------------------------------------------------------
+
+
+def make_entry_without_pin(hass) -> MockConfigEntry:
+    """Set up on a proxy that already held the bond: no PIN was stored."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dimplex Panel Heater AM6532",
+        unique_id=ADDRESS.lower(),
+        data={CONF_ADDRESS: ADDRESS, CONF_PROXY_SOURCE: PROXY},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_a_pin_request_without_a_stored_pin_asks_the_user(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    entry = make_entry_without_pin(hass)
+    await setup(hass, entry)
+
+    fake_bt.passkey_request(proxy, address="AA:BB:CC:DD:EE:99")  # another heater
+    fake_bt.passkey_request(proxy, device_id="unknown-device")  # not our proxy
+    await hass.async_block_till_done()
+    assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+
+    fake_bt.passkey_request(proxy)
+    await hass.async_block_till_done()
+    [flow] = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert flow["context"]["source"] == "reauth"
+
+
+async def test_a_stored_pin_answers_by_itself(hass, fake_bt) -> None:
+    proxy = fake_bt.add()
+    await setup(hass, make_entry(hass))
+
+    fake_bt.passkey_request(proxy)
+    await hass.async_block_till_done()
+    assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+
+
+async def test_a_repair_raised_before_a_reload_is_cleared_when_heard(
+    hass, fake_bt
+) -> None:
+    fake_bt.add()
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        coordinator.stall.issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="heater_stalled",
+    )
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entry.runtime_data.stall.async_heard()
+
+    assert issue(hass, entry) is None
