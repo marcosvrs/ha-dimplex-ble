@@ -179,7 +179,7 @@ async def test_install_downloads_checks_and_flashes(
 
 
 @pytest.mark.usefixtures("signed_in")
-@pytest.mark.parametrize("failure", ["download", "flash"])
+@pytest.mark.parametrize("failure", ["download", "flash", "version"])
 async def test_install_failures_are_reported(
     hass, fake_bt, dimplex, monkeypatch, failure
 ) -> None:
@@ -195,7 +195,8 @@ async def test_install_failures_are_reported(
         raise ota.UpdateError("No reply to row")
 
     monkeypatch.setattr(cloud, "async_download", download)
-    monkeypatch.setattr(ota, "load_release", lambda z, ep: ota.Image(ep, "5.0", b"x"))
+    version = "4.0" if failure == "version" else "5.0"
+    monkeypatch.setattr(ota, "load_release", lambda z, ep: ota.Image(ep, version, b"x"))
     monkeypatch.setattr(coordinator.link, "async_flash", flash)
 
     with pytest.raises(HomeAssistantError) as raised:
@@ -208,6 +209,7 @@ async def test_install_failures_are_reported(
     expected = {
         "download": "firmware_download_failed",
         "flash": "firmware_update_failed",
+        "version": "firmware_download_failed",
     }[failure]
     assert raised.value.translation_key == expected, raised.value
     assert hass.states.get(entity_id(hass)).attributes["in_progress"] is False

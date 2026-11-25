@@ -101,6 +101,11 @@ class DimplexFirmwareUpdate(DimplexEntity, UpdateEntity):
             firmware = await self._latest()
             release = await cloud.async_download(account(self.hass).session, firmware)
             image = ota.load_release(release, data.product_code)
+            if image.version != firmware.version:
+                raise ValueError(
+                    f"The download is version {image.version}, "
+                    f"Dimplex offers {firmware.version}"
+                )
         except (cloud.CloudError, ValueError) as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
