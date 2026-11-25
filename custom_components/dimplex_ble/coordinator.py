@@ -492,7 +492,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 # Keep the Away temperature the heater holds now (it may have
                 # changed on the heater since the last poll).
                 live = parse_away_mode(current)
-                target = live[2] if live is not None else self._away_target()
+                target = self._away_target(live[2] if live is not None else None)
                 return encode_away_mode(True, start, target)
 
             await self.async_command(self.link.async_read_then_write(AWAY_MODE, build))
@@ -532,9 +532,19 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         # the new mode) is validated against the state, so it must be current.
         await self.async_refresh()
 
-    def _away_target(self) -> int:
-        """Return the Away temperature to keep when rewriting the Away record."""
+    def _away_target(self, value: int | None = None) -> int:
+        """Return the Away temperature to keep when rewriting the Away record.
+
+        ``value`` (the live record's) or the last poll's, if it is within the
+        documented 7-18 degC; otherwise 7 degC, so a malformed record never
+        writes an unheated Away.
+        """
         data = self.data
-        if data is not None and data.away_target_temperature_c is not None:
-            return data.away_target_temperature_c
+        if value is None and data is not None:
+            value = data.away_target_temperature_c
+        if (
+            value is not None
+            and AWAY_TEMPERATURE_MIN_C <= value <= AWAY_TEMPERATURE_MAX_C
+        ):
+            return value
         return AWAY_TEMPERATURE_MIN_C

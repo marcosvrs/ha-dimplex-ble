@@ -680,3 +680,23 @@ async def test_starting_away_keeps_the_temperature_set_on_the_heater(
 
     [away] = [e[2] for e in proxy.events if e[0] == "write" and e[1][4:8] == "102a"]
     assert away[0] == 1 and away[6] == 15
+
+
+async def test_a_malformed_away_record_never_writes_an_unheated_away(
+    hass, fake_bt
+) -> None:
+    """Codex review: an Away target outside 7-18 C falls back to 7 C."""
+    from custom_components.dimplex_ble.protocol import AWAY_MODE
+
+    proxy = fake_bt.add()
+    proxy.services.add(AWAY_MODE)
+    proxy.values[AWAY_MODE] = bytes(7)  # all zeros: target 0 C
+    coordinator = await setup(hass, make_entry(hass))
+    proxy.events.clear()
+
+    await coordinator.async_set_away_mode(
+        until=dt_util.now().replace(tzinfo=None) + timedelta(hours=13)
+    )
+
+    [away] = [e[2] for e in proxy.events if e[0] == "write" and e[1][4:8] == "102a"]
+    assert away[6] == 7
