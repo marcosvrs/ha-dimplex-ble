@@ -11,11 +11,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .const import DOMAIN
 from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
-from .protocol import GattAddress
+from .protocol import DISPLAY_UNIT
 
 PARALLEL_UPDATES = 1
 DISPLAY_UNIT_OPTIONS = ["celsius", "fahrenheit"]
-DISPLAY_UNIT: GattAddress = (0, 0x1005)
 
 
 async def async_setup_entry(

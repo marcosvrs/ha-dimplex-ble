@@ -12,7 +12,6 @@ from custom_components.dimplex_ble.protocol import (
     HeaterSnapshot,
     _parse_selected_version,
     characteristic_uuid,
-    encode_advance,
     encode_away_mode,
     encode_heating_mode,
     encode_preset_mode,
@@ -436,9 +435,8 @@ def test_out_all_day_preset_round_trips_the_timer_submode() -> None:
 
 
 @pytest.mark.parametrize(("payload", "active"), [(b"\x00", False), (b"\x01", True)])
-def test_advance_round_trips_off_and_on(payload: bytes, active: bool) -> None:
+def test_advance_reads_off_and_on(payload: bytes, active: bool) -> None:
     assert parse_advance(payload) is active
-    assert encode_advance(active) == payload
 
 
 @pytest.mark.parametrize("payload", [None, b"", b"\x02", b"\x06", b"\x81", b"\x00\x00"])

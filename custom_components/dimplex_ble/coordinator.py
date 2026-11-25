@@ -93,6 +93,23 @@ def keep_connected(entry: ConfigEntry) -> bool:
     return bool(entry.options.get(CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED))
 
 
+def whole_degrees(value: object, low: int, high: int) -> int:
+    """Return ``value`` as whole degrees within ``low``..``high``, or refuse it."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or not float(value).is_integer()
+        or not low <= value <= high
+    ):
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="invalid_setpoint",
+            translation_placeholders={"min": str(low), "max": str(high)},
+        )
+    return int(value)
+
+
 class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
     """Poll the heater through its link and map failures once."""
 
@@ -137,7 +154,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 snapshot,
                 settings,
                 schedules,
-            ) = await self.link.async_snapshot_with_settings(
+            ) = await self.link.async_snapshot(
                 tuple(SLOW_SETTINGS) if self._settings_due else (),
                 tuple(SCHEDULE_PROGRAMMES.values()) if self._schedules_due else (),
             )
@@ -189,7 +206,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self, address: GattAddress, payload: bytes, *, refresh: bool = True
     ) -> None:
         """Write a setting, mapping failures to Home Assistant errors."""
-        await self._async_command(self.link.async_write(address, payload))
+        await self.async_command(self.link.async_write(address, payload))
         if refresh:
             await self.async_request_refresh()
 
@@ -202,21 +219,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="setpoint_unavailable"
             )
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not isfinite(value)
-            or not float(value).is_integer()
-            or not low <= value <= high
-        ):
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_setpoint",
-                translation_placeholders={"min": str(low), "max": str(high)},
-            )
-        return int(value)
+        return whole_degrees(value, low, high)
 
-    async def _async_command[T](self, command: Awaitable[T]) -> T:
+    async def async_command[T](self, command: Awaitable[T]) -> T:
         """Run a link command, mapping failures to Home Assistant errors."""
         try:
             return await command
@@ -237,7 +242,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="boost_not_in_away"
                 )
-            await self._async_command(
+            await self.async_command(
                 self.link.async_write_many(
                     (
                         (BOOST_REMAINING, encode_boost_minutes(minutes)),
@@ -252,7 +257,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
 
     async def _async_end_boost(self) -> None:
         """Write 0 minutes and wait for the heater to restore its mode."""
-        await self._async_command(
+        await self.async_command(
             self.link.async_write(BOOST_REMAINING, encode_boost_minutes(0))
         )
         # ConfigR re-reads 1 s after ending Boost; the heater had restored its
@@ -284,7 +289,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         """
         readback: dict[int, tuple[SchedulePeriod, ...] | None] = {}
         try:
-            await self._async_command(
+            await self.async_command(
                 self.link.async_save_schedule(
                     SCHEDULE_PROGRAMMES[preset], days, readback
                 )
@@ -391,11 +396,12 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                     translation_domain=DOMAIN, translation_key="setting_unavailable"
                 ) from err
 
-        payload = await self._async_command(
+        payload = await self.async_command(
             self.link.async_read_then_write(SETBACK, build)
         )
         self.settings[SETBACK] = payload
         self.async_update_listeners()
+        self._settings_due = True  # confirmed by the next poll, as other writes
 
     async def async_set_temperature_offset(self, offset_c: float) -> None:
         """Write the room-temperature offset in 0.1 degC steps."""
@@ -414,19 +420,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
 
     async def async_set_away_temperature(self, temperature_c: float) -> None:
         """Change the Away target, keeping Away's state and return time."""
-        value = float(temperature_c)
-        if (
-            not value.is_integer()
-            or not AWAY_TEMPERATURE_MIN_C <= value <= AWAY_TEMPERATURE_MAX_C
-        ):
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_setpoint",
-                translation_placeholders={
-                    "min": str(AWAY_TEMPERATURE_MIN_C),
-                    "max": str(AWAY_TEMPERATURE_MAX_C),
-                },
-            )
+        value = whole_degrees(
+            temperature_c, AWAY_TEMPERATURE_MIN_C, AWAY_TEMPERATURE_MAX_C
+        )
         async with self._away_lock:
             data = self.data
             if data is None or data.away_active is None:
@@ -452,9 +448,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
                         translation_domain=DOMAIN,
                         translation_key="away_temperature_needs_away",
                     )
-                return encode_away_mode(True, live[1], int(value))
+                return encode_away_mode(True, live[1], value)
 
-            await self._async_command(self.link.async_read_then_write(AWAY_MODE, build))
+            await self.async_command(self.link.async_read_then_write(AWAY_MODE, build))
         await self.async_request_refresh()
 
     async def async_set_away_mode(
@@ -539,7 +535,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             else AWAY_TEMPERATURE_MIN_C
         )
         writes = ((AWAY_MODE, encode_away_mode(active, until, target_temperature)),)
-        await self._async_command(
+        await self.async_command(
             self.link.async_write_many(writes + ((then,) if then else ()))
         )
         # Later Away checks must see what was just written, not the snapshot

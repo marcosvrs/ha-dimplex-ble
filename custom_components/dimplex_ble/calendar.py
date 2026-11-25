@@ -1,4 +1,4 @@
-"""Read-only calendars of the heater's timer programmes (User Timer, ...)."""
+"""Calendars of the heater's timer programmes (User Timer, ...)."""
 
 from __future__ import annotations
 
@@ -34,7 +34,8 @@ async def async_setup_entry(
 class DimplexScheduleCalendar(DimplexEntity, CalendarEntity):
     """The heating periods of one timer programme, as stored on the heater.
 
-    Read-only: the programmes are edited on the heater or in the Dimplex app.
+    Not editable as events: programmes change on the heater, in the Dimplex
+    app, or with the set_schedule action.
     Times are the heater's local times, shown in Home Assistant's time zone.
     """
 

@@ -10,6 +10,16 @@ OPEN_WINDOW_DETECTION: Final[GattAddress] = (0, 0x1007)
 PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
 HEATING_MODE: Final[GattAddress] = (0, 0x1001)
 SETPOINT: Final[GattAddress] = (0, 0x1023)
+HEATER_TYPE: Final[GattAddress] = (3, 0x2005)
+PRODUCT_CODE: Final[GattAddress] = (3, 0x200A)
+RF_VERSION: Final[GattAddress] = (3, 0x2009)
+POWER_LOADING: Final[GattAddress] = (3, 0x000A)
+ERROR_STATUS: Final[GattAddress] = (0, 0x1011)
+DISPLAY_UNIT: Final[GattAddress] = (0, 0x1005)
+# Selector reads: write the selector, then read (room 1 / LCD 2, Trac 1, UI 1).
+ROOM_TEMPERATURE: Final[GattAddress] = (1, 0x0008)
+TRAC: Final[GattAddress] = (1, 0x0002)
+UI_VERSION: Final[GattAddress] = (3, 0x2001)
 AWAY_MODE: Final[GattAddress] = (0, 0x102A)
 SOUND: Final[GattAddress] = (2, 0x0005)
 # ConfigR AdvanceHeatingParameter, SetpointRange, SetbackParameter and
@@ -70,7 +80,6 @@ PRESET_FROST_PROTECT = "frost_protect"
 PRESET_BOOST = "boost"
 
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
-MAX_GATT_VALUE_BYTES: Final = 512
 
 
 class DimplexProtocolError(ValueError):
@@ -337,11 +346,6 @@ def parse_advance(value: bytes | None) -> bool | None:
     return bool(value[0])
 
 
-def encode_advance(active: bool) -> bytes:
-    """Encode AdvanceHeating ``On=1``/``Off=0``; the boost variants are not used."""
-    return bytes((int(active),))
-
-
 def parse_setback(value: bytes | None) -> bool | None:
     """Decode whether Setback is on from ``[IsActive, Temperature]``."""
     if value is None or len(value) != SETBACK_PAYLOAD_LENGTH or value[0] not in (0, 1):
@@ -401,6 +405,29 @@ def _parse_selected_version(value: bytes | None, selector: int) -> str | None:
     return f"{value[1]}.{value[2]}"
 
 
+# Plain reads of every poll, decoded by parse_snapshot (the selector reads
+# ROOM_TEMPERATURE, TRAC and UI_VERSION are passed separately).
+SNAPSHOT_FIELDS: Final[tuple[GattAddress, ...]] = (
+    HEATER_TYPE,
+    PRODUCT_CODE,
+    RF_VERSION,
+    POWER_LOADING,
+    SETPOINT,
+    SETPOINT_RANGE,
+    ERROR_STATUS,
+    HEATING_MODE,
+    OPEN_WINDOW_DETECTION,
+    PREEMPTIVE_HEATING,
+    AWAY_MODE,
+    DISPLAY_UNIT,
+    # Advance ends by itself at the next timer period, so it is polled.
+    ADVANCE_HEATING,
+    # Boost also ends by itself; its temperature is the heater's own setting.
+    BOOST_REMAINING,
+    BOOST_TEMPERATURE,
+)
+
+
 def parse_snapshot(
     values: dict[GattAddress, bytes],
     *,
@@ -409,24 +436,24 @@ def parse_snapshot(
     trac: bytes | None = None,
 ) -> HeaterSnapshot:
     """Decode the safe, known fields from a collection of raw GATT values."""
-    identity = values.get((3, 0x2005))
+    identity = values.get(HEATER_TYPE)
     model = (
         identity.decode("ascii", errors="replace").strip("\x00 ") or None
         if identity is not None
         else None
     )
-    product = values.get((3, 0x200A))
+    product = values.get(PRODUCT_CODE)
     product_code = (
         product.decode("ascii", errors="replace").strip("\x00 ") or None
         if product is not None
         else None
     )
-    rf_version = values.get((3, 0x2009))
+    rf_version = values.get(RF_VERSION)
     rf_firmware_revision = (
         rf_version[0] if rf_version is not None and len(rf_version) >= 1 else None
     )
 
-    setpoint = values.get((0, 0x1023))
+    setpoint = values.get(SETPOINT)
     setpoint_c = (
         int.from_bytes(setpoint[:2], "little")
         if setpoint and len(setpoint) >= 2
@@ -445,16 +472,16 @@ def parse_snapshot(
             minimum_temperature_c = None
             maximum_temperature_c = None
 
-    room = values.get((1, 0x0008))
+    room = values.get(ROOM_TEMPERATURE)
     current_temperature_c = _parse_selected_temperature(room, 1)
     lcd_temperature_c = _parse_selected_temperature(lcd_temperature, 2)
 
-    error = values.get((0, 0x1011))
+    error = values.get(ERROR_STATUS)
     error_code = int.from_bytes(error, "little") if error else None
     error_status_hex = error.hex() if error is not None else None
 
-    mode = values.get((0, 0x1001))
-    display_unit = values.get((0, 0x1005))
+    mode = values.get(HEATING_MODE)
+    display_unit = values.get(DISPLAY_UNIT)
     open_window = values.get(OPEN_WINDOW_DETECTION)
     open_window_detection = (
         bool(open_window[0])
@@ -475,7 +502,7 @@ def parse_snapshot(
     away_target_temperature_c = away_mode[2] if away_mode is not None else None
     advance_active = parse_advance(values.get(ADVANCE_HEATING))
 
-    power_loading = values.get((3, 0x000A))
+    power_loading = values.get(POWER_LOADING)
     rated_power_w = (
         int.from_bytes(power_loading[:2], "little")
         if power_loading is not None and len(power_loading) >= 2

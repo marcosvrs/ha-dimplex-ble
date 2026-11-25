@@ -21,7 +21,6 @@ from .protocol import (
     SOUND,
     TIMER_MODE_KEYS,
     GattAddress,
-    encode_advance,
     heating_mode_of,
     parse_setback,
     parse_sound_enabled,
@@ -177,10 +176,6 @@ class DimplexAdvanceSwitch(_DimplexBooleanSettingSwitch):
     _unique_suffix = "advance"
     _setting_address = ADVANCE_HEATING
     _snapshot_attribute = "advance_active"
-
-    async def _async_set_setting(self, enabled: bool) -> None:
-        """Write Advance On/Off and refresh its device readback."""
-        await self.coordinator.async_write(ADVANCE_HEATING, encode_advance(enabled))
 
     async def async_turn_on(self, **kwargs: object) -> None:
         """Start Advance; the heater supports it only in a timer preset."""

@@ -113,6 +113,9 @@
   "services": {
     "get_gatt_services": {
       "service": "mdi:bluetooth-settings"
+    },
+    "set_schedule": {
+      "service": "mdi:calendar-edit"
     }
   }
 }

@@ -32,16 +32,13 @@ from .errors import (
     pair_error_code,
 )
 from .protocol import (
-    ADVANCE_HEATING,
-    AWAY_MODE,
-    BOOST_REMAINING,
-    BOOST_TEMPERATURE,
     CLOCK,
-    OPEN_WINDOW_DETECTION,
-    PREEMPTIVE_HEATING,
+    ROOM_TEMPERATURE,
     SCHEDULE,
     SCHEDULE_DAYS,
-    SETPOINT_RANGE,
+    SNAPSHOT_FIELDS,
+    TRAC,
+    UI_VERSION,
     GattAddress,
     HeaterSnapshot,
     SchedulePeriod,
@@ -55,28 +52,6 @@ from .protocol import (
 )
 
 CONNECT_TIMEOUT = 15.0
-READ_SNAPSHOT_FIELDS: tuple[GattAddress, ...] = (
-    (3, 0x2005),
-    (3, 0x200A),
-    (3, 0x2009),
-    (3, 0x000A),
-    (0, 0x1023),
-    SETPOINT_RANGE,
-    (0, 0x1011),
-    (0, 0x1001),
-    OPEN_WINDOW_DETECTION,
-    PREEMPTIVE_HEATING,
-    AWAY_MODE,
-    (0, 0x1005),
-    # Advance ends by itself at the next timer period, so it is polled.
-    ADVANCE_HEATING,
-    # Boost also ends by itself; its temperature is the heater's own setting.
-    BOOST_REMAINING,
-    BOOST_TEMPERATURE,
-)
-ROOM_TEMPERATURE: GattAddress = (1, 0x0008)
-TRAC: GattAddress = (1, 0x0002)
-UI_VERSION: GattAddress = (3, 0x2001)
 _GATT_ERRORS = (BleakError, TimeoutError, OSError)
 # Quiet time a heater needs after a link ends before it accepts a new one.
 # Evidence: reconnecting 20-23 ms after a disconnect made the heater accept and
@@ -207,6 +182,17 @@ async def _read_selector(
 type WeekSchedule = list[tuple[SchedulePeriod, ...] | None]
 
 
+async def _read_schedule_day(
+    client: BaseBleakClient, programme: int, day: int
+) -> tuple[SchedulePeriod, ...] | None:
+    """Select one programme day, then read and decode it."""
+    return parse_schedule_day(
+        await _read_selector(client, SCHEDULE, encode_schedule_request(programme, day)),
+        programme,
+        day,
+    )
+
+
 async def _read_schedules(
     client: BaseBleakClient, programmes: tuple[int, ...]
 ) -> dict[int, WeekSchedule]:
@@ -214,13 +200,7 @@ async def _read_schedules(
     schedules: dict[int, WeekSchedule] = {}
     for programme in programmes:
         schedules[programme] = [
-            parse_schedule_day(
-                await _read_selector(
-                    client, SCHEDULE, encode_schedule_request(programme, day)
-                ),
-                programme,
-                day,
-            )
+            await _read_schedule_day(client, programme, day)
             for day in range(SCHEDULE_DAYS)
         ]
     return schedules
@@ -229,7 +209,7 @@ async def _read_schedules(
 async def _read_snapshot(client: BaseBleakClient) -> HeaterSnapshot:
     """Read every mapped field on an authenticated link."""
     values: dict[GattAddress, bytes] = {}
-    for address in READ_SNAPSHOT_FIELDS:
+    for address in SNAPSHOT_FIELDS:
         if (raw := await _read_optional(client, address)) is not None:
             values[address] = raw
     if (room := await _read_selector(client, ROOM_TEMPERATURE, 1)) is not None:
@@ -294,18 +274,10 @@ class HeaterLink:
                 return scanner, seen.ble_device
         return None
 
-    async def async_snapshot(self) -> HeaterSnapshot:
-        """Read the complete mapped snapshot."""
-        started = time.monotonic()
-        async with self._operation("snapshot") as client:
-            snapshot = await _read_snapshot(client)
-        _LOGGER.debug(
-            "GATT %s snapshot ok %.2fs", self.address, time.monotonic() - started
-        )
-        return snapshot
-
-    async def async_snapshot_with_settings(
-        self, settings: tuple[GattAddress, ...], programmes: tuple[int, ...] = ()
+    async def async_snapshot(
+        self,
+        settings: tuple[GattAddress, ...] = (),
+        programmes: tuple[int, ...] = (),
     ) -> tuple[
         HeaterSnapshot, dict[GattAddress, bytes | None], dict[int, WeekSchedule]
     ]:
@@ -380,13 +352,7 @@ class HeaterLink:
         async with self._operation("save schedule") as client:
             for day, payload in payloads.items():
                 await _write(client, SCHEDULE, payload)
-                readback[day] = parse_schedule_day(
-                    await _read_selector(
-                        client, SCHEDULE, encode_schedule_request(programme, day)
-                    ),
-                    programme,
-                    day,
-                )
+                readback[day] = await _read_schedule_day(client, programme, day)
 
     async def async_gatt_services(self) -> list[GattServiceInfo]:
         """Return service metadata without reading characteristic values."""

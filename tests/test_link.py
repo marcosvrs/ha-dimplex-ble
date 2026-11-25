@@ -44,7 +44,7 @@ async def test_connect_then_pair_then_gatt_in_order(hass, fake_bt) -> None:
     proxy = fake_bt.add()
     link = make_link(hass)
 
-    snapshot = await link.async_snapshot()
+    snapshot, _, _ = await link.async_snapshot()
 
     assert snapshot.model == "QRAD100E"
     assert snapshot.setpoint_c == 21
@@ -84,7 +84,7 @@ async def test_live_link_is_reused_and_a_dropped_one_reconnects(hass, fake_bt) -
 
 async def read(link: HeaterLink, address: tuple[int, int]) -> bytes | None:
     """Read one setting the way every poll does."""
-    _, values, _ = await link.async_snapshot_with_settings((address,))
+    _, values, _ = await link.async_snapshot((address,))
     return values.get(address)
 
 
@@ -383,7 +383,7 @@ async def test_optional_and_selector_reads_skip_unusable_characteristics(
     proxy.values[(0, 0x102A)] = bytes((0, 26, 11, 30, 0, 18, 7))
     proxy.services.add((1, 0x0008), ("read", "write-without-response"))
 
-    snapshot = await make_link(hass).async_snapshot()
+    snapshot, _, _ = await make_link(hass).async_snapshot()
 
     assert snapshot.away_active is False
     assert snapshot.current_temperature_c is not None
@@ -483,7 +483,7 @@ async def test_failed_clear_does_not_fail_the_operation(hass, fake_bt) -> None:
 
     proxy.on_arm = drop_api
 
-    assert (await make_link(hass).async_snapshot()).model == "QRAD100E"
+    assert (await make_link(hass).async_snapshot())[0].model == "QRAD100E"
     assert proxy.actions == [
         ("dimplex_pin_arm", {"address": ADDRESS, "passkey": 12345})
     ]
@@ -530,7 +530,7 @@ async def test_snapshot_reads_every_verified_setting(hass, fake_bt) -> None:
     """Regression: Adaptive Start (0x1008) was dropped from the snapshot reads."""
     fake_bt.add()
 
-    snapshot = await make_link(hass).async_snapshot()
+    snapshot, _, _ = await make_link(hass).async_snapshot()
 
     assert snapshot.preemptive_heating is True
 
