@@ -541,3 +541,18 @@ No characteristic was written; subscribing wrote only the CCCD.
 - Not settled: app rollback after a bad-but-valid image (`PENDING_VERIFY`
   appears once; `esp_ota_mark_app_valid_cancel_rollback` is not a string in
   the image, so this cannot be decided statically).
+
+## Live handshake 2026-11-25 12:31 UTC: AM2086, no image data
+
+Sequence: subscribe `C51D`; write `1/0x300E = 01`; write EnterOTA
+`01 38 0d00 34323133 0000ff0000 60d60d00 97 17` (size 906,848); reply after
+0.1 s: **`01 00 e8 17`**; write ExitOTA `01 3b 0000 ad 17`: **no reply in 30 s**;
+write `300E = 00` (reads back `00`); UI still `01 01 07`. The next poll was
+normal.
+
+- Reply envelope: `01 | status | cksum | 17` (status `00` = OK; cksum makes
+  `0x17 + Σ` ≡ 0 mod 256). ConfigR checks `reply[1] == 0` (EnterBootloader step).
+- The enter ACK comes before any erase delay, so erase (if any) happens later
+  or lazily per row; the row ACK timing is still unmeasured.
+- ExitOTA without rows or CRC gets no reply; disabling via `300E = 00` leaves
+  the heater in normal operation.
