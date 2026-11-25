@@ -407,7 +407,14 @@ class HeaterLink:
                     type(err).__name__,
                     err,
                 )
+                scanner = self._scanner
                 await self._disconnect("gatt_error")
+                # A GATT failure is often the first sign of a link the heater
+                # dropped (supervision timeout, error=8, reported after our
+                # release): start the stall window; hearing the heater ends it
+                # (AM1382, 2026-11-25 08:19).
+                if self.on_link_lost is not None:
+                    self.on_link_lost(scanner)
                 raise HeaterUnavailableError(f"GATT {op} failed") from err
             except asyncio.CancelledError:
                 await self._disconnect("cancelled")

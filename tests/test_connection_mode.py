@@ -700,3 +700,37 @@ async def test_a_malformed_away_record_never_writes_an_unheated_away(
 
     [away] = [e[2] for e in proxy.events if e[0] == "write" and e[1][4:8] == "102a"]
     assert away[6] == 7
+
+
+async def test_a_read_failure_then_silence_raises_the_repair(hass, fake_bt) -> None:
+    """AM1382 2026-11-25 08:19: the timeout surfaced as a GATT read error first."""
+    from conftest import gatt_failure
+
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    proxy.read_error = gatt_failure(133)
+    proxy.sees_heater = False
+
+    await coordinator.async_refresh()
+    await advance(hass, STALL_WINDOW + 1)
+
+    assert issue(hass, entry) is not None
+
+
+async def test_a_read_failure_on_a_heater_still_heard_raises_nothing(
+    hass, fake_bt
+) -> None:
+    from conftest import gatt_failure
+
+    proxy = fake_bt.add()
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    proxy.read_error = gatt_failure(133)
+
+    await coordinator.async_refresh()
+    proxy.read_error = None
+    fake_bt.advertise(PROXY)
+    await advance(hass, STALL_WINDOW + 1)
+
+    assert issue(hass, entry) is None
