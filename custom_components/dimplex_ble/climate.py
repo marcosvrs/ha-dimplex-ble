@@ -285,10 +285,10 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="invalid_hvac_mode",
             )
+        if self.hvac_mode == hvac_mode:
+            return  # idempotent: a running Boost keeps running
         if self._boosting:
             await self.coordinator.async_cancel_boost()
-        if self.hvac_mode == hvac_mode:
-            return
         payload = (
             encode_preset_mode(self._last_schedule)
             if hvac_mode == HVACMode.AUTO

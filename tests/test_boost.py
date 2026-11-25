@@ -249,17 +249,13 @@ async def test_a_mode_change_ends_boost_first(hass) -> None:
     coordinator.async_write_mode.assert_awaited_once()
 
 
-async def test_the_same_mode_only_ends_boost(hass) -> None:
+async def test_the_same_mode_keeps_boost_running(hass) -> None:
+    """Review round 8: set_hvac_mode to the current mode changes nothing."""
     coordinator, entity = climate(hass, minutes=29, mode_hex="020000010000")
-    coordinator.async_cancel_boost.side_effect = lambda: setattr(
-        coordinator,
-        "data",
-        snapshot(mode_hex="040000000000", boost_minutes_left=0),
-    )
 
     await entity.async_set_hvac_mode(HVACMode.HEAT)
 
-    coordinator.async_cancel_boost.assert_awaited_once()
+    coordinator.async_cancel_boost.assert_not_awaited()
     coordinator.async_write_mode.assert_not_awaited()
 
 
