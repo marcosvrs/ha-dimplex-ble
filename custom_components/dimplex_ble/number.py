@@ -90,6 +90,17 @@ class DimplexBoostTemperatureNumber(_DimplexTemperatureNumber):
     _unique_suffix = "boost_temperature"
 
     @property
+    def available(self) -> bool:
+        """Also require the setpoint range the write is checked against."""
+        data = self.coordinator.data
+        return (
+            super().available
+            and data is not None
+            and data.minimum_temperature_c is not None
+            and data.maximum_temperature_c is not None
+        )
+
+    @property
     def native_value(self) -> float | None:
         """Return the Boost temperature reported by the heater."""
         data = self.coordinator.data

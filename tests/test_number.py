@@ -279,3 +279,11 @@ def test_boost_temperature_without_heater_values(hass) -> None:
     entity = DimplexBoostTemperatureNumber(coordinator)
     assert entity.native_value is None and not entity.available
     assert (entity.native_min_value, entity.native_max_value) == (7.0, 35.0)
+
+
+def test_boost_temperature_needs_the_setpoint_range(hass) -> None:
+    """Codex review: without the range every write would be refused."""
+    coordinator, _ = make_coordinator(
+        hass, snapshot(minimum=None, maximum=None, boost_temperature_c=21)
+    )
+    assert not DimplexBoostTemperatureNumber(coordinator).available
