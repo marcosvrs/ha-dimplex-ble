@@ -276,7 +276,7 @@
     },
     "get_schedule": {
       "name": "Get schedule",
-      "description": "Returns each timer programme as the heater holds it, the changes still waiting for the heater, and Home Assistant's backup copy.",
+      "description": "Returns each timer programme as the heater held it at the last read (read_at), the changes still waiting for the heater, and Home Assistant's backup copy.",
       "fields": {
         "device_id": {
           "name": "Heater",
@@ -368,7 +368,7 @@
       "message": "Boost isn't available during Away."
     },
     "no_schedule_backup": {
-      "message": "There is no backup of this programme yet."
+      "message": "There is no complete backup of this programme yet."
     }
   },
   "issues": {

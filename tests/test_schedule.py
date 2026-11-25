@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock, patch
@@ -635,7 +636,8 @@ async def test_get_schedule_returns_heater_pending_and_backup(hass, fake_bt) -> 
         return_response=True,
     )
 
-    assert list(result) == ["home_all_day"]
+    assert list(result) == ["read_at", "home_all_day"]
+    assert result["read_at"] is not None
     entry_result = result["home_all_day"]
     assert entry_result["heater"]["mon"] == [["08:00", "21:00", 21]]
     assert entry_result["pending"] == {"sun": [["07:00", "09:00", 21]]}
@@ -648,7 +650,7 @@ async def test_get_schedule_returns_heater_pending_and_backup(hass, fake_bt) -> 
         blocking=True,
         return_response=True,
     )
-    assert list(everything) == ["user_timer", "home_all_day", "out_all_day"]
+    assert list(everything) == ["read_at", "user_timer", "home_all_day", "out_all_day"]
 
 
 async def test_get_schedule_before_any_read(hass, fake_bt) -> None:
@@ -772,4 +774,51 @@ async def test_a_save_refused_for_another_reason_is_not_queued(hass, fake_bt) ->
             hass, entry, programme="user_timer", days=["mon"], periods=[PERIOD]
         )
     assert err.value.translation_key == "characteristic_unavailable"
+    assert coordinator.schedule_keeper.pending == {}
+
+
+async def test_an_incomplete_backup_is_filled_in_and_only_restored_whole(
+    hass, fake_bt
+) -> None:
+    """Codex review: a day unreadable at first is filled in by a later read."""
+    proxy = with_schedules(fake_bt.add())
+    proxy.schedule[(3, 5)] = bytes(31)  # Saturday reads back as nothing usable
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    keeper = coordinator.schedule_keeper
+    assert keeper.backup["user_timer"][5] is None
+
+    with pytest.raises(ServiceValidationError):  # half a week is not restored
+        await coordinator.async_restore_schedule("user_timer")
+
+    proxy.schedule = defaults()  # readable again
+    coordinator.async_schedules_due()
+    await coordinator.async_refresh()
+    assert keeper.backup["user_timer"][5] is not None
+
+    await coordinator.async_restore_schedule("user_timer")
+
+
+async def test_a_newer_save_wins_over_an_older_waiting_change(hass, fake_bt) -> None:
+    """Codex review: the flush reads what waits only after a newer save ran."""
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    old = (SchedulePeriod(time(6), time(7), 20),)
+    coordinator.schedule_keeper.queue("user_timer", {0: old})
+
+    async with coordinator._schedule_lock:
+        newer = hass.async_create_task(
+            set_schedule(
+                hass, entry, programme="user_timer", days=["mon"], periods=[PERIOD]
+            )
+        )
+        await asyncio.sleep(0)
+        flush = hass.async_create_task(coordinator._async_apply_pending())
+        await asyncio.sleep(0)
+    await newer
+    await flush
+
+    assert coordinator.schedules["user_timer"][0] == SAVED
+    assert proxy.schedule[(3, 0)][3:9] == bytes.fromhex("070009001500")
     assert coordinator.schedule_keeper.pending == {}

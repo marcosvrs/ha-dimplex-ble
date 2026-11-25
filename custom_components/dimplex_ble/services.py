@@ -108,9 +108,11 @@ def async_setup_services(hass: HomeAssistant) -> None:
         coordinator = _get_entry(call).runtime_data
         keeper = coordinator.schedule_keeper
         wanted = call.data.get("programme")
+        read_at = coordinator.schedules_read_at
         return cast(
             ServiceResponse,
-            {
+            {"read_at": read_at.isoformat() if read_at is not None else None}
+            | {
                 preset: {
                     "heater": _week_json(coordinator.schedules[preset])
                     if preset in coordinator.schedules

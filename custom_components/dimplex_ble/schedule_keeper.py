@@ -72,9 +72,20 @@ class ScheduleKeeper:
         self._update_issue()
 
     def note_read(self, preset: str, week: list[Day | None]) -> None:
-        """Seed the backup from the first complete read of a programme."""
-        if preset not in self.backup and all(day is not None for day in week):
-            self.backup[preset] = list(week)
+        """Seed the backup from a read: only days the backup does not know yet.
+
+        Days saved through Home Assistant are never replaced by a read, so a
+        reset heater cannot overwrite them; unknown days are filled in.
+        """
+        if all(periods is None for periods in week):
+            return
+        backup = self.backup.setdefault(preset, [None] * SCHEDULE_DAYS)
+        filled = False
+        for index, periods in enumerate(week):
+            if backup[index] is None and periods is not None:
+                backup[index] = periods
+                filled = True
+        if filled:
             self._save()
 
     def note_saved(self, preset: str, day: int, periods: Day) -> None:

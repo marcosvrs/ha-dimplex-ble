@@ -209,15 +209,18 @@ writes and verifies it as soon as the heater answers again. Until then the
 heater keeps running its previous schedule.
 
 **Get schedule** (`dimplex_ble.get_schedule`) returns each programme as the
-heater holds it, the changes still waiting for the heater, and the backup copy
+heater held it at the last read (`read_at`; schedules are read every 6 hours
+and after every save), the changes still waiting for the heater, and the backup
+copy
 (per day, as `[start, end, temperature]` periods), for example to copy one day
 to others in a script.
 
 **Restore schedule** (`dimplex_ble.restore_schedule`) writes Home Assistant's
 backup copy back to the heater (one programme or all three), for example after
 the heater was reset or replaced. The backup is taken from the first complete
-read of the heater and then follows only the changes saved through Home
-Assistant, so a reset heater's factory schedule never overwrites it.
+read of the heater (later reads only fill in days it doesn't know) and then
+follows only the changes saved through Home Assistant, so a reset heater's
+factory schedule never overwrites it. Only complete weeks are restored.
 
 Developer diagnostic: the action **List Bluetooth services (developer)**
 (`dimplex_ble.get_gatt_services`) lists the heater's Bluetooth services and

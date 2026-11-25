@@ -145,6 +145,10 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         link.on_link_lost = self.stall.async_link_lost
         self.schedule_keeper = ScheduleKeeper(hass, entry.entry_id, entry.title)
         self._applying_pending = False
+        # Saves and the flush of waiting changes never interleave, so a newer
+        # save cannot be overwritten by an older waiting one.
+        self._schedule_lock = asyncio.Lock()
+        self.schedules_read_at: datetime | None = None
 
     async def _async_update_data(self) -> HeaterSnapshot:
         """Read one snapshot; a rejected PIN starts reauth and stops polling."""
@@ -187,8 +191,10 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
     async def _async_apply_pending(self) -> None:
         """Write the schedule changes saved while the heater was unreachable."""
         try:
-            for preset, days in list(self.schedule_keeper.pending.items()):
-                await self.async_save_schedule(preset, dict(days))
+            async with self._schedule_lock:
+                # Read only now: a save that ran first has already cleared it.
+                for preset, days in list(self.schedule_keeper.pending.items()):
+                    await self._async_save_schedule(preset, dict(days))
         except HomeAssistantError as err:
             _LOGGER.debug(
                 "Pending schedule for %s not written: %s", self.link.address, err
@@ -298,6 +304,13 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
     async def async_save_schedule(
         self, preset: str, days: dict[int, tuple[SchedulePeriod, ...]]
     ) -> None:
+        """Save days of a programme (see :meth:`_async_save_schedule`)."""
+        async with self._schedule_lock:
+            await self._async_save_schedule(preset, days)
+
+    async def _async_save_schedule(
+        self, preset: str, days: dict[int, tuple[SchedulePeriod, ...]]
+    ) -> None:
         """Save whole days of a programme and verify each by reading it back.
 
         Days are saved one by one. If the link fails part-way, the days already
@@ -365,7 +378,9 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         """Write the backup copy of one programme (or all) back to the heater."""
         backup = self.schedule_keeper.backup
         presets = [preset] if preset is not None else list(backup)
-        if not presets or any(p not in backup for p in presets):
+        # Restoring part of a week would leave the rest as the heater has it,
+        # which after a reset is not what the user saved: only whole weeks.
+        if not presets or any(p not in backup or None in backup[p] for p in presets):
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="no_schedule_backup"
             )
@@ -408,6 +423,7 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
             for preset, programme in SCHEDULE_PROGRAMMES.items()
             if programme in schedules
         }
+        self.schedules_read_at = dt_util.utcnow()
         for preset, week in by_preset.items():
             self.schedule_keeper.note_read(preset, week)
         if by_preset != self.schedules:
