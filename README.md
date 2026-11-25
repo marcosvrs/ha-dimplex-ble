@@ -4,6 +4,24 @@ Unofficial Home Assistant custom integration that controls Dimplex Bluetooth
 panel heaters (tested on the PLX050E Series C) locally, through ESPHome
 Bluetooth proxies. No cloud, no Dimplex app.
 
+> [!WARNING]
+> **Treat every Home Assistant automation for these heaters as unreliable.**
+> The heaters are not designed to stay connected over Bluetooth for long: the
+> Dimplex app only connects briefly and tells users to power-cycle a heater
+> that stops responding. In our testing every heater's Bluetooth stopped at
+> least once until it was switched off and on at the wall (see
+> [Known limitations](#known-limitations)). While it is stopped, Home
+> Assistant can neither read nor change the heater, so an automation step can
+> silently not happen.
+>
+> The most reliable way to heat on time is the heater's **own timer
+> programmes**, which run on the heater even when Bluetooth is down: set them
+> once with the **Set schedule** action (or the Dimplex app) and select **Auto**.
+> Use automations only for occasional changes you can afford to miss, and turn
+> off **Keep the Bluetooth connection open** (see
+> [Known limitations](#known-limitations)).
+
+- [Reliability first](#reliability-first)
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Choosing a Bluetooth proxy](#choosing-a-bluetooth-proxy)
@@ -14,6 +32,25 @@ Bluetooth proxies. No cloud, no Dimplex app.
 - [Known limitations](#known-limitations)
 - [Upgrade notes](#upgrade-notes)
 - [Troubleshooting](#troubleshooting)
+
+## Reliability first
+
+The warning above in practice:
+
+- **Schedules belong on the heater.** Put your weekly heating times into the
+  User Timer (or Home All Day / Out All Day) programme with **Set schedule**,
+  then leave the heater in **Auto**. The heater follows its programme on its
+  own; Home Assistant only shows it as a calendar. Away works the same way:
+  once set, the heater itself returns to its previous mode at the return time.
+- **Automations are best effort.** A step that writes to a heater fails if the
+  heater's Bluetooth has stopped or the link drops; Home Assistant reports the
+  error, but nothing retries it later. Do not rely on an automation for
+  anything that must happen (for example frost protection while you are away).
+- **Connect briefly.** Turn off **Keep the Bluetooth connection open** under
+  each heater's **Configure**: each update then connects, reads and
+  disconnects, like the Dimplex app. Controls react a few seconds slower.
+- **Watch for the repair.** When a heater stops responding, Home Assistant
+  raises "*Heater* stopped responding" with the power-cycle steps.
 
 ## Requirements
 
