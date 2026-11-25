@@ -7,6 +7,7 @@ import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from math import isfinite
 from typing import Any
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -194,6 +195,29 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         await self._async_command(self.link.async_write(address, payload))
         if refresh:
             await self.async_request_refresh()
+
+    def check_setpoint(self, value: object) -> int:
+        """Return a whole-degree target within the heater's reported range."""
+        data = self.data
+        low = data.minimum_temperature_c if data is not None else None
+        high = data.maximum_temperature_c if data is not None else None
+        if low is None or high is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="setpoint_unavailable"
+            )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or not float(value).is_integer()
+            or not low <= value <= high
+        ):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={"min": str(low), "max": str(high)},
+            )
+        return int(value)
 
     async def _async_command[T](self, command: Awaitable[T]) -> T:
         """Run a link command, mapping failures to Home Assistant errors."""

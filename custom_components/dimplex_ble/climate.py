@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from math import isfinite
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
@@ -307,44 +306,12 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             )
 
         requested = kwargs.get(ATTR_TEMPERATURE)
-        if isinstance(requested, bool) or not isinstance(requested, (int, float)):
-            raise self._invalid_setpoint()
-        if self.preset_mode == PRESET_AWAY:
+        if self.preset_mode == PRESET_AWAY and isinstance(requested, (int, float)):
             # The target shown in Away is the Away temperature (7-18 degC).
             await self.coordinator.async_set_away_temperature(float(requested))
             return
-        temperature_c = float(requested)
-        data = self.coordinator.data
-        if (
-            data is None
-            or data.minimum_temperature_c is None
-            or data.maximum_temperature_c is None
-        ):
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="setpoint_unavailable",
-            )
-        if (
-            not isfinite(temperature_c)
-            or not temperature_c.is_integer()
-            or not data.minimum_temperature_c
-            <= temperature_c
-            <= data.maximum_temperature_c
-        ):
-            raise self._invalid_setpoint()
-
+        temperature_c = self.coordinator.check_setpoint(requested)
         await self.coordinator.async_write(SETPOINT, encode_setpoint(temperature_c))
-
-    def _invalid_setpoint(self) -> ServiceValidationError:
-        """Return the error naming the heater's whole-degree setpoint range."""
-        return ServiceValidationError(
-            translation_domain=DOMAIN,
-            translation_key="invalid_setpoint",
-            translation_placeholders={
-                "min": f"{self.min_temp:g}",
-                "max": f"{self.max_temp:g}",
-            },
-        )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Write a verified operating preset and wait for panel heater readback."""

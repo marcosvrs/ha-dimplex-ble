@@ -441,13 +441,18 @@ async def test_set_schedule_needs_the_setpoint_range(hass, fake_bt) -> None:
     coordinator = await setup(hass, entry)
     coordinator.data = replace(coordinator.data, minimum_temperature_c=None)
 
+    period = [{"start": "07:00", "end": "09:00", "temperature": 21}]
     with pytest.raises(ServiceValidationError) as err:
-        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon"], periods=period
+        )
     assert err.value.translation_key == "setpoint_unavailable"
 
     coordinator.data = None
     with pytest.raises(ServiceValidationError):
-        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon"], periods=period
+        )
 
 
 async def test_set_schedule_validates_its_fields(hass, fake_bt) -> None:
