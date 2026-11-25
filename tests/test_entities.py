@@ -246,7 +246,7 @@ def test_rule_diagnostic_sensors_expose_lcd_temperature_and_output_power(
     assert power_sensor.device_class == "power"
     assert power_sensor.native_unit_of_measurement == "W"
     assert power_sensor.state_class == "measurement"
-    assert power_sensor.entity_category is None
+    assert power_sensor.entity_category == EntityCategory.DIAGNOSTIC  # off dashboards
 
 
 SCHEDULES = ["user_timer", "home_all_day", "out_all_day", "boost", "away"]

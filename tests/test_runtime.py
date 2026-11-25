@@ -13,6 +13,7 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import EVENT_CALL_SERVICE, EVENT_HOMEASSISTANT_STOP
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -387,3 +388,17 @@ async def test_diagnostics_never_show_when_the_home_is_empty(hass, fake_bt) -> N
 
     assert result["coordinator"]["data"]["away_until"] == "**REDACTED**"
     assert "2026-11-26" not in str(result)
+
+
+async def test_only_the_climate_entity_appears_on_dashboards(hass, fake_bt) -> None:
+    """Every other entity is a setting or diagnostic, kept off auto dashboards."""
+    fake_bt.add()
+    entry = make_entry(hass)
+    await setup(hass, entry)
+
+    uncategorized = {
+        e.domain
+        for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+        if e.entity_category is None
+    }
+    assert uncategorized <= {"climate"}

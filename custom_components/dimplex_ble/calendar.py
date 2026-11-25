@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -38,6 +39,9 @@ class DimplexScheduleCalendar(DimplexEntity, CalendarEntity):
     app, or with the set_schedule action.
     Times are the heater's local times, shown in Home Assistant's time zone.
     """
+
+    # Only the climate entity belongs on dashboards by default.
+    _attr_entity_category = EntityCategory.CONFIG
 
     # The timer programme (a key of SCHEDULE_PROGRAMMES) this calendar shows.
     _preset: str

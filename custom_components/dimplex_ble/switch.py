@@ -172,6 +172,7 @@ class DimplexPreemptiveHeatingSwitch(_DimplexBooleanSettingSwitch):
 class DimplexAdvanceSwitch(_DimplexBooleanSettingSwitch):
     """Toggle the current timer period's heating until the next period starts."""
 
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_translation_key = "advance"
     _unique_suffix = "advance"
     _setting_address = ADVANCE_HEATING

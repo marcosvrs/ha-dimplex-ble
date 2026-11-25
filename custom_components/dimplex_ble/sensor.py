@@ -146,6 +146,7 @@ class DimplexOutputPowerSensor(DimplexEntity, SensorEntity):
 class DimplexCalculatedPowerSensor(DimplexEntity, SensorEntity):
     """Expose the calculated electrical power consumption."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "calculated_power_consumption"
     _unique_suffix = "calculated_power_consumption"
     _attr_device_class = SensorDeviceClass.POWER
@@ -179,6 +180,7 @@ class DimplexEstimatedEnergySensor(DimplexEntity, RestoreSensor):
     unreachable, Home Assistant stopped) is not counted.
     """
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "estimated_energy"
     _unique_suffix = "estimated_energy"
     _attr_device_class = SensorDeviceClass.ENERGY

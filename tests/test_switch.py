@@ -349,7 +349,7 @@ async def test_advance_switch_writes_in_timer_presets_and_refreshes(
     entity = DimplexAdvanceSwitch(coordinator)
     assert entity.available is True
     assert entity.is_on is False
-    assert entity.entity_category is None
+    assert entity.entity_category is EntityCategory.CONFIG  # off dashboards
 
     await entity.async_turn_on()
     await entity.async_turn_off()
