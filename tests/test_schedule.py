@@ -245,17 +245,17 @@ async def test_calendar_lists_periods_in_the_window(hass, fake_bt) -> None:
         (
             (monday + timedelta(hours=5, minutes=30)).isoformat(),
             (monday + timedelta(hours=7, minutes=30)).isoformat(),
-            "20 °C",
+            "20 °C until 07:30",
         ),
         (
             (monday + timedelta(hours=16)).isoformat(),
             (monday + timedelta(hours=17)).isoformat(),
-            "21 °C",
+            "21 °C until 17:00",
         ),
         (  # Tuesday's first default period starts at 06:30
             (monday + timedelta(days=1, hours=6, minutes=30)).isoformat(),
             (monday + timedelta(days=1, hours=9, minutes=30)).isoformat(),
-            "21 °C",
+            "21 °C until 09:30",
         ),
     ]
     # Noon on Monday: the next period is 16:00-17:00.

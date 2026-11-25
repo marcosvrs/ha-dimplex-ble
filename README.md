@@ -98,7 +98,7 @@ The climate entity shows the room temperature in 0.1 °C steps, whether the heat
 | **Open window detection** | Stops heating when the room temperature drops suddenly |
 | **Sound** | Button sounds on the heater |
 | **Display temperature unit** | The unit on the heater's display only |
-| **User Timer schedule** | The User Timer programme as calendar events. **Home All Day** and **Out All Day** calendars are disabled by default. |
+| **User Timer schedule** | The User Timer programme as calendar events, such as **20 °C until 07:30**. **Home All Day** and **Out All Day** calendars are disabled by default. |
 | **Firmware** | Installed and latest heater firmware. **Install** updates the heater over Bluetooth in about 15 minutes. Needs the Dimplex sign-in. |
 | **Temperature offset** | Corrects the room reading, −3.0 to +3.0 °C. Disabled by default: Dimplex reserves it for service staff. |
 

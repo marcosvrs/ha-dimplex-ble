@@ -87,7 +87,10 @@ class DimplexScheduleCalendar(DimplexEntity, CalendarEntity):
                         CalendarEvent(
                             start=begins,
                             end=ends,
-                            summary=f"{period.temperature_c} °C",
+                            # The end in the title: more-info and the month
+                            # view show only the start time.
+                            summary=f"{period.temperature_c} °C until "
+                            f"{period.end:%H:%M}",
                         )
                     )
             day += timedelta(days=1)
