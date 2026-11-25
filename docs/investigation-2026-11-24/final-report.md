@@ -40,6 +40,7 @@ in upstream source; **INFERENCE** = consistent with evidence, not proven.
 | RC-4 | Third heater on a proxy never connects after HA restart | controller `0x200d Rejected: Resources` at fixed 7.5 ms | ≤2 heaters per proxy, picker warns |
 | RC-5 | PIN prompt missed / pairing hangs | heater starts SMP on connect; responder armed too late | arm before connect |
 | — | Reconnect rejected right after disconnect | heater needs settle time (ConfigR waits ~10 s) | `HEATER_SETTLE_S = 10` |
+| RC-6 | Heater heats outside its schedule (AM2086, 21:26 in Home All Day) | three heater clocks 138–144 min slow (never set since power-on); ConfigR sets the clock on connect | clock sync like ConfigR (option, default on) |
 | — | Heater invisible to every receiver after an abnormal link loss | heater-side BLE stall (AM8224, AM2086; phone scan confirms) | Repair issue + power-cycle; per-poll option as experiment |
 
 ## 4. Rejected hypotheses (selection)
@@ -100,8 +101,10 @@ components bind mount on Jarvis, stale ESPHome devices/files.
 
 - 24 h soak result and the per-poll vs persistent comparison (needs days).
 - Trigger of the heater BLE stall (heater firmware; not fixable locally).
-- Boost (encoding unverified), schedules (not implemented).
-- Filing upstream drafts (user decision).
+- Boost and schedule saving: implemented and verified 2026-11-25 (ledger).
+- Upstream: (a) filed as espressif/esp-idf#19495; (b)/(c) left for a person to
+  post (ESPHome asks for the reporter's own words).
+- Whether the heater acts on the clock's DST flag (held links recheck hourly).
 - User decisions: rotate proxy API keys, purge pre-15:00 HA logs, move the HA
   integration folder off the old workspace mount, configure or ignore AM5832 and
   AM8922, remove the "Android Device" Google sign-in.

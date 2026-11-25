@@ -20,6 +20,7 @@ from bleak.exc import BleakError
 from habluetooth import BaseHaScanner
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from . import responder
 from .const import DOMAIN
@@ -33,6 +34,9 @@ from .errors import (
 from .protocol import (
     ADVANCE_HEATING,
     AWAY_MODE,
+    BOOST_REMAINING,
+    BOOST_TEMPERATURE,
+    CLOCK,
     OPEN_WINDOW_DETECTION,
     PREEMPTIVE_HEATING,
     SCHEDULE,
@@ -41,8 +45,11 @@ from .protocol import (
     GattAddress,
     HeaterSnapshot,
     SchedulePeriod,
+    encode_clock,
+    encode_schedule_day,
     encode_schedule_request,
     gatt_uuid_candidates,
+    parse_clock,
     parse_schedule_day,
     parse_snapshot,
     validate_raw_access,
@@ -64,6 +71,9 @@ READ_SNAPSHOT_FIELDS: tuple[GattAddress, ...] = (
     (0, 0x1005),
     # Advance ends by itself at the next timer period, so it is polled.
     ADVANCE_HEATING,
+    # Boost also ends by itself; its temperature is the heater's own setting.
+    BOOST_REMAINING,
+    BOOST_TEMPERATURE,
 )
 ROOM_TEMPERATURE: GattAddress = (1, 0x0008)
 TRAC: GattAddress = (1, 0x0002)
@@ -165,6 +175,19 @@ async def _read_optional(client: BaseBleakClient, address: GattAddress) -> bytes
     return bytes(await client.read_gatt_char(characteristic))
 
 
+async def _write(client: BaseBleakClient, address: GattAddress, payload: bytes) -> None:
+    """Write one present, writable characteristic."""
+    characteristic = _find_characteristic(client, address)
+    if characteristic is None:
+        raise CharacteristicError("Characteristic was not found")
+    properties = characteristic.properties
+    if "write" not in properties and "write-without-response" not in properties:
+        raise CharacteristicError("Characteristic is not writable")
+    await client.write_gatt_char(
+        characteristic, payload, response="write" in properties
+    )
+
+
 async def _read_selector(
     client: BaseBleakClient, address: GattAddress, selector: int | bytes
 ) -> bytes | None:
@@ -231,6 +254,7 @@ class HeaterLink:
         passkey: str | None,
         *,
         keep_connected: bool = True,
+        sync_clock: bool = False,
     ) -> None:
         """Pin the link to the proxy that holds the heater's bond."""
         self._hass = hass
@@ -238,6 +262,10 @@ class HeaterLink:
         self.source = source
         self._passkey = int(passkey) if passkey else None
         self.keep_connected = keep_connected
+        self.sync_clock = sync_clock
+        # Heater clock minus local time (s) at the last check, for diagnostics.
+        self.clock_offset_s: float | None = None
+        self._clock_due = False
         # Called with the link's scanner when a held link drops without our
         # disconnect (the heater or the proxy ended it).
         self.on_link_lost: Callable[[BaseHaScanner | None], None] | None = None
@@ -327,19 +355,46 @@ class HeaterLink:
 
     async def async_write(self, address: GattAddress, payload: bytes) -> None:
         """Write one characteristic; the next refresh is the readback."""
-        validate_raw_access(*address, write=True)
-        op = f"write {address[0]}/0x{address[1]:04x}"
+        await self.async_write_many(((address, payload),))
+
+    async def async_write_many(
+        self, writes: tuple[tuple[GattAddress, bytes], ...]
+    ) -> None:
+        """Write characteristics in order inside one operation (one connection)."""
+        for address, _ in writes:
+            validate_raw_access(*address, write=True)
+        op = "write " + ",".join(f"{a[0]}/0x{a[1]:04x}" for a, _ in writes)
         async with self._operation(op) as client:
-            characteristic = _find_characteristic(client, address)
-            if characteristic is None:
-                raise CharacteristicError("Characteristic was not found")
-            properties = characteristic.properties
-            if "write" not in properties and "write-without-response" not in properties:
-                raise CharacteristicError("Characteristic is not writable")
-            await client.write_gatt_char(
-                characteristic, payload, response="write" in properties
-            )
+            for address, payload in writes:
+                await _write(client, address, payload)
         _LOGGER.debug("GATT %s %s ok", self.address, op)
+
+    async def async_save_schedule(
+        self,
+        programme: int,
+        days: dict[int, tuple[SchedulePeriod, ...]],
+        readback: dict[int, tuple[SchedulePeriod, ...] | None],
+    ) -> None:
+        """Save whole days of one programme, reading each back before the next.
+
+        ``readback`` collects each day as the heater returns it, so a caller
+        knows which days were saved even when a later one fails.
+        """
+        validate_raw_access(*SCHEDULE, write=True)
+        payloads = {
+            day: encode_schedule_day(programme, day, periods)
+            for day, periods in days.items()
+        }
+        async with self._operation("save schedule") as client:
+            for day, payload in payloads.items():
+                await _write(client, SCHEDULE, payload)
+                readback[day] = parse_schedule_day(
+                    await _read_selector(
+                        client, SCHEDULE, encode_schedule_request(programme, day)
+                    ),
+                    programme,
+                    day,
+                )
 
     async def async_gatt_services(self) -> list[GattServiceInfo]:
         """Return service metadata without reading characteristic values."""
@@ -376,6 +431,9 @@ class HeaterLink:
         async with self._lock:
             client = await self._ensure_link(self._passkey, fresh=False)
             try:
+                if self._clock_due:
+                    self._clock_due = False
+                    await self._check_clock(client)
                 yield client
             except _GATT_ERRORS as err:
                 _LOGGER.debug(
@@ -395,6 +453,45 @@ class HeaterLink:
                 # Connect and pair already ran to their native end (RC-2/RC-3);
                 # only the finished link is released here.
                 await self._disconnect("per_poll")
+
+    def request_clock_check(self) -> None:
+        """Check the heater clock on the next operation (a held link lives long)."""
+        self._clock_due = True
+
+    async def _check_clock(self, client: BaseBleakClient) -> None:
+        """Read the heater clock; set it when it is more than 60 s off.
+
+        ConfigR does the same once per connection (whole minutes, no readback).
+        A failure here never fails the operation it precedes.
+        """
+        now = dt_util.now()
+        try:
+            heater = parse_clock(await _read_optional(client, CLOCK))
+            if heater is None:
+                _LOGGER.debug("CLOCK %s unreadable", self.address)
+                return
+            local = now.replace(second=0, microsecond=0, tzinfo=None)
+            self.clock_offset_s = (heater - local).total_seconds()
+            if abs(self.clock_offset_s) <= 60 or not self.sync_clock:
+                return
+            characteristic = _find_characteristic(client, CLOCK)
+            assert characteristic is not None  # it was just read
+            await client.write_gatt_char(
+                characteristic,
+                encode_clock(now),
+                response="write" in characteristic.properties,
+            )
+        except _GATT_ERRORS as err:
+            _LOGGER.debug(
+                "CLOCK %s check failed %s: %s", self.address, type(err).__name__, err
+            )
+            return
+        _LOGGER.info(
+            "Set the clock of %s; it was %+d min off",
+            self.address,
+            round(self.clock_offset_s / 60),
+        )
+        self.clock_offset_s = 0.0
 
     async def _ensure_link(
         self, passkey: int | None, *, fresh: bool
@@ -531,6 +628,7 @@ class HeaterLink:
         except BaseException:
             await self._disconnect("pair_failed")
             raise
+        self._clock_due = True
         return client
 
     async def _pair(self, client: BaseBleakClient) -> None:

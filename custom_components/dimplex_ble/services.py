@@ -1,8 +1,8 @@
-"""Home Assistant diagnostics service for Dimplex GATT metadata."""
+"""Actions: save a timer programme schedule, and list GATT metadata."""
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import probatio
 from homeassistant.core import (
@@ -12,15 +12,59 @@ from homeassistant.core import (
     SupportsResponse,
     callback,
 )
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import service
 
 from .const import DOMAIN
-from .coordinator import DimplexConfigEntry
+from .coordinator import SCHEDULE_PROGRAMMES, DimplexConfigEntry
 from .errors import DimplexError, to_homeassistant_error
+from .protocol import (
+    SCHEDULE_PERIODS,
+    DimplexProtocolError,
+    SchedulePeriod,
+    encode_schedule_day,
+)
 
 _DEVICE_ID = "device_id"
 _DEVICE_SCHEMA = probatio.Schema({probatio.Required(_DEVICE_ID): cv.string})
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _whole_degrees(value: Any) -> int:
+    """Accept 21 or 21.0 but reject 21.9: the heater stores whole degrees."""
+    if isinstance(value, bool):
+        raise probatio.Invalid("expected a whole number of degrees")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as err:
+        raise probatio.Invalid("expected a whole number of degrees") from err
+    if not number.is_integer():
+        raise probatio.Invalid("expected a whole number of degrees")
+    return int(number)
+
+
+_PERIOD_SCHEMA = probatio.Schema(
+    {
+        probatio.Required("start"): cv.time,
+        probatio.Required("end"): cv.time,
+        probatio.Required("temperature"): _whole_degrees,
+    }
+)
+_SET_SCHEDULE_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(_DEVICE_ID): cv.string,
+        probatio.Required("programme"): probatio.In(list(SCHEDULE_PROGRAMMES)),
+        probatio.Required("days"): probatio.All(
+            cv.ensure_list, [probatio.In(DAYS)], probatio.Length(min=1)
+        ),
+        probatio.Optional("periods", default=[]): probatio.All(
+            cv.ensure_list,
+            [_PERIOD_SCHEMA],
+            probatio.Length(max=SCHEDULE_PERIODS),
+        ),
+    }
+)
 
 
 @callback
@@ -46,6 +90,43 @@ def async_setup_services(hass: HomeAssistant) -> None:
         except DimplexError as err:
             raise to_homeassistant_error(err) from err
 
+    async def async_set_schedule(call: ServiceCall) -> None:
+        """Save the same periods to the chosen days of one programme."""
+        coordinator = _get_entry(call).runtime_data
+        data = coordinator.data
+        periods = tuple(
+            SchedulePeriod(p["start"], p["end"], p["temperature"])
+            for p in call.data["periods"]
+        )
+        low = data.minimum_temperature_c if data is not None else None
+        high = data.maximum_temperature_c if data is not None else None
+        if low is None or high is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="setpoint_unavailable"
+            )
+        if any(not low <= p.temperature_c <= high for p in periods):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={"min": str(low), "max": str(high)},
+            )
+        try:
+            # Validates the periods before anything is written.
+            encode_schedule_day(1, 0, periods)
+        except DimplexProtocolError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_schedule",
+                translation_placeholders={"reason": str(err)},
+            ) from err
+        await coordinator.async_save_schedule(
+            call.data["programme"],
+            {DAYS.index(day): periods for day in call.data["days"]},
+        )
+
+    hass.services.async_register(
+        DOMAIN, "set_schedule", async_set_schedule, schema=_SET_SCHEDULE_SCHEMA
+    )
     hass.services.async_register(
         DOMAIN,
         "get_gatt_services",

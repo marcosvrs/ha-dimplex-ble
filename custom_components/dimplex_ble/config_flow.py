@@ -22,9 +22,13 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
+from homeassistant.const import UnitOfTime
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -36,16 +40,21 @@ from homeassistant.helpers.selector import (
 from . import responder
 from .const import (
     CONF_ADDRESS,
+    CONF_BOOST_MINUTES,
     CONF_KEEP_CONNECTED,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
+    CONF_SYNC_CLOCK,
+    DEFAULT_BOOST_MINUTES,
     DEFAULT_KEEP_CONNECTED,
+    DEFAULT_SYNC_CLOCK,
     DOMAIN,
     PASSKEY_REQUEST_EVENT,
 )
 from .discovery import advertisement_label, is_dimplex_advertisement
 from .errors import DimplexError, HeaterAuthError
 from .link import HeaterLink
+from .protocol import BOOST_MAX_MINUTES
 
 _LOGGER = logging.getLogger(__name__)
 # A released heater re-advertised within seconds on hardware (ledger 15:39).
@@ -227,6 +236,7 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
         self._waiter: asyncio.Task[None] | None = None
         self._reload_entry_id: str | None = None
         self._pin_error: str | None = None
+        self._sync_clock: bool | None = None
         # Set when Home Assistant removed the flow: start no new pairing.
         self._removed = False
 
@@ -475,19 +485,27 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         if user_input is None or CONF_PROXY_SOURCE not in user_input:
             options = survey.options
+            schema: dict[Any, Any] = {
+                # The recommended proxy is always listed first.
+                probatio.Required(
+                    CONF_PROXY_SOURCE, default=options[0]["value"]
+                ): SelectSelector(SelectSelectorConfig(options=options))
+            }
+            if step_id != "reauth_proxy":
+                sync = (
+                    entry.options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK)
+                    if entry is not None
+                    else DEFAULT_SYNC_CLOCK
+                )
+                schema[probatio.Required(CONF_SYNC_CLOCK, default=sync)] = bool
             return self.async_show_form(
                 step_id=step_id,
-                data_schema=probatio.Schema(
-                    {
-                        # The recommended proxy is always listed first.
-                        probatio.Required(
-                            CONF_PROXY_SOURCE, default=options[0]["value"]
-                        ): SelectSelector(SelectSelectorConfig(options=options))
-                    }
-                ),
+                data_schema=probatio.Schema(schema),
                 description_placeholders=placeholders,
                 errors={"base": "proxies_busy"} if survey.all_busy else {},
             )
+        if CONF_SYNC_CLOCK in user_input:
+            self._sync_clock = bool(user_input[CONF_SYNC_CLOCK])
         self._link = HeaterLink(
             self.hass, self._address, user_input[CONF_PROXY_SOURCE], None
         )
@@ -611,12 +629,21 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             data[CONF_PASSKEY] = pin
         if self.source in (SOURCE_REAUTH, SOURCE_RECONFIGURE):
             self._reload_entry_id = None
+            entry = self._get_repair_entry()
+            if self._sync_clock is None:
+                return self.async_update_reload_and_abort(entry, data_updates=data)
             return self.async_update_reload_and_abort(
-                self._get_repair_entry(), data_updates=data
+                entry,
+                data_updates=data,
+                options={**entry.options, CONF_SYNC_CLOCK: self._sync_clock},
             )
+        sync_clock = (
+            DEFAULT_SYNC_CLOCK if self._sync_clock is None else self._sync_clock
+        )
         return self.async_create_entry(
             title=f"Dimplex Heater {self._name or link.address}",
             data={CONF_ADDRESS: link.address, **data},
+            options={CONF_SYNC_CLOCK: sync_clock},
         )
 
     async def _async_complete_pairing(self, pin: int) -> str | None:
@@ -741,13 +768,38 @@ class DimplexOptionsFlow(OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         """Show the single connection mode switch."""
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        current = self.config_entry.options.get(
-            CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED
-        )
+            # The number selector returns a float; the heater takes whole minutes.
+            minutes = int(user_input[CONF_BOOST_MINUTES])
+            return self.async_create_entry(
+                data={**user_input, CONF_BOOST_MINUTES: minutes}
+            )
+        options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=probatio.Schema(
-                {probatio.Required(CONF_KEEP_CONNECTED, default=current): bool}
+                {
+                    probatio.Required(
+                        CONF_KEEP_CONNECTED,
+                        default=options.get(
+                            CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED
+                        ),
+                    ): bool,
+                    probatio.Required(
+                        CONF_SYNC_CLOCK,
+                        default=options.get(CONF_SYNC_CLOCK, DEFAULT_SYNC_CLOCK),
+                    ): bool,
+                    probatio.Required(
+                        CONF_BOOST_MINUTES,
+                        default=options.get(CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1,
+                            max=BOOST_MAX_MINUTES,
+                            step=1,
+                            unit_of_measurement=UnitOfTime.MINUTES,
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                }
             ),
         )

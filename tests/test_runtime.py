@@ -368,6 +368,8 @@ async def test_diagnostics_redact_the_pin_and_addresses(hass, fake_bt) -> None:
         "connected": True,
         "mode": "persistent",
         "responder": True,
+        "sync_clock": True,
+        "clock_offset_s": None,  # this heater has no clock characteristic
     }
     assert result["coordinator"]["last_exception"] is None
     assert result["coordinator"]["data"]["setpoint_c"] == 21

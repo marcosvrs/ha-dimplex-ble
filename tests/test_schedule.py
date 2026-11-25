@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 from unittest.mock import patch
 
 import pytest
+import voluptuous as vol
+from bleak.exc import BleakError
 from conftest import FakeProxy
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from test_connection_mode import advance, kinds, make_entry, setup
 
 from custom_components.dimplex_ble.const import (
     CONF_KEEP_CONNECTED,
+    DOMAIN,
     POLL_INTERVAL_PER_POLL,
     SCHEDULE_UPDATE_INTERVAL,
 )
@@ -23,6 +29,7 @@ from custom_components.dimplex_ble.errors import HeaterUnavailableError
 from custom_components.dimplex_ble.protocol import (
     DimplexProtocolError,
     SchedulePeriod,
+    encode_schedule_day,
     encode_schedule_request,
     parse_schedule_day,
 )
@@ -276,3 +283,263 @@ async def test_calendar_is_unavailable_until_a_day_was_read(hass, fake_bt) -> No
         )
         == []
     )
+
+
+# --- Saving ----------------------------------------------------------------
+
+
+def test_save_form_matches_what_the_heater_accepted() -> None:
+    """Payloads written to AM2086 on 2026-11-25 and read back unchanged."""
+    monday = (
+        SchedulePeriod(time(17), time(22), 21),
+        SchedulePeriod(time(6), time(8), 20),  # sorted on save
+    )
+    assert encode_schedule_day(3, 0, monday).hex() == (
+        "010300" + "060008001400" + "110016001500" + "160016001500" * 2 + "00000000"
+    )
+    assert encode_schedule_day(3, 1, ()).hex() == (
+        "010301" + "000000001500" * 4 + "00000000"
+    )
+
+
+@pytest.mark.parametrize(
+    "periods",
+    [
+        (SchedulePeriod(time(6), time(7), 21),) * 5,
+        (SchedulePeriod(time(8), time(8), 21),),
+        (SchedulePeriod(time(9), time(8), 21),),
+        (SchedulePeriod(time(8, 0, 30), time(9), 21),),
+        (SchedulePeriod(time(6), time(9), 21), SchedulePeriod(time(8), time(10), 21)),
+        (SchedulePeriod(time(6), time(9), 0),),
+    ],
+)
+def test_save_form_rejects_invalid_days(periods) -> None:
+    with pytest.raises(DimplexProtocolError):
+        encode_schedule_day(3, 0, periods)
+
+
+def device_id(hass, entry) -> str:
+    [device] = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    return device.id
+
+
+async def set_schedule(hass, entry, **data) -> None:
+    await hass.services.async_call(
+        DOMAIN,
+        "set_schedule",
+        {"device_id": device_id(hass, entry), **data},
+        blocking=True,
+    )
+
+
+async def test_set_schedule_saves_each_day_and_reads_it_back(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    proxy.events.clear()
+
+    await set_schedule(
+        hass,
+        entry,
+        programme="user_timer",
+        days=["mon", "wed"],
+        periods=[
+            {"start": "17:00", "end": "22:00", "temperature": 21},
+            {"start": "06:30", "end": "08:00", "temperature": 20},
+        ],
+    )
+
+    writes = schedule_writes(proxy)
+    # Each day is read back before the next one is written.
+    assert [(w[0], w[2]) for w in writes] == [(1, 0), (0, 0), (1, 2), (0, 2)]
+    expected = (
+        SchedulePeriod(time(6, 30), time(8), 20),
+        SchedulePeriod(time(17), time(22), 21),
+    )
+    week = coordinator.schedules["user_timer"]
+    assert week[0] == week[2] == expected
+    assert week[1] == parse_schedule_day(record(3, 1, USER), 3, 1)  # untouched
+
+
+async def test_set_schedule_without_periods_empties_the_days(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+
+    await set_schedule(hass, entry, programme="home_all_day", days=["sun"])
+
+    assert coordinator.schedules["home_all_day"][6] == ()
+    assert proxy.schedule[(2, 6)][3:] == bytes.fromhex("000000001500" * 4 + "00000000")
+
+
+async def test_set_schedule_reports_a_day_the_heater_did_not_keep(
+    hass, fake_bt
+) -> None:
+    proxy = with_schedules(fake_bt.add())
+    proxy.saves_schedules = False
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await set_schedule(
+            hass,
+            entry,
+            programme="out_all_day",
+            days=["fri"],
+            periods=[{"start": "07:00", "end": "09:00", "temperature": 21}],
+        )
+    assert err.value.translation_key == "schedule_not_saved"
+    # The calendar shows what the heater actually holds.
+    assert coordinator.schedules["out_all_day"][4] == parse_schedule_day(
+        record(1, 4, OUT), 1, 4
+    )
+
+
+async def test_set_schedule_on_a_heater_without_schedules(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass, **{CONF_KEEP_CONNECTED: False})
+    coordinator = await setup(hass, entry)
+    coordinator.schedules = {}
+
+    await set_schedule(hass, entry, programme="user_timer", days=["tue"])
+
+    assert coordinator.schedules["user_timer"][1] == ()
+    assert coordinator.schedules["user_timer"][0] is None
+    assert proxy.schedule[(3, 1)][0] == 0
+
+
+@pytest.mark.parametrize(
+    ("periods", "key"),
+    [
+        ([{"start": "06:00", "end": "07:00", "temperature": 31}], "invalid_setpoint"),
+        (
+            [
+                {"start": "06:00", "end": "09:00", "temperature": 21},
+                {"start": "08:00", "end": "10:00", "temperature": 21},
+            ],
+            "invalid_schedule",
+        ),
+    ],
+)
+async def test_set_schedule_rejects_before_writing(hass, fake_bt, periods, key) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.events.clear()
+
+    with pytest.raises(ServiceValidationError) as err:
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon"], periods=periods
+        )
+    assert err.value.translation_key == key
+    assert schedule_writes(proxy) == []
+
+
+async def test_set_schedule_needs_the_setpoint_range(hass, fake_bt) -> None:
+    with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    coordinator.data = replace(coordinator.data, minimum_temperature_c=None)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+    assert err.value.translation_key == "setpoint_unavailable"
+
+    coordinator.data = None
+    with pytest.raises(ServiceValidationError):
+        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+
+
+async def test_set_schedule_validates_its_fields(hass, fake_bt) -> None:
+    with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    for bad in (
+        {"programme": "away", "days": ["mon"]},
+        {"programme": "user_timer", "days": []},
+        {"programme": "user_timer", "days": ["monday"]},
+    ):
+        with pytest.raises(vol.Invalid):
+            await set_schedule(hass, entry, **bad)
+
+
+# --- Failures part-way and input checks (adversarial review 2026-11-25) -------
+
+
+def fail_saving(proxy: FakeProxy, day: int) -> None:
+    """The link drops while saving ``day`` (after the heater took the write)."""
+
+    def on_write(address, payload) -> None:
+        if address == (0, 0x1002) and payload[0] == 1 and payload[2] == day:
+            raise BleakError("link lost")
+
+    proxy.on_write = on_write
+
+
+async def test_a_failure_part_way_keeps_the_saved_days(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+    fail_saving(proxy, day=2)
+    period = {"start": "07:00", "end": "09:00", "temperature": 21}
+
+    with pytest.raises(HomeAssistantError) as err:
+        await set_schedule(
+            hass, entry, programme="user_timer", days=["mon", "wed"], periods=[period]
+        )
+    assert err.value.translation_key == "schedule_partly_saved"
+    assert err.value.translation_placeholders == {"saved": "1", "total": "2"}
+    saved = (SchedulePeriod(time(7), time(9), 21),)
+    assert coordinator.schedules["user_timer"][0] == saved
+
+    # Every programme is read again, so the calendars show what the heater holds.
+    proxy.on_write = None
+    await hass.async_block_till_done()
+    assert coordinator.schedules["user_timer"][2] == saved
+
+
+async def test_a_failure_on_the_first_day_reports_the_link_error(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    fail_saving(proxy, day=0)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await set_schedule(hass, entry, programme="user_timer", days=["mon"])
+    assert err.value.translation_key == "cannot_connect"
+
+
+@pytest.mark.parametrize("temperature", [21.9, "21.5", True, "warm"])
+async def test_set_schedule_refuses_fractional_temperatures(
+    hass, fake_bt, temperature
+) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    await setup(hass, entry)
+    proxy.events.clear()
+
+    with pytest.raises(vol.Invalid):
+        await set_schedule(
+            hass,
+            entry,
+            programme="user_timer",
+            days=["mon"],
+            periods=[{"start": "07:00", "end": "09:00", "temperature": temperature}],
+        )
+    assert schedule_writes(proxy) == []
+
+
+async def test_set_schedule_accepts_whole_degrees_as_floats(hass, fake_bt) -> None:
+    proxy = with_schedules(fake_bt.add())
+    entry = make_entry(hass)
+    coordinator = await setup(hass, entry)
+
+    await set_schedule(
+        hass,
+        entry,
+        programme="user_timer",
+        days=["mon"],
+        periods=[{"start": "07:00", "end": "09:00", "temperature": 21.0}],
+    )
+    assert coordinator.schedules["user_timer"][0][0].temperature_c == 21
+    assert proxy.schedule[(3, 0)][7] == 21

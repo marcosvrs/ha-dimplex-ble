@@ -13,10 +13,12 @@
         "title": "Choose a Bluetooth proxy",
         "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "proxy_source": "Bluetooth proxy"
+          "proxy_source": "Bluetooth proxy",
+          "sync_clock": "Sync the heater clock"
         },
         "data_description": {
-          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN.",
+          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock."
         }
       },
       "reauth_confirm": {
@@ -37,10 +39,12 @@
         "title": "Choose a Bluetooth proxy",
         "description": "{name} will connect through this proxy.{proxy_notes}",
         "data": {
-          "proxy_source": "Bluetooth proxy"
+          "proxy_source": "Bluetooth proxy",
+          "sync_clock": "Sync the heater clock"
         },
         "data_description": {
-          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN."
+          "proxy_source": "Recommended is preselected. Keeping the current proxy needs no PIN.",
+          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock."
         }
       },
       "pin_ready": {
@@ -98,12 +102,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Connection",
+        "title": "Settings",
         "data": {
-          "keep_connected": "Keep the Bluetooth connection open"
+          "keep_connected": "Keep the Bluetooth connection open",
+          "sync_clock": "Sync the heater clock",
+          "boost_minutes": "Boost length"
         },
         "data_description": {
-          "keep_connected": "Turn off if this heater often stops responding. Each update then connects briefly (slower controls)."
+          "keep_connected": "Turn off if this heater often stops responding. Each update then connects briefly (slower controls).",
+          "sync_clock": "Sets the heater clock to Home Assistant's time when it is more than a minute off. Timer schedules run on the heater clock.",
+          "boost_minutes": "How long the Boost preset heats at the heater's Boost temperature (1–240 min)."
         }
       }
     }
@@ -131,7 +139,8 @@
               "away": "Away",
               "manual": "Manual",
               "eco": "Eco",
-              "frost_protect": "Frost Protect"
+              "frost_protect": "Frost Protect",
+              "boost": "Boost"
             }
           },
           "away_until": {
@@ -235,6 +244,28 @@
     }
   },
   "services": {
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Saves the periods to the chosen days of a timer programme on the heater. Each day is replaced and then read back.",
+      "fields": {
+        "device_id": {
+          "name": "Heater",
+          "description": "The Dimplex panel heater."
+        },
+        "programme": {
+          "name": "Programme",
+          "description": "The timer programme to change."
+        },
+        "days": {
+          "name": "Days",
+          "description": "The days that get these periods."
+        },
+        "periods": {
+          "name": "Periods",
+          "description": "Up to 4 heating periods. Leave empty for no heating periods that day."
+        }
+      }
+    },
     "get_gatt_services": {
       "name": "List Bluetooth services (developer)",
       "description": "Developer diagnostic: lists the heater's Bluetooth services without reading values.",
@@ -300,12 +331,54 @@
     },
     "away_temperature_needs_away": {
       "message": "Turn on Away first by setting an Away return time, then change the Away temperature."
+    },
+    "boost_unavailable": {
+      "message": "This heater has no valid Boost temperature."
+    },
+    "schedule_not_saved": {
+      "message": "The heater didn't keep the new schedule. Try again."
+    },
+    "invalid_schedule": {
+      "message": "Invalid schedule: {reason}."
+    },
+    "boost_not_in_away": {
+      "message": "Boost isn't available during Away."
+    },
+    "schedule_partly_saved": {
+      "message": "Saved {saved} of {total} days before the heater stopped responding. Run the action again."
     }
   },
   "issues": {
     "heater_stalled": {
       "title": "{name} stopped responding",
       "description": "The heater's Bluetooth has stopped. Switch the heater off and on at the wall; Home Assistant reconnects automatically."
+    }
+  },
+  "selector": {
+    "programme": {
+      "options": {
+        "user_timer": "User Timer",
+        "home_all_day": "Home All Day",
+        "out_all_day": "Out All Day"
+      }
+    },
+    "day": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    },
+    "period": {
+      "fields": {
+        "start": "Start",
+        "end": "End",
+        "temperature": "Temperature"
+      }
     }
   }
 }

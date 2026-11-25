@@ -23,7 +23,8 @@
               "out_all_day": "mdi:home-export-outline",
               "away": "mdi:calendar-arrow-right",
               "eco": "mdi:leaf",
-              "frost_protect": "mdi:snowflake-thermometer"
+              "frost_protect": "mdi:snowflake-thermometer",
+              "boost": "mdi:rocket-launch"
             }
           }
         }

@@ -57,6 +57,17 @@ Bluetooth proxies. No cloud, no Dimplex app.
 The heater is added as "Dimplex Heater AMxxxx". To change its proxy later, use
 **Reconfigure** on the integration entry.
 
+**Settings** (the heater's **Configure**; the clock option is also in setup and
+**Reconfigure**):
+
+- **Sync the heater clock** (on by default): sets the heater clock to Home
+  Assistant's time whenever it is more than a minute off, as the Dimplex app
+  does. Timer schedules run on the heater clock, so leave it on unless another
+  app manages the clock.
+- **Boost length**: how long the Boost preset lasts, 1–240 minutes (default 60).
+- **Keep the Bluetooth connection open**: see
+  [Known limitations](#known-limitations).
+
 ## Choosing a Bluetooth proxy
 
 The setup dialog lists every proxy that can reach the heater and runs the
@@ -113,8 +124,8 @@ Each heater becomes one device with:
 
 | Entity | Notes |
 | --- | --- |
-| Climate (named after the heater) | Room temperature (0.1 °C), heating/idle action and two modes. **Heat**: heats to a target you set (whole degrees); presets **Manual**, **Eco**, **Frost Protect**, **Away**. **Auto**: follows the heater's schedule, which sets the temperature; presets **User Timer**, **Home All Day**, **Out All Day**, **Away**. No Off. |
-| User Timer schedule (calendar) | Read-only heating periods of the User Timer programme, as stored on the heater (Home All Day and Out All Day calendars exist but are disabled by default). Read after setup and every 6 hours. Edit schedules on the heater or in the Dimplex app. |
+| Climate (named after the heater) | Room temperature (0.1 °C), heating/idle action and two modes. **Heat**: heats to a target you set (whole degrees); presets **Manual**, **Eco**, **Frost Protect**, **Boost**, **Away**. **Auto**: follows the heater's schedule, which sets the temperature; presets **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**. **Boost** heats at the heater's Boost temperature for the Boost length, then the heater returns to the mode it left; the target can be changed while it runs. No Off. |
+| User Timer schedule (calendar) | Heating periods of the User Timer programme, as stored on the heater (Home All Day and Out All Day calendars exist but are disabled by default). Read after setup and every 6 hours, and right after a change with **Set schedule**. |
 | Away return time | When Away ends. Setting it starts Away. Selecting the Away preset needs a future return time here first. |
 | Away temperature | What Away holds, 7–18 °C (default 7 °C). Changing it keeps Away on or off. |
 | Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
@@ -137,6 +148,27 @@ Device settings guidance is based on the official
 The device page shows the model as, for example, "PLX050E Series C" (the heater
 reports `PLX050E;C;`; reading `C` as the series is an inference).
 
+**Set schedule** (`dimplex_ble.set_schedule`) replaces the heating periods of
+one programme on the chosen days: pick the heater, the programme, the days and
+up to 4 periods (start, end, temperature). No periods means no heating periods
+that day. Each day is read back from the heater afterwards; the action fails if
+the heater did not keep it. Example:
+
+```yaml
+action: dimplex_ble.set_schedule
+data:
+  device_id: <your heater>
+  programme: user_timer
+  days: [mon, tue, wed, thu, fri]
+  periods:
+    - start: "06:30"
+      end: "08:00"
+      temperature: 21
+    - start: "17:00"
+      end: "22:00"
+      temperature: 21
+```
+
 Developer diagnostic: the action **List Bluetooth services (developer)**
 (`dimplex_ble.get_gatt_services`) lists the heater's Bluetooth services and
 characteristics without reading values. It is only useful when reporting a
@@ -150,6 +182,10 @@ problem.
   Dimplex), not an integration error. Use 20 °C or higher to stay in Manual.
 - **Frost Protect** holds 7 °C.
 - **Away** returns to the previous mode at the return time.
+- **Boost from Manual, Eco or Frost Protect shows as Heat** (the heater reports
+  Manual while boosting) and returns to the previous mode when Boost ends.
+  After Boost runs out by itself, the previous mode can take up to a minute to
+  show. Boost lasts at most 240 minutes; Boost is not offered during Away.
 
 ## Known limitations
 
@@ -166,8 +202,9 @@ problem.
 - The PIN is shown for about 30 seconds per pairing attempt.
 - While the Dimplex phone app is connected to a heater, Home Assistant cannot
   connect to it.
-- Schedules are read-only in Home Assistant (shown as calendars); there is no on/off; Boost
-  and the Setback temperature cannot be set.
+- Schedules are shown as calendars and changed with the **Set schedule**
+  action, not by editing calendar events. There is no on/off; the Setback and
+  Boost temperatures are set on the heater.
 - **Heater stops responding (needs a power cycle).** Rarely, after its
   connection drops unexpectedly, a heater's Bluetooth stops completely: no
   receiver hears it until it is switched off and on at the wall. Home Assistant

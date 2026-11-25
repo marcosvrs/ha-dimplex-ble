@@ -21,9 +21,11 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.dimplex_ble import async_remove_entry
 from custom_components.dimplex_ble.const import (
     CONF_ADDRESS,
+    CONF_BOOST_MINUTES,
     CONF_KEEP_CONNECTED,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
+    CONF_SYNC_CLOCK,
     DOMAIN,
     POLL_INTERVAL_PER_POLL,
 )
@@ -266,22 +268,36 @@ async def test_options_flow_switches_the_mode_and_reloads(hass, fake_bt) -> None
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     schema = result["data_schema"]({})
-    assert schema == {CONF_KEEP_CONNECTED: True}
+    assert schema == {
+        CONF_KEEP_CONNECTED: True,
+        CONF_SYNC_CLOCK: True,
+        CONF_BOOST_MINUTES: 60,
+    }
 
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_KEEP_CONNECTED: False}
+        result["flow_id"],
+        {CONF_KEEP_CONNECTED: False, CONF_SYNC_CLOCK: False, CONF_BOOST_MINUTES: 30.0},
     )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_KEEP_CONNECTED: False}
+    assert entry.options == {
+        CONF_KEEP_CONNECTED: False,
+        CONF_SYNC_CLOCK: False,
+        CONF_BOOST_MINUTES: 30,
+    }
     reloaded: DimplexCoordinator = entry.runtime_data
     assert reloaded is not coordinator
     assert not reloaded.link.keep_connected
     assert reloaded.update_interval == timedelta(seconds=POLL_INTERVAL_PER_POLL)
     assert proxy.events[-1] == "disconnect"  # the reloaded entry ended its poll
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["data_schema"]({}) == {CONF_KEEP_CONNECTED: False}
+    assert result["data_schema"]({}) == {
+        CONF_KEEP_CONNECTED: False,
+        CONF_SYNC_CLOCK: False,
+        CONF_BOOST_MINUTES: 30,
+    }
+    assert not reloaded.link.sync_clock
 
 
 async def test_per_poll_refresh_connects_pairs_reads_then_disconnects(

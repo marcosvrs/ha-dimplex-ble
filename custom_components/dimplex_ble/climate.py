@@ -11,6 +11,7 @@ from homeassistant.components.climate.const import (
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
     PRESET_AWAY,
+    PRESET_BOOST,
     PRESET_ECO,
     ClimateEntityFeature,
     HVACAction,
@@ -22,7 +23,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES, DOMAIN
 from .coordinator import DimplexConfigEntry
 from .entity import DimplexEntity
 from .protocol import (
@@ -34,11 +35,11 @@ from .protocol import (
     PRESET_MANUAL,
     PRESET_OUT_ALL_DAY,
     PRESET_USER_TIMER,
+    SETPOINT,
     TIMER_SUBMODE_AWAY,
     TIMER_SUBMODE_HOME,
     TIMER_SUBMODE_OUT,
     TIMER_SUBMODE_USER_TIMER,
-    GattAddress,
     encode_heating_mode,
     encode_preset_mode,
     encode_setpoint,
@@ -46,18 +47,32 @@ from .protocol import (
 )
 
 PARALLEL_UPDATES = 1
-SETPOINT: GattAddress = (0, 0x1023)
 # HA climate docs: AUTO "follows a schedule ... You cannot set a temperature in
 # this mode"; presets change how the active mode behaves. The heater's timer
 # programmes are schedules (a setpoint written in User Timer is dropped when the
 # programme is re-selected, AM2086 2026-11-24), so they are the presets of AUTO;
 # the continuous modes are the presets of HEAT. Away (a fixed temperature until a
-# return time) is continuous and is offered in both so it is one action away.
+# return time) and Boost (a temporary temperature, after which the heater returns
+# to the mode it left) are offered in both so they are one action away.
 # Each preset needs a text and an icon under state_attributes.preset_mode.
-HEAT_PRESETS = [PRESET_MANUAL, PRESET_ECO, PRESET_FROST_PROTECT, PRESET_AWAY]
-AUTO_PRESETS = [PRESET_USER_TIMER, PRESET_HOME_ALL_DAY, PRESET_OUT_ALL_DAY, PRESET_AWAY]
-PRESET_MODES = [*HEAT_PRESETS[:-1], *AUTO_PRESETS]
-SCHEDULE_PRESETS = frozenset(AUTO_PRESETS[:-1])
+SCHEDULE_PRESETS = frozenset(
+    {PRESET_USER_TIMER, PRESET_HOME_ALL_DAY, PRESET_OUT_ALL_DAY}
+)
+HEAT_PRESETS = [
+    PRESET_MANUAL,
+    PRESET_ECO,
+    PRESET_FROST_PROTECT,
+    PRESET_BOOST,
+    PRESET_AWAY,
+]
+AUTO_PRESETS = [
+    PRESET_USER_TIMER,
+    PRESET_HOME_ALL_DAY,
+    PRESET_OUT_ALL_DAY,
+    PRESET_BOOST,
+    PRESET_AWAY,
+]
+PRESET_MODES = [*HEAT_PRESETS[:3], *AUTO_PRESETS]
 
 
 async def async_setup_entry(
@@ -84,8 +99,23 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     _last_schedule = PRESET_USER_TIMER
 
     @property
+    def _boosting(self) -> bool:
+        """Return whether Boost runs (ConfigR: while RunbackTime is above 0)."""
+        data = self.coordinator.data
+        return bool(data and data.boost_minutes_left)
+
+    @property
     def hvac_mode(self) -> HVACMode | None:
-        """Return Auto for a timer programme and Heat for a continuous mode or Away."""
+        """Return Auto for a timer programme and Heat for a continuous mode or Away.
+
+        Boost keeps the mode it was started from: a timer programme stays in the
+        mode byte, a continuous mode reads Manual (hardware 2026-11-25).
+        """
+        if self._boosting:
+            data = self.coordinator.data
+            assert data is not None
+            timer = (data.operating_mode_hex or "")[:2] == f"{HEATING_MODE_TIMER:02x}"
+            return HVACMode.AUTO if timer else HVACMode.HEAT
         preset = self.preset_mode
         if preset is None:
             return None
@@ -93,18 +123,25 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def preset_modes(self) -> list[str]:
-        """Return the presets of the active mode (all while the mode is unknown)."""
+        """Return the presets of the active mode (all while the mode is unknown).
+
+        Boost is not offered in Away: starting it there was never tested.
+        """
         mode = self.hvac_mode
         if mode == HVACMode.AUTO:
-            return AUTO_PRESETS
-        if mode == HVACMode.HEAT:
-            return HEAT_PRESETS
-        return PRESET_MODES
+            presets = AUTO_PRESETS
+        elif mode == HVACMode.HEAT:
+            presets = HEAT_PRESETS
+        else:
+            return PRESET_MODES
+        if self.preset_mode == PRESET_AWAY:
+            return [preset for preset in presets if preset != PRESET_BOOST]
+        return presets
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
         """Offer a target temperature except in Auto, where the schedule sets it."""
-        if self.hvac_mode == HVACMode.AUTO:
+        if self.hvac_mode == HVACMode.AUTO and not self._boosting:
             return ClimateEntityFeature.PRESET_MODE
         return (
             ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
@@ -138,7 +175,9 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     def native_target_temperature(self) -> float | None:
         """Return the target read back from the panel heater (none in Auto)."""
         data = self.coordinator.data
-        if data is None or data.setpoint_c is None or self.hvac_mode == HVACMode.AUTO:
+        if data is None or data.setpoint_c is None:
+            return None
+        if self.hvac_mode == HVACMode.AUTO and not self._boosting:
             return None
         return float(data.setpoint_c)
 
@@ -148,6 +187,8 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         data = self.coordinator.data
         if data is None:
             return None
+        if data.boost_minutes_left:
+            return PRESET_BOOST
         if data.away_active:
             return PRESET_AWAY
         if data.operating_mode_hex is None:
@@ -229,6 +270,8 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="invalid_hvac_mode",
             )
+        if self._boosting:
+            await self.coordinator.async_cancel_boost()
         if self.hvac_mode == hvac_mode:
             return
         payload = (
@@ -243,10 +286,11 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Write a whole-degree Celsius target and wait for panel heater readback."""
         requested_mode = kwargs.get(ATTR_HVAC_MODE)
-        if self.hvac_mode == HVACMode.AUTO or requested_mode not in (
-            None,
-            HVACMode.HEAT,
-        ):
+        # During Boost the target is Boost's temperature, in either mode.
+        allowed = self.hvac_mode if self._boosting else HVACMode.HEAT
+        if (
+            self.hvac_mode == HVACMode.AUTO and not self._boosting
+        ) or requested_mode not in (None, allowed):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="temperature_needs_heat",
@@ -297,12 +341,42 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
                 translation_key="invalid_preset",
             )
 
+        if preset_mode == PRESET_BOOST:
+            await self._async_start_boost()
+            return
+        if self._boosting:
+            await self.coordinator.async_cancel_boost()
         if preset_mode == PRESET_AWAY:
             await self.coordinator.async_set_away_mode(True)
             return
         await self.coordinator.async_write_mode(
             HEATING_MODE, encode_preset_mode(preset_mode), leave_away=self._in_away
         )
+
+    async def _async_start_boost(self) -> None:
+        """Start Boost at the heater's Boost temperature for the chosen length."""
+        if self._boosting:
+            return
+        data = self.coordinator.data
+        temperature = data.boost_temperature_c if data is not None else None
+        if (
+            data is None
+            or temperature is None
+            or data.minimum_temperature_c is None
+            or data.maximum_temperature_c is None
+            or not data.minimum_temperature_c
+            <= temperature
+            <= data.maximum_temperature_c
+        ):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="boost_unavailable"
+            )
+        minutes = int(
+            self.coordinator.config_entry.options.get(
+                CONF_BOOST_MINUTES, DEFAULT_BOOST_MINUTES
+            )
+        )
+        await self.coordinator.async_start_boost(minutes, temperature)
 
     def _in_away(self) -> bool:
         """Return whether the heater is in Away now (checked under the Away lock)."""

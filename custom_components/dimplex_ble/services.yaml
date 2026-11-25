@@ -1,3 +1,61 @@
+set_schedule:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: dimplex_ble
+    programme:
+      required: true
+      default: user_timer
+      selector:
+        select:
+          translation_key: programme
+          options:
+            - user_timer
+            - home_all_day
+            - out_all_day
+    days:
+      required: true
+      selector:
+        select:
+          translation_key: day
+          multiple: true
+          options: [mon, tue, wed, thu, fri, sat, sun]
+    periods:
+      required: false
+      example: |
+        - start: "06:30"
+          end: "08:00"
+          temperature: 21
+        - start: "17:00"
+          end: "22:00"
+          temperature: 21
+      selector:
+        object:
+          multiple: true
+          translation_key: period
+          label_field: start
+          description_field: end
+          fields:
+            start:
+              required: true
+              selector:
+                time:
+            end:
+              required: true
+              selector:
+                time:
+            temperature:
+              required: true
+              default: 21
+              selector:
+                number:
+                  min: 7
+                  max: 30
+                  step: 1
+                  unit_of_measurement: °C
+                  mode: box
 get_gatt_services:
   fields:
     device_id:

@@ -23,6 +23,7 @@ from custom_components.dimplex_ble.const import (
     CONF_ADDRESS,
     CONF_PASSKEY,
     CONF_PROXY_SOURCE,
+    CONF_SYNC_CLOCK,
     DOMAIN,
     PASSKEY_REQUEST_EVENT,
 )
@@ -160,6 +161,7 @@ async def test_pin_typed_while_pairing_waits_creates_the_entry(hass, fake_bt) ->
         CONF_PROXY_SOURCE: PROXY,
         CONF_PASSKEY: PIN,
     }
+    assert result["options"] == {CONF_SYNC_CLOCK: True}  # on by default
     assert proxy.actions[:3] == [TARGET_ONLY, ARM_PIN, CLEAR]
     assert proxy.actions[-1] == CLEAR
     # Fresh service discovery, verified read, then the slot is released.
@@ -728,6 +730,7 @@ async def test_reauth_repairs_with_a_new_pin(hass, fake_bt) -> None:
 
     result = await hass.config_entries.flow.async_configure(flow["flow_id"])
     assert result["step_id"] == "reauth_proxy"
+    assert CONF_SYNC_CLOCK not in result["data_schema"]({})  # a repair, not settings
     assert proxy.events.count("pair_start") == pairings  # nothing until the user acts
     proxy.pair_gate = hass.loop.create_future()
     release_on_pin(proxy)
@@ -867,14 +870,17 @@ async def test_bonded_proxy_finishes_reconfigure_without_a_pin(hass, fake_bt) ->
     before = len(proxy.actions)
 
     result = await entry.start_reconfigure_flow(hass)
+    assert result["data_schema"]({})[CONF_SYNC_CLOCK] is True
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_PROXY_SOURCE: PROXY}
+        result["flow_id"], {CONF_PROXY_SOURCE: PROXY, CONF_SYNC_CLOCK: False}
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     result = await advance(hass, result["flow_id"])
     await hass.async_block_till_done()
 
     assert result["reason"] == "reconfigure_successful"
+    assert entry.options == {CONF_SYNC_CLOCK: False}
+    assert not entry.runtime_data.link.sync_clock
     assert entry.data[CONF_PASSKEY] == PIN  # kept
     assert entry.state is ConfigEntryState.LOADED
     assert passkey_listeners(hass) == 0

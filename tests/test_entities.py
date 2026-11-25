@@ -58,6 +58,8 @@ def snapshot(
     away_active=None,
     away_until=None,
     away_target_temperature_c=None,
+    boost_minutes_left=None,
+    boost_temperature_c=None,
 ):
     return HeaterSnapshot(
         model=model,
@@ -81,6 +83,8 @@ def snapshot(
         away_active=away_active,
         away_until=away_until,
         away_target_temperature_c=away_target_temperature_c,
+        boost_minutes_left=boost_minutes_left,
+        boost_temperature_c=boost_temperature_c,
     )
 
 
@@ -175,7 +179,7 @@ def test_rule_climate_exposes_reported_temperature_and_supported_capabilities(ha
     assert entity.supported_features == (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    assert entity.preset_modes == ["manual", "eco", "frost_protect", "away"]
+    assert entity.preset_modes == CONTINUOUS
     assert entity.preset_mode == "manual"
     assert entity.native_current_temperature == 19.5
     assert entity.native_target_temperature == 21.0
@@ -229,8 +233,8 @@ def test_rule_diagnostic_sensors_expose_lcd_temperature_and_output_power(
     assert power_sensor.entity_category is None
 
 
-SCHEDULES = ["user_timer", "home_all_day", "out_all_day", "away"]
-CONTINUOUS = ["manual", "eco", "frost_protect", "away"]
+SCHEDULES = ["user_timer", "home_all_day", "out_all_day", "boost", "away"]
+CONTINUOUS = ["manual", "eco", "frost_protect", "boost", "away"]
 
 
 @pytest.mark.parametrize(
@@ -274,6 +278,7 @@ def test_rule_climate_offers_every_preset_while_the_mode_is_unknown(hass):
         "user_timer",
         "home_all_day",
         "out_all_day",
+        "boost",
         "away",
     ]
 
@@ -627,7 +632,7 @@ async def test_rule_climate_writes_and_clears_away_preset(hass):
 async def test_rule_climate_rejects_unverified_preset_mode(hass):
     _, coordinator = make_coordinator(hass, data=snapshot())
     with pytest.raises(ServiceValidationError) as err:
-        await DimplexClimate(coordinator).async_set_preset_mode("boost")
+        await DimplexClimate(coordinator).async_set_preset_mode("comfort")
     assert err.value.translation_domain == DOMAIN
     assert err.value.translation_key == "invalid_preset"
 

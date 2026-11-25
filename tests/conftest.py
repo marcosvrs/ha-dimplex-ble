@@ -157,11 +157,14 @@ class FakeClient:
         if self.proxy.disconnect_error is not None:
             raise self.proxy.disconnect_error
 
-    def _address(self, char: FakeChar) -> tuple[int, int]:
+    def _address(self, char: FakeChar) -> tuple[int, int] | None:
         return next(
-            address
-            for address in self.proxy.values
-            if char.uuid in {pair[1] for pair in gatt_uuid_candidates(*address)}
+            (
+                address
+                for address in self.proxy.values
+                if char.uuid in {pair[1] for pair in gatt_uuid_candidates(*address)}
+            ),
+            None,
         )
 
     async def read_gatt_char(self, char: FakeChar) -> bytearray:
@@ -174,12 +177,18 @@ class FakeClient:
 
     async def write_gatt_char(self, char: FakeChar, data: bytes, response: bool):
         self.events.append(("write", char.uuid, bytes(data), response))
+        address = self._address(char)
         schedule = (0, 0x1002)
-        if schedule in self.proxy.values and self._address(char) == schedule:
+        if schedule in self.proxy.values and address == schedule:
+            if data[0] == 1 and self.proxy.saves_schedules:
+                # [1, p, d, ...] saves that day; it reads back with byte 0 = 0.
+                self.proxy.schedule[(data[1], data[2])] = b"\x00" + bytes(data[1:])
             # The heater returns the (programme, day) record a [0, p, d] write selects.
             self.proxy.values[schedule] = self.proxy.schedule.get(
                 (data[1], data[2]), bytes(31)
             )
+        if self.proxy.on_write is not None:
+            self.proxy.on_write(address, bytes(data))
 
 
 class FakeScanner:
@@ -230,6 +239,9 @@ class FakeProxy:
         self.values = dict(HEATER_VALUES)
         # (programme, day) -> 31-byte schedule record, once 0/0x1002 is added.
         self.schedule: dict[tuple[int, int], bytes] = {}
+        self.saves_schedules = True
+        # Called with (address, payload) after every write, to emulate a device.
+        self.on_write: Any = None
         self.connect_error: BaseException | None = None
         self.connect_gate: asyncio.Future[None] | None = None
         self.pair_errors: list[BaseException] = []

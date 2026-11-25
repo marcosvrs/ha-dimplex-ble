@@ -1,4 +1,14 @@
-# Upstream issue drafts (not filed)
+# Upstream issue drafts
+
+Status (2026-11-25):
+
+- (a) filed as [espressif/esp-idf#19495](https://github.com/espressif/esp-idf/issues/19495)
+  (line numbers updated to v5.5.6/master; reproduced on v5.5.5 only, which
+  the issue states).
+- (b) and (c) not filed. ESPHome's issue and discussion forms ask reporters to
+  write in their own words and to put AI analysis only in a collapsed
+  `<details>` block, so they should be posted by a person, not pasted.
+  Where and what to correct first is noted under each draft.
 
 Ready-to-file drafts from the 2026-11-24 investigation. Source of truth:
 `docs/investigation-2026-11-24/ledger.md` (cited as "ledger L<line>"). Raw logs
@@ -59,7 +69,17 @@ never cancel an in-flight connect (run it as its own task to its natural end).
 
 ---
 
-## (b) esphome/esphome: `bluetooth_proxy` "Conn param update failed, status=19" (HCI 0x2013 Invalid Param) on every connection; links stay at 7.5 ms
+## (b) esphome/esphome: `bluetooth_proxy`
+
+> **Before filing** (duplicate check 2026-11-25): no duplicate found; related
+> #22859 (closed, not planned) and #21568 / PR #21698 (status=6, log throttling).
+> Use the bug form (`bug_report.yml`). Corrections: `0x2013` is the HCI opcode
+> (LE Connection Update) and the HCI status is `0x12`; the requested parameters
+> are spec-valid (medium 7-9, latency 0, timeout 800), so drop the "check the
+> parameters" fix; the update is only sent on uncached connects. On `dev` the
+> lines are 160-174 (preferred params) and 429 (medium update), `ble.cpp:743`.
+> No functional effect was observed, so expect a low priority.
+ "Conn param update failed, status=19" (HCI 0x2013 Invalid Param) on every connection; links stay at 7.5 ms
 
 **Title:** bluetooth_proxy: connection parameter update rejected on every connection (`status=19`, HCI 0x2013), link keeps the 7.5 ms FAST interval
 
@@ -117,7 +137,15 @@ and say whether this is the same root cause or an additional contributor.
 
 ---
 
-## (c) esphome/esphome feature request: passkey request/reply over the native API for `bluetooth_proxy`
+## (c) esphome/esphome feature request:
+
+> **Before posting**: issues are disabled for feature requests; post a
+> Discussion in category "Native API"
+> (github.com/orgs/esphome/discussions) with the fields "Describe the Native
+> API enhancement" and "Use cases", and link esphome/feature-requests#2013,
+> bleak-esphome PR #409 (only Just Works pairing can complete through a proxy)
+> and aioesphomeapi#1844. Current version: aioesphomeapi 46.30.1.
+ passkey request/reply over the native API for `bluetooth_proxy`
 
 **Title:** Feature request: expose BLE passkey request and reply through the native API (bluetooth_proxy), so a remote client can pair devices that display a PIN
 

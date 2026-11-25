@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ServiceValidationError
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -28,11 +32,13 @@ from .protocol import (
     AWAY_MODE,
     AWAY_TEMPERATURE_MAX_C,
     AWAY_TEMPERATURE_MIN_C,
+    BOOST_REMAINING,
     PRESET_HOME_ALL_DAY,
     PRESET_OUT_ALL_DAY,
     PRESET_USER_TIMER,
     ROOM_TEMPERATURE_OFFSET,
     SETBACK,
+    SETPOINT,
     SOUND,
     TEMPERATURE_OFFSET_LIMIT_C,
     TIMER_SUBMODE_HOME,
@@ -41,8 +47,11 @@ from .protocol import (
     DimplexProtocolError,
     GattAddress,
     HeaterSnapshot,
+    SchedulePeriod,
     encode_away_mode,
+    encode_boost_minutes,
     encode_setback,
+    encode_setpoint,
     encode_sound,
     encode_temperature_offset,
     parse_setback,
@@ -52,6 +61,8 @@ from .protocol import (
 from .stall import StallMonitor
 
 _LOGGER = logging.getLogger(__name__)
+# Time the heater takes to restore its mode after Boost is ended.
+BOOST_END_SETTLE_S = 1.5
 
 type DimplexConfigEntry = ConfigEntry[DimplexCoordinator]
 
@@ -176,15 +187,114 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self, address: GattAddress, payload: bytes, *, refresh: bool = True
     ) -> None:
         """Write a setting, mapping failures to Home Assistant errors."""
+        await self._async_command(self.link.async_write(address, payload))
+        if refresh:
+            await self.async_request_refresh()
+
+    async def _async_command[T](self, command: Awaitable[T]) -> T:
+        """Run a link command, mapping failures to Home Assistant errors."""
         try:
-            await self.link.async_write(address, payload)
+            return await command
         except HeaterAuthError as err:
             self.config_entry.async_start_reauth(self.hass)
             raise to_homeassistant_error(err) from err
         except (DimplexError, DimplexProtocolError) as err:
             raise to_homeassistant_error(err) from err
-        if refresh:
-            await self.async_request_refresh()
+
+    async def async_start_boost(self, minutes: int, temperature_c: int) -> None:
+        """Start Boost: the minutes first, then its setpoint (as ConfigR does).
+
+        Under the Away lock, so an Away started meanwhile (for example from the
+        Away return time entity) is seen: Boost during Away was never tested.
+        """
+        async with self._away_lock:
+            if self.data is None or self.data.away_active:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="boost_not_in_away"
+                )
+            await self._async_command(
+                self.link.async_write_many(
+                    (
+                        (BOOST_REMAINING, encode_boost_minutes(minutes)),
+                        (SETPOINT, encode_setpoint(temperature_c)),
+                    )
+                )
+            )
+        await self.async_refresh()
+
+    async def async_cancel_boost(self) -> None:
+        """End Boost; the heater returns to its previous mode by itself."""
+        await self._async_end_boost()
+        await self.async_refresh()
+
+    async def _async_end_boost(self) -> None:
+        """Write 0 minutes and wait for the heater to restore its mode."""
+        await self._async_command(
+            self.link.async_write(BOOST_REMAINING, encode_boost_minutes(0))
+        )
+        # ConfigR re-reads 1 s after ending Boost; the heater had restored its
+        # mode within 1.5 s in every test (hardware 2026-11-25).
+        await asyncio.sleep(BOOST_END_SETTLE_S)
+        if isinstance(self.data, HeaterSnapshot):
+            self.data = dataclasses.replace(self.data, boost_minutes_left=0)
+
+    async def async_save_schedule(
+        self, preset: str, days: dict[int, tuple[SchedulePeriod, ...]]
+    ) -> None:
+        """Save whole days of a programme and verify each by reading it back.
+
+        Days are saved one by one. If the link fails part-way, the days already
+        read back are kept, every programme is read again in the background,
+        and the error says how many days were saved. Running the action again
+        is safe: it replaces the same days. (No rollback: undoing would need
+        more writes over the link that just failed.)
+        """
+        readback: dict[int, tuple[SchedulePeriod, ...] | None] = {}
+        try:
+            await self._async_command(
+                self.link.async_save_schedule(
+                    SCHEDULE_PROGRAMMES[preset], days, readback
+                )
+            )
+        except HomeAssistantError as err:
+            self._store_schedule_days(preset, readback)
+            self._schedules_due = True
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self.async_refresh_schedules(),
+                "dimplex_ble schedule reread after a failed save",
+            )
+            if not readback:
+                raise
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="schedule_partly_saved",
+                translation_placeholders={
+                    "saved": str(len(readback)),
+                    "total": str(len(days)),
+                },
+            ) from err
+        self._store_schedule_days(preset, readback)
+        expected = {
+            day: tuple(sorted(periods, key=lambda period: period.start))
+            for day, periods in days.items()
+        }
+        if any(readback[day] != expected[day] for day in days):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="schedule_not_saved"
+            )
+
+    def _store_schedule_days(
+        self, preset: str, readback: dict[int, tuple[SchedulePeriod, ...] | None]
+    ) -> None:
+        """Show the read-back days in the calendars."""
+        if not readback:
+            return
+        week: WeekSchedule = list(self.schedules.get(preset, [None] * 7))
+        for day, periods in readback.items():
+            week[day] = periods
+        self.schedules = {**self.schedules, preset: week}
+        self.async_update_listeners()
 
     @property
     def sound_value(self) -> bytes | None:
@@ -389,6 +499,14 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         self, active: bool, until: datetime | None
     ) -> None:
         """Write the Away record; the caller holds the Away lock."""
+        if (
+            active
+            and isinstance(self.data, HeaterSnapshot)
+            and self.data.boost_minutes_left
+        ):
+            # Boost during Away was never tested: end Boost first, as the
+            # climate's Away preset does (also when Away comes from the entity).
+            await self._async_end_boost()
         now = dt_util.now().replace(tzinfo=None)
         data = self.data
         if until is not None and until.tzinfo is not None:

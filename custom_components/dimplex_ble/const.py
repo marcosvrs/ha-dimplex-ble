@@ -14,6 +14,13 @@ CONF_PASSKEY = "passkey"
 # Option: hold the BLE link between polls (True) or connect per operation.
 CONF_KEEP_CONNECTED = "keep_connected"
 DEFAULT_KEEP_CONNECTED = True
+# Option: set the heater clock to Home Assistant's time when it drifts, as the
+# ConfigR app does on every connection.
+CONF_SYNC_CLOCK = "sync_clock"
+DEFAULT_SYNC_CLOCK = True
+# Option: how long the Boost preset lasts (the heater accepts 1-240 min).
+CONF_BOOST_MINUTES = "boost_minutes"
+DEFAULT_BOOST_MINUTES = 60
 
 # Fired by firmware/dimplex_pin_responder.yaml when the heater asks the proxy for
 # the passkey (its PIN is on the display); ESPHome adds the proxy's device_id.
@@ -27,6 +34,9 @@ POLL_INTERVAL_PER_POLL = 60
 # Slow settings (Sound, Setback, offset) change only when someone changes them.
 SETTINGS_UPDATE_INTERVAL = timedelta(minutes=5)
 SCHEDULE_UPDATE_INTERVAL = timedelta(hours=6)
+# A held link rechecks the heater clock this often (per-poll links check it on
+# every connection), so a DST change is corrected within the hour.
+CLOCK_CHECK_INTERVAL = timedelta(hours=1)
 PLATFORMS = (
     Platform.CALENDAR,
     Platform.CLIMATE,

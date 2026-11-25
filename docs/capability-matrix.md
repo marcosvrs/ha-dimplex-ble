@@ -64,14 +64,14 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `1/0x0002` | 3 | R | Trac | yes | present | Mapped through selector write/read; active flag and PLX output correlation verified |
 | `1/0x0003` | 2 | R | Relay | no | absent | Not available |
 | `2/0x0005` | 3 | RW | Sound | yes | present | Verified `00 00 00`/`01 00 00` boolean; exposed as the Sound configuration switch and refreshed on an independent five-minute schedule |
-| `0/0x0006` | 7 | W | SetRtc | yes | present | Raw read observed; no clock entity/write |
+| `0/0x0006` | 7 | RW | SetRtc | yes | present | `[20, yy, mm, dd, hh, mi, dst]` local time; read on every connection (hourly on a held link) and written when more than 60 s off, as ConfigR does (option **Sync the heater clock**, default on); verified on 4 heaters 2026-11-25 |
 | `1/0x0007` | 1 | R | LastKeyPressValue | yes | present | Read-only diagnostic sensor; transient UI event |
 | `1/0x0008` | 3 | R | TemperatureSensor | yes | present | Selector 1 room and selector 2 LCD mapped; selector 3 unavailable |
 | `3/0x000A` | 8 | RW | PowerLoading | yes | present | First LE16 rated power mapped; remaining bytes retained/unknown; writes blocked |
 | `1/0x000E` | 1 | R | OffpeakStatus | no | absent | Not available |
 | `0/0x0106` | 8 | W | SetRtcWithSeconds | no | absent | Not available |
 | `0/0x1001` | 6 | RW | HeatingMode | yes | present | BLE reads confirm the timer family and continuous modes. Manual (`02`), Eco Mode (`03`), Frost Protect (`04`), User Timer (`01 03`), and Home All Day (`01 02`) writes were accepted/read back; the climate uses heat-only `HVACMode.HEAT` and exposes verified modes as translated presets |
-| `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read verified 2026-11-24 on 4 heaters via `[0, programme, day]` selection (docs/schedule-format.md); write not implemented |
+| `0/0x1002` | 31 | RW | ScheduleAndSetTemperature | yes | present | Read verified 2026-11-24 on 4 heaters via `[0, programme, day]` selection; single-day save (byte 0 = 1) verified 2026-11-25 on AM2086 and exposed as `dimplex_ble.set_schedule` (docs/schedule-format.md) |
 | `0/0x1005` | 1 | RW | TemperatureUnit | yes | present | Celsius observed; reversible Fahrenheit write/readback verified; exposed as a configuration select |
 | `0/0x1006` | 4 | RW | SetpointRange | yes | present | Min/max mapped; write blocked by evidence boundary |
 | `0/0x1007` | 9 | RW | OpenWindowDetection | yes | present | Verified configuration switch; `00/01` in the first byte with eight zero bytes, read/write/readback verified on AM2086; behavior matches the official [PLXE Series C manual, Issue 7](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf) |
@@ -91,8 +91,8 @@ ConfigR names are authoritative terminology, not automatic packet proof.
 | `1/0x1020` | 1 | RW | TestMode | yes | present | Read-only diagnostic sensor; writes blocked |
 | `0/0x1023` | 2 | RW | CurrentSetTemperature | yes | present | Native target mapped; whole-degree writes verified |
 | `3/0x1024` | 4 | RW | HeatDemand | no | absent | No read or entity; distinct from Trac byte. UUID is `00001024-...`; ConfigR's own 16-bit label string reads `"0124"` (a typo in ConfigR, see `configr-firmware-analysis.md`) |
-| `0/0x1027` | 2 | RW | RunbackTime | yes | present | Raw countdown only |
-| `0/0x1028` | 2 | RW | RunbackSetpoint | yes | present | Raw read only; not a second HA target |
+| `0/0x1027` | 2 | RW | RunbackTime | yes | present | Boost minutes left (LE16); writing 1–240 then the setpoint starts Boost, 0 ends it (verified 2026-11-25); climate **Boost** preset |
+| `0/0x1028` | 2 | RW | RunbackSetpoint | yes | present | The heater's Boost temperature `[°C, 0]`; read and used to start Boost; not written |
 | `0/0x102A` | 8 | RW | AwayMode | yes | present | Active/inactive write and readback verified on AM6532; climate exposes the friendly Away preset and a separate Away return-time datetime control; activation requires an explicit future deadline |
 | `2/0x1030` | 1 | W | FactoryReset | no | absent | Blocked/not available; never probe |
 | `2/0x1033` | 33 | RW | Security | no | absent | Protected; never expose |
@@ -203,8 +203,8 @@ unknown or transient values.
 | `0/0x100D` | AdvanceHeating | `00` | Read observation only; command semantics remain unverified |
 | `0/0x1016` | Setback | `0008` | Unit and meaning unverified; not exposed |
 | `0/0x1017` | Runback | `017c` | Encoding unverified; not exposed |
-| `0/0x1027` | Runback/boost countdown | `0000` | No active runback/boost observed; not exposed |
-| `0/0x1028` | Runback/boost setpoint | `1500` | Not a second target; not exposed |
+| `0/0x1027` | Runback/boost countdown | `0000` | Boost preset while above 0 |
+| `0/0x1028` | Runback/boost setpoint | `1500` | Boost temperature (21 °C) |
 | `0/0x102A` | AwayMode | Active payload with future expiry | Implemented as the climate Away preset; raw bytes are not exposed |
 | `1/0x0007` | LastKeyPressValue | `06` | Transient UI event; not exposed |
 | `2/0x100C` | RfComms | `01` | Semantics and safe control contract unverified; not exposed |

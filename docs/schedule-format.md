@@ -1,6 +1,6 @@
 # Timer programme schedules (`0/0x1002`)
 
-Read-only support since 2026-11-24. Static analysis of ConfigR 3.12.2
+Read since 2026-11-24, saved since 2026-11-25 (`dimplex_ble.set_schedule`). Static analysis of ConfigR 3.12.2
 (`ConfigR.dll` IL, method names below) plus live reads of four PLX Series C
 heaters. **VERIFIED** = read in the IL or observed on hardware;
 **INFERENCE** = consistent, not proven.
@@ -45,16 +45,28 @@ ConfigR's `Constants` tables (User Timer 06:30–09:30, 11:00–13:00, 15:00–1
 21 °C). AM6532's Monday User Timer is customised (05:30–07:30, 16:00–17:00,
 21:00–23:00). Heater modes and settings were unchanged after the reads.
 
-## Not done (write)
+## Save
 
-ConfigR saves a programme by writing all 7 day records with byte 0 = 1, then
-reads them back. Writing is **not implemented**: the meaning of byte 0 on the
-heater and of each period's last byte are not confirmed, and a wrong write
-replaces a day's schedule. The split characteristics `0x1012`–`0x1015` (ConfigR's
-MTU ≤ 20 fallback) stay blocked.
+Write the day record with byte 0 = 1 (VERIFIED on AM2086, 2026-11-25). The
+heater accepts **one day per write**: saving Monday of User Timer changed only
+Monday, left Tuesday and the heater mode unchanged, and the next `[0, p, d]`
+read returned exactly the written periods. The empty-day form (four
+`00 00 00 00 15 00` slots) and a restore of the backed-up factory record also
+read back byte for byte. ConfigR itself writes all 7 days, then reads them
+back; the integration writes only the chosen days, then reads each back and
+fails the action when one differs.
+
+Encoding (ConfigR `WriteTimerModeDetails`): periods sorted by start, whole
+minutes, start before end, no overlaps, at most 4; unused slots repeat the last
+end time as start and end with 21 °C (00:00 on an empty day). Each period's
+last byte is 0. The split characteristics `0x1012`–`0x1015` (ConfigR's MTU ≤ 20
+fallback) stay blocked; proxies use a 517-byte MTU.
 
 ## Open questions
 
-- The calendar shows the periods in Home Assistant's time zone, assuming the
-  heater clock follows local time (INFERENCE; the heater clock was not read).
+- The heater clock was 2 h 17 min – 2 h 24 min slow on three heaters
+  (2026-11-25 03:31 UTC), which explains AM2086 heating at 21:26 in Home All
+  Day (its clock showed about 19:09). The integration now sets the clock like
+  ConfigR (local time, when more than 60 s off), so the calendars and the
+  heater agree.
 - Behaviour at a period boundary after a setpoint override in a programme.

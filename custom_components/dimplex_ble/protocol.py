@@ -9,6 +9,7 @@ type GattAddress = tuple[int, int]
 OPEN_WINDOW_DETECTION: Final[GattAddress] = (0, 0x1007)
 PREEMPTIVE_HEATING: Final[GattAddress] = (0, 0x1008)
 HEATING_MODE: Final[GattAddress] = (0, 0x1001)
+SETPOINT: Final[GattAddress] = (0, 0x1023)
 AWAY_MODE: Final[GattAddress] = (0, 0x102A)
 SOUND: Final[GattAddress] = (2, 0x0005)
 # ConfigR AdvanceHeatingParameter, SetpointRange, SetbackParameter and
@@ -18,12 +19,27 @@ SETPOINT_RANGE: Final[GattAddress] = (0, 0x1006)
 SETBACK: Final[GattAddress] = (0, 0x1016)
 ROOM_TEMPERATURE_OFFSET: Final[GattAddress] = (2, 0x1019)
 # ConfigR ScheduleAndSetTemperature: one (programme, day) record per read,
-# selected by writing [0, programme, day] first; byte 0 = 1 would SAVE a day,
-# so this integration only ever writes the 0 form (docs/schedule-format.md).
+# selected by writing [0, programme, day] first; byte 0 = 1 saves that one day
+# (hardware 2026-11-25, docs/schedule-format.md).
 SCHEDULE: Final[GattAddress] = (0, 0x1002)
 SCHEDULE_RECORD_LENGTH: Final = 31
 SCHEDULE_PERIODS: Final = 4
 SCHEDULE_DAYS: Final = 7
+# ConfigR fills unused slots with this temperature (Constants.cctor defaults).
+SCHEDULE_FILLER_C: Final = 21
+# Boost (ConfigR "Boost", internally Runback): writing the minutes to
+# RunbackTime and then the setpoint starts it; writing 0 minutes ends it and the
+# heater returns to its previous mode by itself. 1-240 min are accepted, longer
+# values are ignored (hardware 2026-11-25, docs/configr-clock-schedule-boost.md).
+BOOST_REMAINING: Final[GattAddress] = (0, 0x1027)
+BOOST_TEMPERATURE: Final[GattAddress] = (0, 0x1028)
+BOOST_MAX_MINUTES: Final = 240
+# ConfigR SetRtc: [20, year % 100, month, day, hour, minute, DST flag], local
+# time; ConfigR writes the phone clock once per connection when it is more than
+# 60 s off (docs/configr-clock-schedule-boost.md).
+CLOCK: Final[GattAddress] = (0, 0x0006)
+CLOCK_PAYLOAD_LENGTH: Final = 7
+CLOCK_CENTURY: Final = 20
 SOUND_PAYLOAD_LENGTH: Final = 3
 AWAY_MODE_PAYLOAD_LENGTH: Final = 7
 SETBACK_PAYLOAD_LENGTH: Final = 2
@@ -51,6 +67,7 @@ PRESET_OUT_ALL_DAY = "out_all_day"
 PRESET_AWAY = "away"
 PRESET_USER_TIMER = "user_timer"
 PRESET_FROST_PROTECT = "frost_protect"
+PRESET_BOOST = "boost"
 
 DIMPLEX_GROUPS: Final = frozenset({0, 1, 2, 3})
 MAX_GATT_VALUE_BYTES: Final = 512
@@ -137,6 +154,8 @@ class HeaterSnapshot:
     away_until: datetime | None = None
     away_target_temperature_c: int | None = None
     advance_active: bool | None = None
+    boost_minutes_left: int | None = None
+    boost_temperature_c: int | None = None
 
 
 def service_uuid(group: int) -> str:
@@ -558,7 +577,30 @@ def parse_snapshot(
         away_until=away_until,
         away_target_temperature_c=away_target_temperature_c,
         advance_active=advance_active,
+        boost_minutes_left=_parse_le16(values.get(BOOST_REMAINING)),
+        boost_temperature_c=_parse_whole_degrees(values.get(BOOST_TEMPERATURE)),
     )
+
+
+def _parse_le16(value: bytes | None) -> int | None:
+    """Decode a little-endian 16-bit count, or ``None`` when absent."""
+    if value is None or len(value) != 2:
+        return None
+    return int.from_bytes(value, "little")
+
+
+def _parse_whole_degrees(value: bytes | None) -> int | None:
+    """Decode a ``[degC, 0]`` temperature (the setpoint encoding)."""
+    if value is None or len(value) != 2 or value[1] != 0 or value[0] == 0:
+        return None
+    return value[0]
+
+
+def encode_boost_minutes(minutes: int) -> bytes:
+    """Encode a Boost length (0 ends Boost); the heater ignores more than 240."""
+    if isinstance(minutes, bool) or not 0 <= minutes <= BOOST_MAX_MINUTES:
+        raise DimplexProtocolError("Boost lasts 1 to 240 minutes")
+    return minutes.to_bytes(2, "little")
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,6 +610,43 @@ class SchedulePeriod:
     start: time
     end: time
     temperature_c: int
+
+
+def encode_clock(now: datetime) -> bytes:
+    """Encode a local time like ConfigR: whole minutes plus the DST flag.
+
+    The flag is the phone's daylight-saving state (``dst() != 0``). Irish time
+    in the tz database has a negative winter DST, which matches the flag 1 a
+    ConfigR-set heater reported in November (hardware 2026-11-25).
+    """
+    if now.tzinfo is None:
+        raise DimplexProtocolError("The clock needs a time zone")
+    if now.year // 100 != CLOCK_CENTURY:
+        raise DimplexProtocolError("The heater clock covers 2000-2099 only")
+    dst = now.dst()
+    return bytes(
+        (
+            CLOCK_CENTURY,
+            now.year % 100,
+            now.month,
+            now.day,
+            now.hour,
+            now.minute,
+            int(bool(dst)),
+        )
+    )
+
+
+def parse_clock(value: bytes | None) -> datetime | None:
+    """Decode the heater clock as a naive local time, or ``None`` when invalid."""
+    if value is None or len(value) != CLOCK_PAYLOAD_LENGTH:
+        return None
+    if value[0] != CLOCK_CENTURY:
+        return None
+    try:
+        return datetime(2000 + value[1], value[2], value[3], value[4], value[5])
+    except ValueError:
+        return None
 
 
 def encode_schedule_request(programme: int, day: int) -> bytes:
@@ -581,6 +660,46 @@ def encode_schedule_request(programme: int, day: int) -> bytes:
     if not 0 <= day < SCHEDULE_DAYS:
         raise DimplexProtocolError("Day must be 0 (Monday) to 6 (Sunday)")
     return bytes((0, programme, day))
+
+
+def encode_schedule_day(
+    programme: int, day: int, periods: tuple[SchedulePeriod, ...]
+) -> bytes:
+    """Encode the save form of one day, laid out as ConfigR writes it.
+
+    Periods are sorted; unused slots repeat the last end time (start == end,
+    which the heater and ConfigR skip), or are 00:00-00:00 on an empty day.
+    """
+    header = encode_schedule_request(programme, day)
+    ordered = sorted(periods, key=lambda period: period.start)
+    if len(ordered) > SCHEDULE_PERIODS:
+        raise DimplexProtocolError("A day has at most 4 periods")
+    for index, period in enumerate(ordered):
+        if not period.start < period.end:
+            raise DimplexProtocolError("A period must end after it starts")
+        if period.start.second or period.end.second:
+            raise DimplexProtocolError("Periods use whole minutes")
+        if index and period.start < ordered[index - 1].end:
+            raise DimplexProtocolError("Periods must not overlap")
+        if not 0 < period.temperature_c <= 0xFF:
+            raise DimplexProtocolError("Invalid period temperature")
+    filler = ordered[-1].end if ordered else time(0)
+    body = b"".join(
+        bytes(
+            (
+                period.start.hour,
+                period.start.minute,
+                period.end.hour,
+                period.end.minute,
+                period.temperature_c,
+                0,
+            )
+        )
+        for period in ordered
+    ) + bytes(
+        (filler.hour, filler.minute, filler.hour, filler.minute, SCHEDULE_FILLER_C, 0)
+    ) * (SCHEDULE_PERIODS - len(ordered))
+    return bytes((1,)) + header[1:] + body + bytes(4)
 
 
 def parse_schedule_day(
