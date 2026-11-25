@@ -60,7 +60,7 @@ _GATT_ERRORS = (BleakError, TimeoutError, OSError)
 # then drop the link within ~7 ms (HCI 0x13) or answer "Invalid handle"
 # (hardware 2026-11-24 17:58:41 and 18:24:23); Dimplex's ConfigR help text tells
 # users to wait about 10 s after a link ends so the product can go to sleep
-# (docs/configr-firmware-analysis.md).
+# (docs/technical/research/configr-firmware-analysis.md).
 HEATER_SETTLE_S = 10.0
 
 _LOGGER = logging.getLogger(__name__)

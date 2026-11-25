@@ -1,7 +1,7 @@
 # Dimplex panel-heater emulator for rehearsing the firmware update through HA.
 # TEST ONLY (USB test ESP32): never flash to a proxy. Serves the GATT layout HA
 # polls with AM2086's captured values, pairs with a static passkey, and plays
-# the ESP32 OTA channel (docs/ota-research.md): checks every frame and the
+# the ESP32 OTA channel (docs/technical/research/ota-research.md): checks every frame and the
 # CRC-16/AUG-CCITT of the image. Each install attempt plays the next case:
 #   0: refuses row 50   1: stops answering at row 50
 #   2: reboots at row 50 (link drop)   3+: succeeds, then reports UI 5.0

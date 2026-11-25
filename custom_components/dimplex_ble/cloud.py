@@ -6,7 +6,7 @@ controlled locally. Dimplex's sign-in (Azure AD B2C, policy
 ``msal…://auth`` address, which no browser can hand to Home Assistant, so the
 integration fills in Dimplex's own sign-in form once (email and password,
 never stored) and keeps the refresh token (90 days, renewed on every use).
-Evidence: docs/ota-research.md, "Live findings 2026-11-25".
+Evidence: docs/technical/research/ota-research.md, "Live findings 2026-11-25".
 """
 
 from __future__ import annotations

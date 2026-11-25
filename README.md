@@ -1,204 +1,152 @@
 # Dimplex BLE
 
-Unofficial Home Assistant custom integration that controls Dimplex Bluetooth
-panel heaters (tested on the PLX050E Series C) locally, through ESPHome
-Bluetooth proxies. No Dimplex app; the Dimplex cloud is used only for firmware
-updates, and only after you sign in.
+Dimplex BLE is an unofficial Home Assistant custom integration for [Dimplex PLXE panel heaters](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf) with Bluetooth. It controls each heater locally through an ESPHome Bluetooth proxy: temperature, modes, timer programmes, Away, Boost and the heater's settings. The Dimplex cloud is used only for firmware updates, and only after you sign in.
 
 > [!WARNING]
-> **Treat every Home Assistant automation for these heaters as unreliable.**
-> The heaters are not designed to stay connected over Bluetooth for long: the
-> Dimplex app only connects briefly and tells users to power-cycle a heater
-> that stops responding. In our testing every heater's Bluetooth stopped at
-> least once until it was switched off and on at the wall (see
-> [Known limitations](#known-limitations)). While it is stopped, Home
-> Assistant can neither read nor change the heater, so an automation step can
-> silently not happen.
->
-> The most reliable way to heat on time is the heater's **own timer
-> programmes**, which run on the heater even when Bluetooth is down: set them
-> once with the **Set schedule** action (or the Dimplex app) and select **Auto**.
-> Use automations only for occasional changes you can afford to miss. Home
-> Assistant therefore never holds the connection: every update connects,
-> reads and disconnects, like the Dimplex app.
+> The heaters' Bluetooth can stop until the heater is switched off and on at the wall. Every heater in our tests did this at least once. While it is stopped, Home Assistant can't read or change the heater, so an automation step can fail. Put your heating times into the heater's own timer programmes: the heater runs them without Bluetooth.
 
-- [Reliability first](#reliability-first)
-- [Requirements](#requirements)
-- [Setup](#setup)
-- [Choosing a Bluetooth proxy](#choosing-a-bluetooth-proxy)
-- [Pairing PIN](#pairing-pin)
-- [Privacy and logging](#privacy-and-logging)
-- [What you get](#what-you-get)
-- [Known heater behaviour](#known-heater-behaviour)
+- [Supported devices](#supported-devices)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Supported functionality](#supported-functionality)
+- [Actions](#actions)
+- [Data updates](#data-updates)
+- [Use cases and examples](#use-cases-and-examples)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
+- [Removing the integration](#removing-the-integration)
 
-## Reliability first
+## Supported devices
 
-The warning above in practice:
+The integration supports Dimplex PLXE Series C panel heaters that advertise as `AMxxxx` or `ALxxxx` over Bluetooth.
 
-- **Schedules belong on the heater.** Put your weekly heating times into the
-  User Timer (or Home All Day / Out All Day) programme with **Set schedule**,
-  then leave the heater in **Auto**. The heater follows its programme on its
-  own; Home Assistant only shows it as a calendar. Away works the same way:
-  once set, the heater itself returns to its previous mode at the return time.
-- **Automations are best effort.** A step that writes to a heater fails if the
-  heater's Bluetooth has stopped or the link drops; Home Assistant reports the
-  error, but nothing retries it later. Do not rely on an automation for
-  anything that must happen (for example frost protection while you are away).
-- **Brief connections.** Every update (once a minute) connects, reads and
-  disconnects, like the Dimplex app; a command connects at once. Changes made
-  on the heater itself show up within a minute.
-- **Watch for the repair.** When a heater stops responding, Home Assistant
-  raises "*Heater* stopped responding" with the power-cycle steps.
+Tested:
 
-## Requirements
+- **PLX050E Series C**: 3 heaters
+- **PLX075E Series C**: 1 heater
 
-- Home Assistant 2026.11 or newer with the ESPHome integration.
-- At least one ESP32-S3 (or other ESP32) running ESPHome 2026.11.0 or newer
-  as a Bluetooth proxy (older versions can lose the heater's pairing; the
-  firmware package refuses to build with them),
-  within Bluetooth range of each heater. Plan for **at most 2 heaters per
-  proxy** (see [Known limitations](#known-limitations)).
-- The Dimplex phone app closed: the heater accepts one Bluetooth connection at
-  a time.
+Other PLXE Series C sizes (PLX100E to PLXC300E) share the manual and controls but are untested. Not supported: Dimplex products that use the Dimplex Control hub, Q-Rad radiators, storage heaters, fan heaters (`FXnnnn`) and fireplaces.
 
-## Setup
+## Prerequisites
 
-[![Open your Home Assistant instance and start setting up Dimplex BLE.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=dimplex_ble)
+You need the following before adding a heater:
 
-1. **Flash the Bluetooth proxy.** Copy
-   [`firmware/example-bluetooth-proxy.yaml`](firmware/example-bluetooth-proxy.yaml)
-   and [`firmware/dimplex_pin_responder.yaml`](firmware/dimplex_pin_responder.yaml)
-   into the same folder of your ESPHome configuration. Adjust the name, the
-   secrets and the board package (the example uses `esp32-generic-s3.yaml`;
-   pick the one that matches your ESP32), then install it. The package adds a
-   small "PIN responder" that lets Home Assistant answer the heater's PIN
-   request. Keep `io_capability: keyboard_only`, `auth_req_mode: sc_mitm_bond`
-   and `max_connections: 4` as in the example. For normal use set the
-   `logger` level to `INFO`; `DEBUG` is only for investigating problems.
-2. **Adopt the proxy in Home Assistant.** Add it under **Settings → Devices &
-   services → ESPHome** (an encryption key is recommended). Give it a clear name,
-   such as "Living Room Bluetooth Proxy": the setup dialog shows that name.
-3. **Install the integration.** In HACS, add this repository as a custom
-   repository (type *Integration*), install **Dimplex BLE** and restart Home
-   Assistant. Without HACS, copy `custom_components/dimplex_ble` into your
-   `config/custom_components` folder and restart.
-4. **Add the heater.** Accept the discovered heater (shown with its `AMxxxx`
-   name) or use the button above and pick it from the list.
-5. **Choose the proxy.** The recommended proxy is preselected; see
-   [Choosing a Bluetooth proxy](#choosing-a-bluetooth-proxy).
-6. **Enter the PIN.** When you submit, the heater shows a 6-digit PIN on its
-   display. Choose **Enter PIN** and type it. Missed it, or the display already
-   cleared? Choose **Show PIN again** (or submit the PIN form empty). See
-   [Pairing PIN](#pairing-pin).
+- **Home Assistant**: 2026.11 or newer, with the ESPHome integration
+- **Bluetooth proxy**: an ESP32 running ESPHome 2026.11.0 or newer with the Dimplex PIN responder, within Bluetooth range of the heater; at most 2 heaters per proxy. See [Set up a Bluetooth proxy](docs/user/bluetooth-proxy.md).
+- **The heater's PIN**: the heater shows a 6-digit PIN on its display while Home Assistant pairs; you type it once
+- **No phone app connected**: the heater accepts one Bluetooth connection at a time, so close ConfigR or the Dimplex app
 
-The heater is added as "Dimplex Heater AMxxxx". To change its proxy later, use
-**Reconfigure** on the integration entry.
+## Installation
 
-**Settings for all heaters** (optional): **Add device** → **Dimplex settings
-for all heaters** adds one **Dimplex** entry; change it later with its
-**Configure**. Without it, heaters use the defaults.
+Install the integration with HACS, then add each heater.
 
-- **Sync the heater clock** (on by default): sets the heater clock to Home
-  Assistant's time whenever it is more than a minute off, as the Dimplex app
-  does. Timer schedules run on the heater clock, so leave it on unless another
-  app manages the clock.
-- **Boost length**: how long the Boost preset lasts, 1–240 minutes (default 60).
-- **Dimplex email and password** (for firmware updates): your Dimplex (ConfigR)
-  account, entered once. Home Assistant keeps only a sign-in token; when
-  Dimplex stops accepting it, Home Assistant asks you to sign in again.
+1. In HACS, add this repository as a custom repository of type **Integration**, install **Dimplex BLE** and restart Home Assistant. Without HACS, copy `custom_components/dimplex_ble` into `config/custom_components` and restart.
+2. Accept the discovered heater under **Settings** > **Devices & services**, or select [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=dimplex_ble). If a menu appears, choose **Add a heater**.
+3. Choose the Bluetooth proxy. The recommended one is preselected.
+4. Select **Submit**. The heater shows its PIN for about 30 seconds.
+5. Choose **Enter PIN** and type it. If the PIN disappeared, choose **Show PIN again**.
 
-## Choosing a Bluetooth proxy
+The heater is added as **Dimplex Heater AMxxxx**.
 
-The setup dialog lists every proxy that can reach the heater and runs the
-Dimplex PIN responder. Each entry shows the proxy's name and at most one tag:
+### Setup fields
 
-| Tag | Meaning |
+The setup dialog asks for:
+
+- **Heater**: the heater to add, when you start setup yourself
+- **Bluetooth proxy**: the proxy that connects to this heater; the heater stays on it. Tags explain the choice: **Recommended**, **current**, **⚠ already serves 2 heaters**, **⚠ full**.
+- **PIN**: the 6-digit code on the heater's display; it's the same every time for that heater
+
+## Configuration
+
+Settings shared by all heaters live in one optional **Dimplex** entry. Without it, heaters use the defaults.
+
+To add it, open **Settings** > **Devices & services** > **Dimplex BLE**, select **Add device** and choose **Dimplex settings for all heaters**. To change it later, select **Configure** on the **Dimplex** entry.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| **Sync the heater clock** | On | Sets the heater clock to Home Assistant's time when it's more than a minute off. Timer programmes run on the heater clock. |
+| **Boost length** | 60 min | How long the Boost preset runs, 1 to 240 minutes |
+| **Dimplex email**, **Dimplex password** | Empty | Your Dimplex (ConfigR) account, for firmware updates. Home Assistant keeps a sign-in token, not the password. Leave empty for no updates. |
+
+When Dimplex stops accepting the sign-in, Home Assistant asks you to sign in again. To move a heater to another proxy, select **Reconfigure** on the heater's entry and type the PIN again.
+
+## Supported functionality
+
+Each heater becomes one device. Only the climate entity appears on dashboards by default; the others are settings or diagnostics on the device page.
+
+### Climate
+
+The climate entity shows the room temperature in 0.1 °C steps, whether the heater is heating, and two modes:
+
+- **Heat**: heats to the target you set, in whole degrees. Presets: **Manual**, **Eco**, **Frost Protect**, **Boost**, **Away**.
+- **Auto**: follows the heater's timer programme, which sets the temperature. Presets: **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**.
+
+**Boost** heats at the Boost temperature for the Boost length, then returns to the previous mode. **Away** holds the Away temperature until the Away return time, then returns to the previous mode. During Away the target shows and sets the Away temperature. The heaters have no off mode: **Frost Protect** (7 °C) is the lowest.
+
+### Settings
+
+| Entity | Description |
 | --- | --- |
-| **Recommended** | The best choice: a free connection, few existing connections, then the strongest signal. Preselected. |
-| **current** | The proxy the heater is paired with now. Keeping it needs no PIN. |
-| **⚠ already serves 2 heaters** | Choose another proxy: a third heater on it will not reconnect after Home Assistant restarts. |
-| **⚠ full** | No free connection: pairing cannot start there. |
+| **Advance** | Switches the current timer period between heating and not heating until the next period starts. Only in timer presets. |
+| **Setback** | In **Auto**, holds the Setback temperature during periods without heating. |
+| **Setback temperature** | What Setback holds, 7 to 18 °C |
+| **Boost temperature** | What Boost heats to, within the heater's setpoint range |
+| **Away return time** | When Away ends. Setting it starts Away. |
+| **Away temperature** | What Away holds, 7 to 18 °C. Can change only while Away is on. |
+| **Adaptive start** | Heats early so a timer period starts at its temperature. Set it the same for all heaters in a room. |
+| **Open window detection** | Stops heating when the room temperature drops suddenly |
+| **Sound** | Button sounds on the heater |
+| **Display temperature unit** | The unit on the heater's display only |
+| **User Timer schedule** | The User Timer programme as calendar events. **Home All Day** and **Out All Day** calendars are disabled by default. |
+| **Firmware** | Installed and latest heater firmware. **Install** updates the heater over Bluetooth in about 15 minutes. Needs the Dimplex sign-in. |
+| **Temperature offset** | Corrects the room reading, −3.0 to +3.0 °C. Disabled by default: Dimplex reserves it for service staff. |
 
-If every proxy has a ⚠ tag, the dialog warns that pairing will probably fail.
-Add a proxy near the heater, or free a connection by moving or disabling
-another Bluetooth device on that proxy.
+### Diagnostics
 
-Proxies that hear the heater but cannot be used are named in one line under
-"Not shown": they are missing the Dimplex firmware (step 1 of
-[Setup](#setup)) or are offline in Home Assistant.
-
-The heater stays on the proxy you choose. It never moves to another proxy by
-itself, even if that one is closer; moving it means pairing again with the PIN.
-
-## Pairing PIN
-
-- The heater shows its 6-digit PIN only while a pairing is running, for about
-  **30 seconds**. Use **Show PIN again** as often as needed.
-- The PIN is fixed for each heater: it is the same every time, so you can note
-  it down.
-- Home Assistant saves the PIN with this heater's settings (in its configuration
-  storage, not encrypted) so it can restore the pairing on its own. This
-  integration never writes it to logs and removes it from diagnostics; see
-  [Privacy and logging](#privacy-and-logging) for one library logger that can.
-- The heater has no pairing mode and its Bluetooth is always on. If no PIN
-  appears, the proxy could not connect: see [Troubleshooting](#troubleshooting).
-- If the heater later rejects the saved PIN, Home Assistant shows a repair:
-  "Pair Dimplex Heater AMxxxx again".
-
-## Privacy and logging
-
-- At `debug`, the `aioesphomeapi.connection` logger records every action sent
-  to a proxy with its arguments. The integration blanks the arguments of its
-  PIN action there (`**REDACTED**`), so the PIN never reaches the log.
-- Debug logging for `custom_components.dimplex_ble` is safe to enable: it names
-  the heater and the proxy, never the PIN.
-
-## What you get
-
-Each heater becomes one device with:
-
-| Entity | Notes |
+| Entity | Description |
 | --- | --- |
-| Climate (named after the heater) | Room temperature (0.1 °C), heating/idle action and two modes. **Heat**: heats to a target you set (whole degrees); presets **Manual**, **Eco**, **Frost Protect**, **Boost**, **Away**. **Auto**: follows the heater's schedule, which sets the temperature; presets **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**. **Boost** heats at the heater's Boost temperature for the Boost length, then the heater returns to the mode it left; the target can be changed while it runs. No Off. |
-| User Timer schedule (calendar) | Heating periods of the User Timer programme, as stored on the heater (Home All Day and Out All Day calendars exist but are disabled by default). Read after setup and every 6 hours, and right after a change with **Set schedule**. |
-| Away return time | When Away ends. Setting it starts Away. The Away preset reuses the return time set last, if it is still in the future; otherwise set a new one here. |
-| Away temperature | What Away holds, 7–18 °C (default 7 °C). Can be changed only while Away is on: the heater starts Away whenever this value is written. During Away the climate's target shows and sets this temperature. |
-| Advance | Flips the current timer period (Heating On ↔ Off) until the next period starts; the heater then turns it off. Only in User Timer, Home All Day or Out All Day. |
-| Setback | In Auto, holds the Setback temperature during Heating Off periods instead of letting the room cool. |
-| Boost temperature | What the Boost preset heats to, within the heater's setpoint range (whole degrees). A running Boost keeps its target; the next Boost uses the new value. |
-| Setback temperature | What Setback holds, 7–18 °C (whole degrees). Can be changed whether Setback is on or off. |
-| Sound | Button sounds on the heater. |
-| Adaptive start | Dimplex "Adaptive Start": heats early so a timer period starts at its target. Only affects User Timer and Home All Day. Learns continuously, plans at most 2 hours ahead; turn it on or off for all heaters in a room together. |
-| Open window detection | Stops heating ("Heating Off") when the room temperature drops suddenly. Can trigger in drafty or poorly insulated rooms. |
-| Display temperature unit | Only changes the heater's own display. Home Assistant always uses your system unit. |
-| Estimated power | Rated power × output %, in W. The heater has no power meter. |
-| Estimated energy | Estimated power over time, in kWh; add it to the Energy dashboard. Time while the heater is unreachable or Home Assistant is stopped is not counted. |
-| Error (diagnostic) | "No error", a fault from the Dimplex manual (for example "Open window detected (50)"), or "Code N" for an undocumented code. |
-| Operating mode, Rated power, Controller temperature, Output power (diagnostic, disabled) | Enable them on the device page if needed. |
-| Firmware | Installed display firmware and Dimplex's latest, checked every 12 hours; **Install** updates the heater over Bluetooth (about 7 minutes). Needs the Dimplex sign-in. |
-| Temperature offset (installer setting, disabled) | Corrects the room reading, −3.0 to +3.0 °C in 0.1 °C steps. Dimplex reserves it for service staff. |
+| **Error** | **No error**, a fault from the Dimplex manual such as **Open window detected (50)**, or **Code N** for an undocumented code |
+| **Estimated power** | Rated power × output %, in W. The heater has no power meter. |
+| **Estimated energy** | Estimated power over time, in kWh, for the Energy dashboard. Time while the heater is unreachable isn't counted. |
+| **Operating mode**, **Rated power**, **Controller temperature**, **Output power** | Disabled by default |
 
-Sound, Setback, Setback temperature and Temperature offset are read every 5 minutes (and right after
-you change them), so a change made on the heater's own menu can take up to
-5 minutes to show.
+Repairs tell you when a heater stopped responding, when a schedule change waits for an unreachable heater, and when the heater rejects the saved PIN.
 
-Device settings guidance is based on the official
-[PLXE Series C manual, Issue 7](https://www.dimplex.co.uk/sites/g/files/emiian551/files/2024-03/PLXE%20-%20Series%20C%20Long%20Manual%20-%20Issue%207.pdf).
-The device page shows the model as, for example, "PLX050E Series C" (the heater
-reports `PLX050E;C;`; reading `C` as the series is an inference).
+## Actions
 
-**Set schedule** (`dimplex_ble.set_schedule`) replaces the heating periods of
-one programme on the chosen days: pick the heater, the programme, the days and
-up to 4 periods (start, end, temperature). `periods` is required; an empty
-list (`periods: []`) removes all heating periods from those days. Each day is read back from the heater afterwards; the action fails if
-the heater did not keep it. Example:
+The integration provides these actions, all targeting one heater:
+
+| Action | What it does | Fields |
+| --- | --- | --- |
+| `dimplex_ble.set_schedule` | Replaces the heating periods of one programme on the chosen days | `device_id`; `programme`: `user_timer`, `home_all_day` or `out_all_day`; `days`: any of `mon` to `sun`; `periods`: up to 4 per day, each with `start` and `end` (`HH:MM`) and `temperature` (°C). `[]` removes all periods. |
+| `dimplex_ble.get_schedule` | Returns, per programme, the periods as last read with `read_at`, the changes waiting for the heater (`pending`) and the backup copy (`backup`) | `device_id`; optional `programme` (default: all three) |
+| `dimplex_ble.restore_schedule` | Writes the backup copy back to the heater. Only complete weeks are restored. | `device_id`; optional `programme` (default: every programme with a backup) |
+| `dimplex_ble.get_gatt_services` | Returns the heater's Bluetooth services and characteristics, for bug reports | `device_id` |
+
+`set_schedule` reads each day back from the heater and fails if the heater didn't keep it. If the heater can't be reached, the action still succeeds: Home Assistant keeps the change across restarts, shows a repair, and writes the change as soon as the heater answers. The backup copy starts from the first complete read and then follows only changes saved through Home Assistant, so a heater reset to factory programmes never overwrites it. See [Timer programmes](docs/user/schedules.md) for the format.
+
+## Data updates
+
+The integration polls each heater once a minute: it connects, reads and disconnects. Commands connect at once.
+
+- **Every minute**: temperature, mode, target, Away, Boost, error and output
+- **Every 5 minutes and after a change**: Sound, Setback, Setback temperature, temperature offset and the heater's ID
+- **Every 6 hours and after a save**: timer programmes
+- **Every 12 hours**: the latest firmware from Dimplex
+
+A change made on the heater's own buttons shows within a minute, or within 5 minutes for the settings above.
+
+## Use cases and examples
+
+The heater runs its timer programmes on its own, so set them once from Home Assistant and keep the heater in **Auto**. Use automations for occasional changes you can afford to miss.
+
+Set a weekday programme:
 
 ```yaml
 action: dimplex_ble.set_schedule
 data:
-  device_id: <your heater>
+  device_id: your_heater_device_id
   programme: user_timer
   days: [mon, tue, wed, thu, fri]
   periods:
@@ -210,153 +158,55 @@ data:
       temperature: 21
 ```
 
-If the heater can't be reached when you save (its Bluetooth has stopped, or it
-is out of range), the action still succeeds: Home Assistant keeps the change,
-even across restarts, shows the repair "*Heater*: schedule change waiting", and
-writes and verifies it as soon as the heater answers again. Until then the
-heater keeps running its previous schedule.
+Switch to Away when everyone leaves, returning at 07:00 the next day:
 
-**Get schedule** (`dimplex_ble.get_schedule`) returns each programme as the
-heater held it at the last read (`read_at`; schedules are read every 6 hours
-and after every save), the changes still waiting for the heater, and the backup
-copy
-(per day, as `[start, end, temperature]` periods), for example to copy one day
-to others in a script.
+```yaml
+automation:
+  - alias: Heaters to Away when the house is empty
+    triggers:
+      - trigger: state
+        entity_id: zone.home
+        to: "0"
+    actions:
+      - action: datetime.set_value
+        target:
+          entity_id: datetime.your_heater_away_return_time
+        data:
+          datetime: "{{ (today_at('07:00') + timedelta(days=1)).isoformat() }}"
+```
 
-**Restore schedule** (`dimplex_ble.restore_schedule`) writes Home Assistant's
-backup copy back to the heater (one programme or all three), for example after
-the heater was reset or replaced. The backup is taken from the first complete
-read of the heater (later reads only fill in days it doesn't know) and then
-follows only the changes saved through Home Assistant, so a reset heater's
-factory schedule never overwrites it. Only complete weeks are restored.
-
-Developer diagnostic: the action **List Bluetooth services (developer)**
-(`dimplex_ble.get_gatt_services`) lists the heater's Bluetooth services and
-characteristics without reading values. It is only useful when reporting a
-problem.
-
-## Known heater behaviour
-
-- **Manual at 19 °C or lower shows Eco.** If you set Manual to 19 °C or lower,
-  the heater itself switches to Eco and Home Assistant shows Eco. This is the
-  heater's own rule (observed on the PLX050E Series C, not documented by
-  Dimplex), not an integration error. Use 20 °C or higher to stay in Manual.
-- **Frost Protect** holds 7 °C.
-- **Away** returns to the previous mode at the return time.
-- **Boost from Manual, Eco or Frost Protect shows as Heat** (the heater reports
-  Manual while boosting) and returns to the previous mode when Boost ends.
-  After Boost runs out by itself, the previous mode can take up to a minute to
-  show. Boost lasts at most 240 minutes; Boost is not offered during Away.
+Setting the return time starts Away; the heater returns to its previous mode at that time, even if Bluetooth stops.
 
 ## Known limitations
 
-- **At most 2 Dimplex heaters per ESP32-S3 Bluetooth proxy.** A proxy that
-  already holds 2 heater connections refuses the third heater's connection after
-  every Home Assistant restart (ESP32-S3 controller limit,
-  [esphome/esphome#22859](https://github.com/esphome/esphome/issues/22859);
-  confirmed on hardware, 4 of 4 restarts).
-- A proxy has 3 Bluetooth connection slots, shared with every other Bluetooth
-  device it connects to (locks, sensors…). A heater uses one slot only while
-  it updates or runs a command.
-- The pairing belongs to the chosen proxy. Moving a heater to another proxy
-  needs the PIN again (**Reconfigure**).
-- The PIN is shown for about 30 seconds per pairing attempt.
-- While the Dimplex phone app is connected to a heater, Home Assistant cannot
-  connect to it.
-- Schedules are shown as calendars and changed with the **Set schedule**
-  action, not by editing calendar events. There is no on/off; the Setback and
-  Boost temperatures are set on the heater.
-- **Heater stops responding (needs a power cycle).** Rarely, after its
-  connection drops unexpectedly, a heater's Bluetooth stops completely: no
-  receiver hears it until it is switched off and on at the wall. Home Assistant
-  then raises the repair "*Heater* stopped responding" (after 60 s of silence;
-  not when the proxy itself is offline) and clears it once the heater is heard
-  again. No app is needed, and no app can reach a stalled heater either. To
-  power-cycle it, as the Dimplex app words it: "If your installation
-  has a mains isolator switch: switch it off, wait at least 5 seconds, then
-  switch it on. If there is no isolator switch: switch off the circuit breaker
-  or remove the fuse supplying the unit, wait at least 5 seconds, then switch it
-  on."
-- Otherwise, power-cycling a heater is a last resort, not a routine fix.
-- **Firmware updates** come from Dimplex and need the Dimplex sign-in. During
-  an update Home Assistant cannot control the heater; keep it switched on and
-  its proxy online. If an update stops, Home Assistant says why and you can
-  install again. Updates are never installed automatically.
+These limits come from the heaters and the Bluetooth proxies:
+
+- **Bluetooth stops**: after an unexpected disconnect, a heater's Bluetooth can stop until a power cycle. Home Assistant shows the repair **Heater stopped responding**.
+- **2 heaters per proxy**: an ESP32-S3 proxy refuses a third heater after every Home Assistant restart ([esphome/esphome#22859](https://github.com/esphome/esphome/issues/22859)).
+- **One connection at a time**: while a phone app is connected, Home Assistant can't reach the heater.
+- **Pairing belongs to the proxy**: moving a heater to another proxy needs the PIN again.
+- **No off mode, no locks**: the heaters accept no Standby command over Bluetooth, and the child lock and heater lock exist only on the keypad.
+- **Manual at 19 °C or lower shows Eco**: the heater switches itself to Eco. Use 20 °C or higher to stay in Manual.
+- **Schedules aren't edited as calendar events**: use `dimplex_ble.set_schedule`.
+- **During a firmware update** the heater can't be controlled. Keep it switched on.
 
 ## Troubleshooting
 
-Start with the [troubleshooting guide](docs/troubleshooting.md). The most common
-cases:
+Check the layers in order: the proxy, the Bluetooth connection, then the heater. Re-entering the PIN rarely helps. The [troubleshooting guide](docs/user/troubleshooting.md) covers:
 
-- **No proxy offered / "No Bluetooth proxy can reach this heater":** install
-  the Dimplex firmware on a proxy near the heater (step 1 of [Setup](#setup)),
-  check that the proxy is online, and close the Dimplex phone app.
-- **No PIN appears:** the proxy could not connect. Choose another proxy, or free
-  a connection on this one.
-- **Heater unavailable after a Home Assistant restart:** check how many heaters
-  share its proxy (at most 2).
-- **Heater unavailable after working:** usually range or a busy proxy, not the
-  PIN. Debug logging for `custom_components.dimplex_ble` names the heater on
-  every line.
+- **No proxy offered**: install the PIN responder on a proxy near the heater and close any phone app
+- **No PIN appears**: the proxy couldn't connect; choose another proxy
+- **Heater stopped responding**: switch the heater off at the wall for 5 seconds
+- **Unavailable after a restart**: move heaters so no proxy serves more than 2
 
-## Removal
+## Removing the integration
 
-Delete the entry under **Settings → Devices & services → Dimplex BLE**. This
-removes its entities; it does not change the heater or the proxy firmware.
-
-## How it works
-
-- **Firmware:** stock ESPHome Bluetooth proxy plus the YAML-only package
-  [`firmware/dimplex_pin_responder.yaml`](firmware/dimplex_pin_responder.yaml):
-  one dormant `ble_client` that answers the heater's passkey request from a PIN
-  held in RAM, and two native API actions, `dimplex_pin_arm(address, passkey)`
-  and `dimplex_pin_clear()`. No external component, no C++.
-- **`link.py`** owns the BLE link to one heater, pinned to the proxy that
-  holds the bond. It connects only when that proxy sees the heater
-  advertising, then arms the responder with the saved PIN and runs the native
-  `pair()` to its end before any GATT operation. With a valid bond no PIN is
-  asked; a lost bond is re-created automatically. A `pair()` in flight is never
-  cancelled: a failed or aborted pairing deletes the bond in ESP-IDF. Every
-  operation runs that sequence and then disconnects; a connect or `pair()` is
-  never cut short.
-- **`stall.py`** raises the "stopped responding" repair when a link ended
-  without our disconnect, or the proxy no longer sees the heater, and no
-  scanner hears it for 60 s.
-- **`responder.py`** calls the two actions through the ESPHome entry's own API
-  client, never through a Home Assistant action, so the PIN never reaches the
-  event bus or the recorder.
-- **`errors.py`** is the single error translation point. Only a rejected PIN
-  starts reauthentication; timeouts and GATT errors make the heater unavailable
-  until the next poll (every 60 s) or advertisement.
-- **`config_flow.py`**: setup, reauthentication and reconfigure share one path.
-
-The evidence-backed protocol and capability boundary is in
-[`docs/capability-matrix.md`](docs/capability-matrix.md); ESPHome and BLE
-transport findings are in [`docs/esphome-ble-findings.md`](docs/esphome-ble-findings.md).
+This integration follows standard integration removal: delete each heater's entry, and the **Dimplex** entry if you added one, under **Settings** > **Devices & services** > **Dimplex BLE**. The heaters and the proxy firmware stay unchanged. To remove the PIN responder from a proxy, delete the `dimplex_pin_responder` package from its ESPHome configuration and install it again.
 
 ## Legal notice
 
-This is an unofficial, independently developed integration for local control of
-Dimplex products owned or lawfully controlled by the user. It is not affiliated
-with, sponsored by, endorsed by, or supported by Dimplex. Dimplex and product
-names are used only to identify compatibility.
+This is an unofficial, independently developed integration for Dimplex products you own or control. It is not affiliated with, endorsed by or supported by Dimplex. The repository contains no Dimplex software, firmware or credentials. The integration contacts Dimplex only to sign in with your own account and to check for and download firmware. Pairing uses the PIN your heater displays. No warranty is made that the integration is safe for unattended or safety-critical heating control. The MIT license covers only this project's code.
 
-The repository does not distribute the ConfigR application, decompiled source,
-extracted binaries, proprietary assets, Dimplex firmware, credentials, or cloud
-access. Firmware is downloaded from Dimplex with the user's own Dimplex
-account. The project does not bypass authentication or security controls;
-pairing uses the PIN displayed by the user's own heater. It is based on
-independently written code, observed behaviour of user-owned devices and public
-documentation.
+## For developers
 
-No warranty is made that this integration is safe for unattended or
-safety-critical heating control. Follow the manufacturer's safety instructions
-and local laws. The MIT license applies only to original project code and
-grants no rights to Dimplex intellectual property.
-
-## Development
-
-```sh
-uv pip install --python .venv/bin/python -r requirements-test.txt
-bash scripts/run_quality_gates.sh
-```
+How the integration works, the Bluetooth protocol and the development workflow are in [Technical documentation](docs/technical/README.md).

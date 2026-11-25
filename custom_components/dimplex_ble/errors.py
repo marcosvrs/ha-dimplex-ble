@@ -12,7 +12,7 @@ from .protocol import DimplexProtocolError
 
 # SMP failure reasons that mean "the heater rejected the PIN". Only 81
 # (CONFIRM_VALUE_FAIL) is hardware-confirmed: a wrong PIN produced it twice
-# (ledger H8, docs/investigation-2026-11-24/ledger.md, 2026-11-24 16:36:40 and
+# (ledger H8, docs/technical/research/investigation-2026-11-24/ledger.md, 2026-11-24 16:36:40 and
 # 16:50:59). 78 PASSKEY_FAIL, 80 PAIR_AUTH_FAIL and 88 DHKEY_CHK_FAIL were never
 # observed, so they stay transient (no reauth), like every other code including
 # 99 (SMP timeout) and 102 (link lost).

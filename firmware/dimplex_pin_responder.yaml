@@ -1,5 +1,5 @@
 # Dimplex PIN responder: answers a heater's 6-digit passkey request with the PIN
-# Home Assistant sends just before it pairs (docs/esphome-ble-findings.md).
+# Home Assistant sends just before it pairs (docs/technical/research/esphome-ble-findings.md).
 # The device needs esp32_ble io_capability: keyboard_only and max_connections: 4.
 # The PIN stays in RAM and is never logged; 1000000 means "disarmed".
 

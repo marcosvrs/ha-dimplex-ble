@@ -30,14 +30,14 @@ OTA_COMMAND_UUID: Final = "00060001-f8ce-11e4-abf4-0002a5d5c51d"
 AWAY_MODE: Final[GattAddress] = (0, 0x102A)
 SOUND: Final[GattAddress] = (2, 0x0005)
 # ConfigR AdvanceHeatingParameter, SetpointRange, SetbackParameter and
-# SpConfigParameter (docs/configr-entity-gap.md, rows 2, 3, 6 and 7).
+# SpConfigParameter (docs/technical/research/configr-entity-gap.md, rows 2, 3, 6 and 7).
 ADVANCE_HEATING: Final[GattAddress] = (0, 0x100D)
 SETPOINT_RANGE: Final[GattAddress] = (0, 0x1006)
 SETBACK: Final[GattAddress] = (0, 0x1016)
 ROOM_TEMPERATURE_OFFSET: Final[GattAddress] = (2, 0x1019)
 # ConfigR ScheduleAndSetTemperature: one (programme, day) record per read,
 # selected by writing [0, programme, day] first; byte 0 = 1 saves that one day
-# (hardware 2026-11-25, docs/schedule-format.md).
+# (hardware 2026-11-25, docs/technical/research/schedule-format.md).
 SCHEDULE: Final[GattAddress] = (0, 0x1002)
 SCHEDULE_RECORD_LENGTH: Final = 31
 SCHEDULE_PERIODS: Final = 4
@@ -47,13 +47,13 @@ SCHEDULE_FILLER_C: Final = 21
 # Boost (ConfigR "Boost", internally Runback): writing the minutes to
 # RunbackTime and then the setpoint starts it; writing 0 minutes ends it and the
 # heater returns to its previous mode by itself. 1-240 min are accepted, longer
-# values are ignored (hardware 2026-11-25, docs/configr-clock-schedule-boost.md).
+# values are ignored (hardware 2026-11-25, docs/technical/research/configr-clock-schedule-boost.md).
 BOOST_REMAINING: Final[GattAddress] = (0, 0x1027)
 BOOST_TEMPERATURE: Final[GattAddress] = (0, 0x1028)
 BOOST_MAX_MINUTES: Final = 240
 # ConfigR SetRtc: [20, year % 100, month, day, hour, minute, DST flag], local
 # time; ConfigR writes the phone clock once per connection when it is more than
-# 60 s off (docs/configr-clock-schedule-boost.md).
+# 60 s off (docs/technical/research/configr-clock-schedule-boost.md).
 CLOCK: Final[GattAddress] = (0, 0x0006)
 CLOCK_PAYLOAD_LENGTH: Final = 7
 CLOCK_CENTURY: Final = 20
@@ -66,7 +66,7 @@ SETBACK_TEMPERATURE_MIN_C: Final = 7
 SETBACK_TEMPERATURE_MAX_C: Final = 18
 
 # Away target bounds of the Dimplex cloud client (7-18 degC); the PLXE manual
-# gives the 7 degC default (p. 17) (docs/capability-matrix.md).
+# gives the 7 degC default (p. 17) (docs/technical/research/capability-matrix.md).
 AWAY_TEMPERATURE_MIN_C: Final = 7
 AWAY_TEMPERATURE_MAX_C: Final = 18
 # Room-temperature offset: the Quantum manual (same controller family) documents
@@ -233,8 +233,8 @@ _PRESET_PAYLOADS: Final[dict[str, bytes]] = {
 
 
 # Error codes with a documented meaning: 0 read live as "no error" on the
-# PLX050E (docs/capability-matrix.md); the others are the fault codes of the
-# PLXE Series C manual, Issue 7, PDF p. 26 (docs/dimplex-manual-research.md).
+# PLX050E (docs/technical/research/capability-matrix.md); the others are the fault codes of the
+# PLXE Series C manual, Issue 7, PDF p. 26 (docs/technical/research/dimplex-manual-research.md).
 # Any other code is shown as its number.
 DOCUMENTED_ERROR_CODES: Final = frozenset(
     {0, 20, 21, 22, 23, 24, 30, 32, 33, 34, 40, 41, 50, 52, 53, 54, 55, 60, 61}
@@ -285,7 +285,7 @@ def parse_model(value: str | None) -> str | None:
     """Return a readable model from the HeaterType string, e.g. ``PLX050E;C;``.
 
     INFERENCE: the single letter after the model is the product series
-    ("PLX050E;C;" is sold as "PLX050E Series C"; docs/dimplex-manual-research.md
+    ("PLX050E;C;" is sold as "PLX050E Series C"; docs/technical/research/dimplex-manual-research.md
     matches this identity to the PLXE Series C manual). Dimplex does not
     document the field format.
     """

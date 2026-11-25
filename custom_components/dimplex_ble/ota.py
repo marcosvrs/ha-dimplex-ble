@@ -1,7 +1,7 @@
 """Firmware update over BLE, exactly as ConfigR does it (ESP32 path).
 
 Every byte below was read from ConfigR's code and checked live on AM2086
-(docs/ota-research.md §B and "Live handshake 2026-11-25"):
+(docs/technical/research/ota-research.md §B and "Live handshake 2026-11-25"):
 
 * the image goes to the heater's spare slot; the heater only boots it once the
   whole image arrived and verified, so a broken transfer leaves the old
@@ -179,7 +179,7 @@ async def async_flash(
             await transport.set_ota_mode(False)
         raise
     # Verified: like ConfigR, exit, wait a second, then leave update mode
-    # (docs/ota-research.md B.6). The heater may reboot into the new image
+    # (docs/technical/research/ota-research.md B.6). The heater may reboot into the new image
     # meanwhile, so both are best effort; the version read after reconnecting
     # confirms the update.
     with suppress(Exception):
