@@ -1,4 +1,4 @@
-coverage==7.16.2
+coverage==7.17.4
 mutmut==3.8.1
 mypy==1.20.0
 pytest==9.0.3
