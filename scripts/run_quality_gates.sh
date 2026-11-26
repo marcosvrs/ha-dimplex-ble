@@ -12,6 +12,14 @@ fi
   --cov-report=term-missing \
   --cov-report=json:coverage.json
 .venv/bin/python scripts/check_function_coverage.py coverage.json
+if [[ "${SKIP_MUTATION:-0}" == "1" ]]; then
+    if [[ "${REQUIRE_MUTATION_SCORE:-0}" == "1" ]]; then
+        echo "SKIP_MUTATION=1 can't be combined with REQUIRE_MUTATION_SCORE=1." >&2
+        exit 1
+    fi
+    echo "Mutation testing skipped (SKIP_MUTATION=1); it runs on main." >&2
+    exit 0
+fi
 if .venv/bin/mutmut run; then
     :
 else
