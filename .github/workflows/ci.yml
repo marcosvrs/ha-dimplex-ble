@@ -2,11 +2,18 @@ name: CI
 
 on:
   push:
+    branches: [main] # pull requests run through pull_request
   pull_request:
   merge_group:
 
 permissions:
   contents: read
+
+# A newer push to a pull request cancels its older run. Every other run has a
+# group of its own, so no main run is cancelled or replaced while pending.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   quality:
@@ -34,6 +41,9 @@ jobs:
         run: .venv/bin/ruff format --check --output-format github custom_components/dimplex_ble
       - name: Run quality gates
         run: bash scripts/run_quality_gates.sh
+        env:
+          # Mutation testing is advisory and takes most of the run: main only.
+          SKIP_MUTATION: ${{ github.event_name == 'push' && '0' || '1' }}
 
   hassfest:
     name: Home Assistant manifest validation

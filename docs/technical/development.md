@@ -55,7 +55,7 @@ The Ruff rules are `E`, `F`, `I`, `UP`, `B` and `ASYNC`, with line length 88 and
 
 ### Mutation testing is advisory
 
-The mutation score only warns unless `REQUIRE_MUTATION_SCORE=1` is set. The script prints "Mutation score is advisory" when the score is below the threshold. A new surviving mutant that is not in the equivalent list also makes the score check fail, so read its output.
+CI runs mutation testing only on pushes to `main`: pull requests set `SKIP_MUTATION=1`, which skips mutmut and the score check (the pre-push hook still runs both). The mutation score only warns unless `REQUIRE_MUTATION_SCORE=1` is set. The script prints "Mutation score is advisory" when the score is below the threshold. A new surviving mutant that is not in the equivalent list also makes the score check fail, so read its output.
 
 ```bash
 REQUIRE_MUTATION_SCORE=1 bash scripts/run_quality_gates.sh
