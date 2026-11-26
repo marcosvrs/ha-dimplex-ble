@@ -1,6 +1,18 @@
+substitutions:
+  # Your board: a file of esphome/bluetooth-proxies at the commit below.
+  # esp32-generic/esp32-generic.yaml     ESP32
+  # esp32-generic/esp32-generic-s3.yaml  ESP32-S3
+  # esp32-generic/esp32-generic-c3.yaml  ESP32-C3
+  # esp32-generic/esp32-generic-c6.yaml  ESP32-C6
+  # or a vendor board file. For an Ethernet board, delete wifi: below.
+  proxy_board: esp32-generic/esp32-generic-s3.yaml
+
 packages:
-  # Pinned: esphome/bluetooth-proxies has no tag for ESPHome 2026.11.
-  bluetooth_proxy: github://esphome/bluetooth-proxies/esp32-generic/esp32-generic-s3.yaml@da95a91b1c1d691736df5e676f1d2a3324f28bc4
+  bluetooth_proxy:
+    url: https://github.com/esphome/bluetooth-proxies
+    ref: da95a91b1c1d691736df5e676f1d2a3324f28bc4 # no tag for ESPHome 2026.11
+    files:
+      - ${proxy_board}
   # Last, so its settings win over the stock proxy's.
   dimplex_pin_responder: !include dimplex_pin_responder.yaml
 

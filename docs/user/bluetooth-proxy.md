@@ -8,8 +8,10 @@ The proxy runs stock ESPHome plus a small package that answers the heater's PIN 
 
 1. Copy [`firmware/example-bluetooth-proxy.yaml`](../../firmware/example-bluetooth-proxy.yaml) and [`firmware/dimplex_pin_responder.yaml`](../../firmware/dimplex_pin_responder.yaml) into the same folder of your ESPHome configuration.
 2. Add `api_encryption_key`, `wifi_ssid` and `wifi_password` to your ESPHome secrets. The key protects the PIN that Home Assistant sends to the proxy, and the package makes firmware uploads require it too. For a proxy already in Home Assistant, copy its existing key into the YAML: a new key stops Home Assistant from connecting until you enter it there too.
-3. If your board isn't an ESP32-S3, replace `esp32-generic-s3.yaml` in the package URL with the matching file from [esphome/bluetooth-proxies](https://github.com/esphome/bluetooth-proxies).
+3. Set `proxy_board` at the top of the example to your board. The comment lists the generic ESP32, ESP32-S3, ESP32-C3 and ESP32-C6 files; vendor boards are in [esphome/bluetooth-proxies](https://github.com/esphome/bluetooth-proxies/tree/da95a91b1c1d691736df5e676f1d2a3324f28bc4). For an Ethernet board, delete the `wifi:` block and the Wi-Fi secrets.
 4. Install the firmware from the ESPHome dashboard.
+
+Tested with heaters: ESP32-S3 (two proxies, two heaters each) and ESP32 (one heater). The ESP32-C3 and ESP32-C6 files pass ESPHome's configuration check but are untested with heaters.
 
 The proxy needs ESPHome 2026.11.0 or newer: older versions can lose the heater's pairing, and the package refuses to build with them. Include the package after the stock proxy package, as the example does: the Bluetooth settings it needs then take precedence.
 
