@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
@@ -20,6 +21,7 @@ from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemper
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import settings
@@ -40,6 +42,7 @@ from .protocol import (
 )
 
 PARALLEL_UPDATES = 1
+TARGET_CHECK = timedelta(minutes=1)
 # HA climate docs: AUTO "follows a schedule ... You cannot set a temperature in
 # this mode"; presets change how the active mode behaves. The heater's timer
 # programmes are schedules (a setpoint written in User Timer is dropped when the
@@ -90,6 +93,7 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
     _attr_precision = PRECISION_TENTHS
     # The schedule Auto resumes; updated whenever the heater reports one.
     _last_schedule = PRESET_USER_TIMER
+    _shown_target: float | None = None
 
     def __init__(self, coordinator: DimplexCoordinator) -> None:
         """Start from the programme the first poll found, not a default."""
@@ -136,19 +140,35 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             return [preset for preset in presets if preset != PRESET_BOOST]
         return presets
 
-    @property
-    def supported_features(self) -> ClimateEntityFeature:
-        """Offer a target temperature except in Auto, where the schedule sets it."""
-        if self.hvac_mode == HVACMode.AUTO and not self._boosting:
-            return ClimateEntityFeature.PRESET_MODE
-        return (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+    # Every mode shows a target: in Auto the timer's (period or Setback)
+    # temperature, and setting one there switches to Manual at it (as Tado's
+    # schedule overlay does in Home Assistant core).
+    _attr_supported_features = (
+        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+    )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._shown_target = self.native_target_temperature
+        # Auto's target follows the clock (a period ends with an unchanged
+        # snapshot, which notifies nobody): recheck it every minute.
+        self.async_on_remove(
+            async_track_time_interval(self.hass, self._async_check_target, TARGET_CHECK)
         )
+
+    @callback
+    def _async_check_target(self, now: datetime) -> None:
+        del now
+        target = self.native_target_temperature
+        if self.available and target != self._shown_target:
+            self._shown_target = target
+            self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Remember the last schedule so Auto resumes it."""
         self._remember_schedule()
+        self._shown_target = self.native_target_temperature
         super()._handle_coordinator_update()
 
     def _remember_schedule(self) -> None:
@@ -182,9 +202,11 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
 
     @property
     def native_target_temperature(self) -> float | None:
-        """Return the target read back from the panel heater (none in Auto).
+        """Return the target read back from the panel heater.
 
-        In Away the heater holds the Away temperature, not the setpoint.
+        In Away the heater holds the Away temperature, not the setpoint. In Auto
+        it holds the period or Setback temperature, and nothing outside periods
+        without Setback.
         """
         data = self.coordinator.data
         if (
@@ -193,9 +215,11 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
             and data.away_target_temperature_c is not None
         ):
             return float(data.away_target_temperature_c)
-        if data is None or data.setpoint_c is None:
-            return None
         if self.hvac_mode == HVACMode.AUTO and not self._boosting:
+            # From the programme and Setback records: no setpoint needed.
+            target = self.coordinator.target_temperature_c()
+            return None if target is None else float(target)
+        if data is None or data.setpoint_c is None:
             return None
         return float(data.setpoint_c)
 
@@ -281,15 +305,16 @@ class DimplexClimate(DimplexEntity, ClimateEntity):
         requested_mode = kwargs.get(ATTR_HVAC_MODE)
         # During Boost the target is Boost's temperature, in either mode.
         allowed = self.hvac_mode if self._boosting else HVACMode.HEAT
-        if (
-            self.hvac_mode == HVACMode.AUTO and not self._boosting
-        ) or requested_mode not in (None, allowed):
+        if requested_mode not in (None, allowed):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="temperature_needs_heat",
             )
 
         requested = kwargs.get(ATTR_TEMPERATURE)
+        if self.hvac_mode == HVACMode.AUTO and not self._boosting:
+            await self.coordinator.async_set_manual_temperature(requested)
+            return
         if self.preset_mode == PRESET_AWAY and isinstance(requested, (int, float)):
             # The target shown in Away is the Away temperature (7-18 degC).
             await self.coordinator.async_set_away_temperature(float(requested))

@@ -386,7 +386,7 @@
       "message": "This heater supports Heat and Auto only."
     },
     "temperature_needs_heat": {
-      "message": "In Auto the schedule sets the temperature. Switch to Heat first."
+      "message": "A temperature can only be set in Heat. Setting one without a mode leaves Auto for Manual."
     },
     "away_until_required": {
       "message": "Set a future \"Away return time\" first (enable that entity on the heater's device page if hidden)."
@@ -408,6 +408,9 @@
     },
     "boost_unavailable": {
       "message": "This heater has no valid Boost temperature."
+    },
+    "mode_changed": {
+      "message": "The heater changed mode meanwhile. Try again."
     },
     "setting_not_kept": {
       "message": "The heater didn't keep the new value."

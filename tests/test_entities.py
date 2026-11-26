@@ -18,8 +18,11 @@ from custom_components.dimplex_ble.const import CONF_ADDRESS, CONF_PROXY_SOURCE,
 from custom_components.dimplex_ble.coordinator import DimplexCoordinator
 from custom_components.dimplex_ble.protocol import (
     PRESET_HOME_ALL_DAY,
+    PRESET_MANUAL,
     PRESET_USER_TIMER,
     HeaterSnapshot,
+    encode_preset_mode,
+    encode_setpoint,
 )
 from custom_components.dimplex_ble.select import DimplexDisplayUnitSelect
 from custom_components.dimplex_ble.sensor import (
@@ -116,6 +119,8 @@ def make_coordinator(hass, *, data=None, client=None, entry=None):
         async_write=async_write,
         async_write_many=async_write_many,
         async_read_then_write=async_read_then_write,
+        sync_clock=True,
+        clock_offset_s=None,
     )
     coordinator = DimplexCoordinator(hass, config_entry, link)
     coordinator.data = data
@@ -273,10 +278,9 @@ def test_rule_climate_reports_verified_modes(
     assert entity.hvac_mode == expected_hvac_mode
     assert entity.preset_mode == expected
     # HA climate docs: no temperature can be set in Auto (the schedule sets it).
+    # Every mode offers a target; Auto's needs the programme or Setback read.
     has_target = expected_hvac_mode == HVACMode.HEAT
-    assert (
-        ClimateEntityFeature.TARGET_TEMPERATURE in entity.supported_features
-    ) is has_target
+    assert ClimateEntityFeature.TARGET_TEMPERATURE in entity.supported_features
     assert ClimateEntityFeature.PRESET_MODE in entity.supported_features
     assert (entity.native_target_temperature is not None) is has_target
 
@@ -458,8 +462,6 @@ async def test_rule_climate_translates_timer_preset_write_failures(hass) -> None
 @pytest.mark.parametrize(
     ("mode_hex", "hvac_mode"),
     [
-        ("010300000000", None),
-        ("010300000000", HVACMode.HEAT),
         ("020000000000", HVACMode.COOL),
         ("020000000000", HVACMode.AUTO),
     ],
@@ -467,8 +469,7 @@ async def test_rule_climate_translates_timer_preset_write_failures(hass) -> None
 async def test_rule_climate_sets_temperature_only_in_heat(
     hass, mode_hex, hvac_mode
 ) -> None:
-    """AM2086 2026-11-24: a setpoint written in User Timer was dropped when the
-    programme was re-selected, so Auto does not take a temperature."""
+    """A temperature together with a mode other than Heat is refused."""
     client = SimpleNamespace(async_write_raw=AsyncMock())
     _, coordinator = make_coordinator(
         hass, data=snapshot(mode_hex=mode_hex), client=client
@@ -482,6 +483,158 @@ async def test_rule_climate_sets_temperature_only_in_heat(
 
     assert err.value.translation_key == "temperature_needs_heat"
     client.async_write_raw.assert_not_awaited()
+
+
+@pytest.mark.parametrize("hvac_mode", [None, HVACMode.HEAT])
+async def test_rule_climate_temperature_in_auto_switches_to_manual(
+    hass, hvac_mode
+) -> None:
+    """AM2086 2026-11-24: a setpoint written in User Timer was dropped when the
+    programme was re-selected, so Auto leaves for Manual before the setpoint."""
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+    kwargs = {"temperature": 22}
+    if hvac_mode is not None:
+        kwargs["hvac_mode"] = hvac_mode
+
+    await DimplexClimate(coordinator).async_set_temperature(**kwargs)
+
+    writes = [call.args for call in client.async_write_raw.await_args_list]
+    assert writes[-2][:2] == (0, 0x1001)  # the heating mode: Manual
+    assert writes[-2][2] == encode_preset_mode(PRESET_MANUAL)
+    assert writes[-1] == (0, 0x1023, encode_setpoint(22))
+
+
+async def test_rule_climate_auto_to_manual_is_one_link_operation(hass) -> None:
+    """Codex review: a link dropped between two operations left Manual behind."""
+    from custom_components.dimplex_ble.errors import HeaterUnavailableError
+
+    _, coordinator = make_coordinator(hass, data=snapshot(mode_hex="010300000000"))
+    coordinator.async_request_refresh = AsyncMock()
+    coordinator.link.async_write_many = AsyncMock(
+        side_effect=HeaterUnavailableError("dropped")
+    )
+
+    with pytest.raises(HomeAssistantError):
+        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
+
+    coordinator.link.async_write_many.assert_awaited_once_with(
+        (
+            ((0, 0x1001), encode_preset_mode(PRESET_MANUAL)),
+            ((0, 0x1023), encode_setpoint(22)),
+        )
+    )
+    # Manual may have been written before the drop: show the heater's state.
+    coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_rule_climate_a_failed_setpoint_after_manual_is_shown(hass) -> None:
+    """The link drops after the Manual write: the error and the heater's state."""
+    from custom_components.dimplex_ble.errors import HeaterUnavailableError
+
+    client = SimpleNamespace(
+        async_write_raw=AsyncMock(side_effect=[None, HeaterUnavailableError("drop")])
+    )
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await DimplexClimate(coordinator).async_set_temperature(temperature=22)
+
+    assert client.async_write_raw.await_args_list[0].args[:2] == (0, 0x1001)
+    coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_rule_climate_auto_to_manual_waits_for_away_changes(hass) -> None:
+    """Codex review: Away started meanwhile must not be overwritten by Manual."""
+    client = SimpleNamespace(async_write_raw=AsyncMock())
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000"), client=client
+    )
+    coordinator.async_request_refresh = AsyncMock()
+    entity = DimplexClimate(coordinator)
+
+    async with coordinator._away_lock:
+        task = hass.async_create_task(entity.async_set_temperature(temperature=22))
+        await asyncio.sleep(0)
+        coordinator.data = snapshot(mode_hex="010300000000", away_active=True)
+    with pytest.raises(HomeAssistantError) as err:
+        await task
+
+    assert err.value.translation_key == "mode_changed"
+    client.async_write_raw.assert_not_awaited()
+
+
+async def test_rule_climate_auto_shows_the_timer_temperature(hass) -> None:
+    """AM6532 2026-11-26: Auto with Setback on, outside periods, holds 8 degC."""
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000", setpoint=8)
+    )
+    coordinator.settings[(0, 0x1016)] = b"\x01\x08"
+    assert DimplexClimate(coordinator).native_target_temperature == 8.0
+
+
+async def test_rule_climate_auto_target_needs_no_setpoint(hass) -> None:
+    """Codex review: a programme target is shown without the setpoint record."""
+    from datetime import time
+
+    from custom_components.dimplex_ble.protocol import SchedulePeriod
+
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000", setpoint=None)
+    )
+    coordinator.schedules = {
+        "user_timer": [(SchedulePeriod(time(0), time(23, 59), 20),)] * 7
+    }
+    entity = DimplexClimate(coordinator)
+    if dt_util.now().time() < time(23, 59):
+        assert entity.native_target_temperature == 20.0
+
+
+async def test_rule_climate_rechecks_the_auto_target_every_minute(hass) -> None:
+    """Codex review: a period ends with an unchanged snapshot, which notifies nobody."""
+    from unittest.mock import Mock
+
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000", setpoint=8)
+    )
+    coordinator.settings[(0, 0x1016)] = b"\x01\x08"
+    entity = DimplexClimate(coordinator)
+    entity.hass = hass
+    entity.entity_id = "climate.dimplex_test"
+    entity.async_write_ha_state = Mock()
+    entity._shown_target = 20.0  # written while a 20 degC period ran
+
+    entity._async_check_target(dt_util.now())  # the period ended: 8 now
+    entity.async_write_ha_state.assert_called_once()
+
+    entity._async_check_target(dt_util.now())  # unchanged: no write
+    entity.async_write_ha_state.assert_called_once()
+
+
+async def test_rule_climate_starts_the_minute_check_when_added(hass) -> None:
+    from unittest.mock import patch
+
+    _, coordinator = make_coordinator(
+        hass, data=snapshot(mode_hex="010300000000", setpoint=8)
+    )
+    coordinator.settings[(0, 0x1016)] = b"\x01\x08"
+    entity = DimplexClimate(coordinator)
+    entity.hass = hass
+    with patch(
+        "custom_components.dimplex_ble.climate.async_track_time_interval"
+    ) as track:
+        await entity.async_added_to_hass()
+
+    assert entity._shown_target == 8.0
+    assert track.call_args.args[1] == entity._async_check_target
+    for remove in entity._on_remove or []:
+        remove()
 
 
 async def test_rule_climate_auto_resumes_the_last_schedule(hass) -> None:

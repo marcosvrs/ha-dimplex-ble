@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import isfinite
 from typing import Any
 
@@ -42,6 +42,7 @@ from .protocol import (
     HEATING_MODE,
     PRESET_AWAY,
     PRESET_HOME_ALL_DAY,
+    PRESET_MANUAL,
     PRESET_OUT_ALL_DAY,
     PRESET_USER_TIMER,
     ROOM_TEMPERATURE_OFFSET,
@@ -51,6 +52,7 @@ from .protocol import (
     SETPOINT,
     SOUND,
     TEMPERATURE_OFFSET_LIMIT_C,
+    TIMER_MODE_KEYS,
     TIMER_SUBMODE_HOME,
     TIMER_SUBMODE_OUT,
     TIMER_SUBMODE_USER_TIMER,
@@ -61,6 +63,7 @@ from .protocol import (
     encode_away_mode,
     encode_boost_minutes,
     encode_boost_temperature,
+    encode_preset_mode,
     encode_schedule_day,
     encode_setback,
     encode_setpoint,
@@ -70,6 +73,7 @@ from .protocol import (
     parse_away_mode,
     parse_gdid,
     parse_setback,
+    parse_setback_temperature,
     parse_sound_enabled,
     parse_temperature_offset,
 )
@@ -465,6 +469,72 @@ class DimplexCoordinator(DataUpdateCoordinator[HeaterSnapshot]):
         if by_preset != self.schedules:
             self.schedules = by_preset
             self.async_update_listeners()
+
+    def target_temperature_c(self, now: datetime | None = None) -> int | None:
+        """Return the temperature the heater heats towards now (not in Boost or
+        Away, which the climate entity shows from their own records), or None.
+
+        In a timer programme the heater holds the period's temperature, the
+        Setback temperature outside periods (AM6532 reported its 8 degC Setback
+        as the setpoint, 2026-11-26), or nothing outside periods without
+        Setback. Both come from the programme and Setback records, so a period
+        boundary changes the target without a new snapshot. Advance swaps the
+        current period until the next one (PLXE manual p. 17); heating it adds
+        outside a period has no recorded temperature, so the setpoint is shown.
+        The programme runs on the heater clock, so its last measured offset
+        is applied. A programme changed on the heater's own
+        buttons shows here after its next read (every 6 hours).
+        """
+        data = self.data
+        if data is None:
+            return None
+        mode = heating_mode_of(data.operating_mode_hex)
+        if mode not in TIMER_MODE_KEYS:
+            return data.setpoint_c
+        setback = self.settings.get(SETBACK)
+        held = parse_setback_temperature(setback) if parse_setback(setback) else None
+        week = self.schedules.get(PRESET_USER_TIMER if mode == "timer" else mode)
+        local = dt_util.as_local(now or dt_util.now())
+        # The last measured heater offset: 0 after a successful sync, kept
+        # while a sync write fails or sync is off.
+        if (offset := self.link.clock_offset_s) is not None:
+            local += timedelta(seconds=offset)
+        periods = week[local.weekday()] if week else None
+        if periods is None:  # programme not read yet: the heater's own value
+            return data.setpoint_c if held is not None else None
+        clock = local.time()
+        period = next((p for p in periods if p.start <= clock < p.end), None)
+        if data.advance_active:  # Advance swaps heating on and off
+            return held if period is not None else data.setpoint_c
+        return period.temperature_c if period is not None else held
+
+    async def async_set_manual_temperature(self, value: object) -> None:
+        """Leave a timer programme for Manual at ``value`` in one link operation.
+
+        A setpoint written in a timer programme is dropped (AM2086 2026-11-24),
+        so Manual is written first, in one operation with the setpoint. If the
+        link drops between them the heater is in Manual at its previous
+        setpoint: the refresh shows that before the error is raised.
+        Serialized with Away changes, which must not interleave.
+        """
+        temperature_c = self.check_setpoint(value)
+        async with self._away_lock:
+            data = self.data
+            if data is not None and (data.away_active or data.boost_minutes_left):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="mode_changed"
+                )
+            try:
+                await self.async_command(
+                    self.link.async_write_many(
+                        (
+                            (HEATING_MODE, encode_preset_mode(PRESET_MANUAL)),
+                            (SETPOINT, encode_setpoint(temperature_c)),
+                        )
+                    )
+                )
+            finally:
+                await self.async_request_refresh()
 
     @property
     def gdid(self) -> str | None:

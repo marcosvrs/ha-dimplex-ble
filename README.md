@@ -80,7 +80,7 @@ Each heater becomes one device. Only the climate entity appears on dashboards by
 The climate entity shows the room temperature in 0.1 °C steps, whether the heater is heating, and two modes:
 
 - **Heat**: heats to the target you set, in whole degrees. Presets: **Manual**, **Eco**, **Frost Protect**, **Boost**, **Away**.
-- **Auto**: follows the heater's timer programme, which sets the temperature. Presets: **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**.
+- **Auto**: follows the heater's timer programme, which sets the temperature. The card shows the temperature the programme holds: a period's temperature, or the Setback temperature outside periods. Changing it switches to **Heat** with **Manual** at the new temperature; select **Auto** to return to the programme. Presets: **User Timer**, **Home All Day**, **Out All Day**, **Boost**, **Away**.
 
 **Boost** heats at the Boost temperature for the Boost length, then returns to the previous mode. **Away** holds the Away temperature until the Away return time, then returns to the previous mode. During Away the target shows and sets the Away temperature. The heaters have no off mode: **Frost Protect** (7 °C) is the lowest.
 
