@@ -61,10 +61,12 @@ class StallMonitor:
         self.issue_id = stall_issue_id(entry_id)
         self._scanner: BaseHaScanner | None = None
         self._cancel_timer: CALLBACK_TYPE | None = None
-        # A repair raised before a reload is still in the registry.
-        self._raised = (
-            ir.async_get(hass).async_get_issue(DOMAIN, self.issue_id) is not None
-        )
+        # A repair raised before a reload is still in the registry. After a
+        # restart only an inactive record remains (the repair isn't
+        # persistent), which must not suppress raising it again (AM8224
+        # 2026-11-26: repair raised 22:23, gone after the 05:45 restart).
+        issue = ir.async_get(hass).async_get_issue(DOMAIN, self.issue_id)
+        self._raised = issue is not None and issue.active
         self._stopped = False
 
     def _proxy_online(self, scanner: BaseHaScanner | None) -> bool:

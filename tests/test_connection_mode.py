@@ -829,6 +829,44 @@ async def test_a_heater_silent_between_updates_raises_the_repair(hass, fake_bt) 
     assert issue(hass, entry) is not None
 
 
+async def test_a_repair_left_inactive_by_a_restart_is_raised_again(
+    hass, fake_bt, monkeypatch
+) -> None:
+    """AM8224 2026-11-26: raised 22:23, gone after the 05:45 restart for good.
+
+    The repair isn't persistent, so after a restart the registry keeps only an
+    inactive record; a heater still silent must get the repair again.
+    """
+    import dataclasses
+
+    from custom_components.dimplex_ble import stall
+
+    clock = _Clock()
+    monkeypatch.setattr(stall, "monotonic", clock)
+    registry = ir.async_get(hass)
+    proxy = fake_bt.add()
+    proxy.sees_heater = False
+    entry = make_entry(hass)
+    key = (DOMAIN, f"heater_stalled_{entry.entry_id}")
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        key[1],
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="heater_stalled",
+    )
+    registry.issues[key] = dataclasses.replace(registry.issues[key], active=False)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+
+    clock.now += STALL_WINDOW + 1
+    await advance(hass, 700)  # the next setup retry runs
+
+    assert issue(hass, entry).active
+
+
 async def test_a_link_dropped_by_the_heater_mid_update_raises_the_repair(
     hass, fake_bt
 ) -> None:
