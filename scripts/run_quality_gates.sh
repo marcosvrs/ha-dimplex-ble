@@ -20,6 +20,9 @@ if [[ "${SKIP_MUTATION:-0}" == "1" ]]; then
     echo "Mutation testing skipped (SKIP_MUTATION=1); it runs on main." >&2
     exit 0
 fi
+# A stale mutants/ copy made mutmut test old code with new tests (every run
+# failed with "failed to collect stats", November 2026): always start fresh.
+rm -rf mutants
 if .venv/bin/mutmut run; then
     :
 else

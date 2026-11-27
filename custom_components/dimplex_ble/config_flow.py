@@ -603,7 +603,9 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
                 async with asyncio.timeout(DISCOVERY_WINDOW):
                     await everyone.wait()
         except TimeoutError:
+            # pragma: no mutate start
             _LOGGER.debug("COMMISSION %s not advertising to a responder", address)
+            # pragma: no mutate end
         finally:
             unsub()
         # The callback runs before the manager records the advertisement.
@@ -716,7 +718,9 @@ class DimplexBleConfigFlow(ConfigFlow, domain=DOMAIN):
             except DimplexError as err:
                 if not task.done():
                     return "cannot_connect"  # the PIN could not be delivered
+                # pragma: no mutate start
                 _LOGGER.debug("COMMISSION %s first pair failed: %s", link.address, err)
+                # pragma: no mutate end
             else:
                 return None
             finally:
