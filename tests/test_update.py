@@ -27,7 +27,7 @@ from custom_components.dimplex_ble.settings import CONF_REFRESH_TOKEN
 pytestmark = pytest.mark.usefixtures("skip_dependencies")
 
 GDID_RAW = bytes.fromhex("3a00c0230401")
-FIRMWARE = cloud.Firmware("5.0", "https://blob.example/f.zip", "1.7.0")
+FIRMWARE = cloud.Firmware("5.0", "https://blob.example/f.zip")
 
 
 def heater(fake_bt, gdid: bytes | None = GDID_RAW, *, ep: bytes | None = b"EP4213"):

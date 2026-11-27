@@ -137,7 +137,7 @@ async def test_latest_firmware(hass, aioclient_mock) -> None:
     aioclient_mock.post(VERIFY, json=verify_reply())
     session = aioclient_mock.create_session(hass.loop)
     firmware = await cloud.async_latest_firmware(session, "A", LABEL)
-    assert (firmware.version, firmware.installed) == ("5.0", "1.7.0")
+    assert firmware.version == "5.0"
     sent = aioclient_mock.mock_calls[0]
     assert sent[2]["ApplianceId"] == "010423C0003A"
     assert (
@@ -170,7 +170,7 @@ async def test_latest_firmware_failures(
 async def test_download_checks_the_md5(hass, aioclient_mock) -> None:
     data = b"zip bytes"
     md5 = base64.b64encode(hashlib.md5(data).digest()).decode()
-    firmware = cloud.Firmware("5.0", "https://blob.example/f.zip", None)
+    firmware = cloud.Firmware("5.0", "https://blob.example/f.zip")
     session = aioclient_mock.create_session(hass.loop)
     aioclient_mock.get(URL(firmware.url), content=data, headers={"Content-MD5": md5})
     assert await cloud.async_download(session, firmware) == data
@@ -191,7 +191,7 @@ async def test_network_errors_never_carry_the_signed_link(hass, aioclient_mock) 
     """Codex review: an aiohttp error text can hold the pre-signed URL."""
     import aiohttp
 
-    firmware = cloud.Firmware("5.0", "https://blob.example/f.zip?sig=SECRET", None)
+    firmware = cloud.Firmware("5.0", "https://blob.example/f.zip?sig=SECRET")
     session = aioclient_mock.create_session(hass.loop)
     aioclient_mock.get(
         URL(firmware.url), exc=aiohttp.ClientConnectionError(firmware.url)
