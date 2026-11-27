@@ -85,7 +85,7 @@ The integration reads three values from the reply. Everything else in it is igno
 - **`ResultCode`**: must be `1` (`Valid`). Any other value means Dimplex does not know this ID and code pair.
 - **`ApplianceDetails.LatestBluetoothFirmware.Version`**: the offered version, shown as the entity's latest version.
 - **`ApplianceDetails.LatestBluetoothFirmware.Location`**: the pre-signed download link.
-- **`ApplianceDetails.FirmwareVersion`**: Dimplex's record of the installed version. The integration parses it and does not use it.
+- **`ApplianceDetails.FirmwareVersion`**: Dimplex's record of the installed version. The integration ignores it: the heater reports its own version.
 - **No `Version` or `Location`**: the check fails with "No firmware offered".
 
 The heater does not need to be registered to the account (verified live on 2026-11-25, [OTA research](research/ota-research.md)). The integration never calls the registration endpoints or ConfigR's `UpdateFirmwareVersion` and `AddBluetoothFirmwareHistory` reports. Dimplex's record of the installed version therefore stays unchanged after an update.

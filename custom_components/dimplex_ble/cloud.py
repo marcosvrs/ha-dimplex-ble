@@ -72,7 +72,6 @@ class Firmware:
 
     version: str
     url: str  # pre-signed, valid for hours: never log it
-    installed: str | None  # Dimplex's record of the installed version
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,9 +256,7 @@ async def async_latest_firmware(
     latest = details.get("LatestBluetoothFirmware") or {}
     if not latest.get("Version") or not latest.get("Location"):
         raise CloudError("No firmware offered for this heater")
-    return Firmware(
-        latest["Version"], latest["Location"], details.get("FirmwareVersion")
-    )
+    return Firmware(latest["Version"], latest["Location"])
 
 
 @_network_errors("Firmware download")
