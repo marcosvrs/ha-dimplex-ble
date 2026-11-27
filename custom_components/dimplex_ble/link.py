@@ -276,6 +276,7 @@ class HeaterLink:
 
     def _log_read_failure(self, what: str, err: BaseException) -> None:
         """Log a non-fatal slow-read failure (the snapshot still succeeded)."""
+        # pragma: no mutate start
         _LOGGER.debug(
             "GATT %s %s read failed att=%s %s: %s",
             self.address,
@@ -284,6 +285,7 @@ class HeaterLink:
             type(err).__name__,
             err,
         )
+        # pragma: no mutate end
 
     async def async_snapshot(
         self,
@@ -360,7 +362,7 @@ class HeaterLink:
         async with self._operation(op) as client:
             for address, payload in writes:
                 await _write(client, address, payload)
-        _LOGGER.debug("GATT %s %s ok", self.address, op)
+        _LOGGER.debug("GATT %s %s ok", self.address, op)  # pragma: no mutate
 
     async def async_save_schedule(
         self,
@@ -442,6 +444,7 @@ class HeaterLink:
                         with suppress(TimeoutError):
                             return await asyncio.wait_for(replies.get(), min(left, 1.0))
 
+                # pragma: no mutate start
                 _LOGGER.info(
                     "Updating %s to %s %s (MTU %d)",
                     self.address,
@@ -449,6 +452,7 @@ class HeaterLink:
                     image.version,
                     mtu,
                 )
+                # pragma: no mutate end
                 try:
                     await ota.async_flash(
                         ota.Transport(set_mode, send, reply),
@@ -536,9 +540,11 @@ class HeaterLink:
                 return
             await _write(client, CLOCK, encode_clock(now))
         except _GATT_ERRORS as err:
+            # pragma: no mutate start
             _LOGGER.debug(
                 "CLOCK %s check failed %s: %s", self.address, type(err).__name__, err
             )
+            # pragma: no mutate end
             self._clock_due = True  # retry on the next operation
             return
         _LOGGER.info(
